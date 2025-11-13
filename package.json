@@ -1,0 +1,27 @@
+{
+  "name": "bot-discord-giveaway",
+  "version": "1.1.0",
+  "description": "Bot Discord pour giveaways gamifiés thématiques",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "deploy": "node deploy-commands.js",
+    "deploy-guild": "node deploy-commands-guild.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "giveaway",
+    "game"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "pg": "^8.13.1"
+  }
+}

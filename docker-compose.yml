@@ -1,0 +1,79 @@
+# ========================================
+# Docker Compose - Bot Discord Give + PostgreSQL
+# ========================================
+
+version: '3.8'
+
+services:
+  # Service PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: bot-discord-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-botuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-botdb}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema-v3-multiserver-postgresql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "5432:5432"  # Exposer pour connexions externes (retirer en production)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-botuser} -d ${POSTGRES_DB:-botdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bot-network
+
+  # Service Bot Discord
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bot-discord-give
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Discord
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      APPLICATION_ID: ${APPLICATION_ID}
+      GUILD_ID: ${GUILD_ID}
+
+      # PostgreSQL
+      DATABASE_URL: postgresql://${POSTGRES_USER:-botuser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-botdb}
+
+      # Permissions
+      CO_FOUNDER_ROLE_ID: ${CO_FOUNDER_ROLE_ID}
+
+      # Super Admins
+      OWNER_DISCORD_ID: ${OWNER_DISCORD_ID}
+
+      # Environment
+      NODE_ENV: production
+      TZ: Europe/Paris
+    volumes:
+      - ./logs:/app/logs:rw  # Pour les logs (si nécessaire)
+    networks:
+      - bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Volumes persistants
+volumes:
+  postgres_data:
+    driver: local
+    name: bot-discord-postgres-data
+
+# Réseau interne
+networks:
+  bot-network:
+    driver: bridge
+    name: bot-discord-network
