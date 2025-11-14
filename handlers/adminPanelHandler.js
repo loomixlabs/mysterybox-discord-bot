@@ -491,6 +491,8 @@ class AdminPanelHandler {
       await this.handleRaritySelection(interaction);
     } else if (customId === 'select_manage_collectible') {
       await this.handleManageCollectibleSelection(interaction);
+    } else if (customId === 'select_template_to_edit') {
+      await this.showEditTemplateMenu(interaction);
     }
     // Sélections pour la gestion des canaux
     else if (customId === 'select_add_category') {
@@ -3881,11 +3883,12 @@ class AdminPanelHandler {
       settings.trap_lose_collectible,
       settings.trap_public_shame,
       settings.trap_malus_points,
-      settings.trap_empty_box
+      settings.trap_empty_box,
+      settings.trap_lose_all_collectibles
     ].filter(Boolean).length;
 
     let description = '## 🎭 Annonces Pièges\n\n';
-    description += `**${activeCount}/6** annonces actives\n\n`;
+    description += `**${activeCount}/7** annonces actives\n\n`;
     description += '### Types de pièges\n\n';
     description += `${settings.trap_curse ? '✅' : '⬜'} **Malédiction**\n`;
     description += `> Annonce quand un joueur active une malédiction\n\n`;
@@ -3898,12 +3901,14 @@ class AdminPanelHandler {
     description += `${settings.trap_malus_points ? '✅' : '⬜'} **Piège Maudit**\n`;
     description += `> Ajoute des points de malédiction\n\n`;
     description += `${settings.trap_empty_box ? '✅' : '⬜'} **Boîte Vide**\n`;
-    description += `> Rien du tout dans la boîte !\n`;
+    description += `> Rien du tout dans la boîte !\n\n`;
+    description += `${settings.trap_lose_all_collectibles ? '✅' : '⬜'} **Piège Dévastateur**\n`;
+    description += `> Fait perdre TOUS les collectibles !\n`;
 
     const embed = new EmbedBuilder()
       .setDescription(description)
       .setColor('#E74C3C')
-      .setFooter({ text: `${activeCount} sur 6 actives`, iconURL: interaction.guild.iconURL() })
+      .setFooter({ text: `${activeCount} sur 7 actives`, iconURL: interaction.guild.iconURL() })
       .setTimestamp();
 
     const components = [
@@ -3944,6 +3949,11 @@ class AdminPanelHandler {
           .setStyle(settings.trap_empty_box ? ButtonStyle.Success : ButtonStyle.Secondary)
       ),
       new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('toggle_trap_lose_all_collectibles')
+          .setLabel('Dévastateur')
+          .setEmoji(settings.trap_lose_all_collectibles ? '✅' : '⬜')
+          .setStyle(settings.trap_lose_all_collectibles ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('admin_announcements')
           .setLabel('Retour au Menu')
@@ -4157,6 +4167,7 @@ class AdminPanelHandler {
         trap_public_shame: '😱 Piège de la Honte',
         trap_malus_points: '⚠️ Piège Maudit',
         trap_empty_box: '📦 Boîte Vide',
+        trap_lose_all_collectibles: '💥 Piège Dévastateur',
         mission_word_guessed: '🎯 Mot Deviné',
         mission_started: '⚔️ Mission Lancée',
         mission_completed: '✅ Mission Réussie',
@@ -4292,6 +4303,7 @@ class AdminPanelHandler {
         trap_public_shame: '😱 Piège de la Honte',
         trap_malus_points: '⚠️ Piège Maudit',
         trap_empty_box: '📦 Boîte Vide',
+        trap_lose_all_collectibles: '💥 Piège Dévastateur',
         mission_word_guessed: '🎯 Mot Deviné',
         mission_started: '⚔️ Mission Lancée',
         mission_completed: '✅ Mission Réussie',
@@ -4314,6 +4326,7 @@ class AdminPanelHandler {
         trap_public_shame: '{userName}, {trapName}',
         trap_malus_points: '{userName}, {trapName}, {points}',
         trap_empty_box: '{userName}, {trapName}',
+        trap_lose_all_collectibles: '{userName}, {trapName}, {count}',
         mission_word_guessed: '{userName}, {word}, {missionName}',
         mission_started: '{userName}, {missionName}, {timeLimit}',
         mission_completed: '{userName}, {missionName}, {rewardName}',

@@ -1441,11 +1441,11 @@ class DatabaseWrapper {
         `INSERT INTO announcement_settings (
           guild_id, legendary_collectible, collection_completed, collection_traded,
           collection_lost, trap_curse, trap_cooldown, trap_lose_collectible,
-          trap_public_shame, trap_malus_points, mission_word_guessed, theme_expired,
-          theme_expiring_soon, mission_started, mission_completed, mission_failed,
-          mission_approved, mission_rejected
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-        [guildId, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
+          trap_public_shame, trap_malus_points, trap_empty_box, trap_lose_all_collectibles,
+          mission_word_guessed, theme_expired, theme_expiring_soon, mission_started,
+          mission_completed, mission_failed, mission_approved, mission_rejected
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+        [guildId, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
       );
 
       settings = await this.queryOne(

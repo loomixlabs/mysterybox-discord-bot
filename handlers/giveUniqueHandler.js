@@ -209,7 +209,8 @@ class GiveUniqueHandler {
 
     // Mode Piège
     else if (mode === 'trap') {
-      const traps = await db.getTrapsByTheme(interaction.guildId, theme.id);
+      // Récupérer TOUS les pièges (actifs ET inactifs) pour l'envoi manuel
+      const traps = await db.getAllTrapsByTheme(interaction.guildId, theme.id);
 
       if (traps.length === 0) {
         return interaction.editReply({
@@ -226,6 +227,9 @@ class GiveUniqueHandler {
         });
       }
 
+      const activeTraps = traps.filter(t => t.is_active).length;
+      const inactiveTraps = traps.length - activeTraps;
+
       items = traps;
       embed = new EmbedBuilder()
         .setTitle('⚠️ SÉLECTIONNER UN PIÈGE')
@@ -233,7 +237,9 @@ class GiveUniqueHandler {
           `**Thème:** ${theme.name}\n\n` +
           `**ÉTAPE 2/4 - SÉLECTION DE L'ITEM**\n\n` +
           `Choisis le piège à envoyer aux joueurs:\n\n` +
-          `⚠️ **Pièges disponibles:** ${traps.length}`
+          `⚠️ **Pièges disponibles:** ${traps.length}\n` +
+          `✅ **Actifs (Mystery Box):** ${activeTraps}\n` +
+          `⬜ **Inactifs (Envoi manuel uniquement):** ${inactiveTraps}`
         )
         .setColor('#e74c3c');
 
@@ -242,7 +248,7 @@ class GiveUniqueHandler {
         .setPlaceholder('⚠️ Sélectionne un piège...')
         .addOptions(
           traps.slice(0, 25).map(trap => ({
-            label: trap.name.substring(0, 100),
+            label: `${trap.is_active ? '✅' : '⬜'} ${trap.name.substring(0, 97)}`,
             description: trap.description?.substring(0, 100) || 'Piège',
             value: `${trap.id}`
           }))
