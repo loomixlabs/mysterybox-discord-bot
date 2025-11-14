@@ -79,11 +79,26 @@ const DEFAULT_TRAPS = [
     notif_description: '**Sérieusement ?** Tu as ouvert une boîte... complètement vide !\n\n🤷 Pas de collectible, pas de mission, rien du tout. Juste le néant.\n\n💡 Au moins tu n\'as rien perdu !',
     notif_color: '#95a5a6',
     notif_footer: 'Mieux vaut en rire ! 🤷'
+  },
+  {
+    trap_id: 'trap-lose-all-collectibles',
+    name: 'Piège Dévastateur',
+    type: 'lose-all-collectibles',
+    description: 'Un piège catastrophique qui fait perdre TOUS vos collectibles d\'un seul coup.',
+    image_url: 'https://i.imgur.com/placeholder-trap-devastator.png',
+    cooldown_duration: 0,
+    malus_points: 0,
+    shame_message: '💥 {user} a déclenché le piège dévastateur ! Tous ses collectibles ont disparu... ({count} objets perdus)',
+    removes_collectible: true,
+    notif_title: '💥 PIÈGE DÉVASTATEUR !',
+    notif_description: '**CATASTROPHE TOTALE !** Ce piège apocalyptique a effacé **TOUS TES COLLECTIBLES** !\n\n💔 **{count} objet(s) perdu(s)** d\'un seul coup...\n\n⚠️ Ta collection a été complètement anéantie. Il va falloir tout recommencer !',
+    notif_color: '#8b0000',
+    notif_footer: 'Tout a disparu... 💔'
   }
 ];
 
 /**
- * Créer les 5 pièges par défaut pour un thème
+ * Créer les 6 pièges par défaut pour un thème
  * @param {string} guildId - ID du serveur Discord
  * @param {number} themeId - ID du thème
  * @returns {Promise<void>}
@@ -98,8 +113,8 @@ async function createDefaultTrapsForTheme(guildId, themeId) {
       [guildId, themeId]
     );
 
-    if (existingTraps.length >= 5) {
-      console.log('✅ Les 5 pièges par défaut existent déjà pour ce thème');
+    if (existingTraps.length >= 6) {
+      console.log('✅ Les 6 pièges par défaut existent déjà pour ce thème');
       return;
     }
 

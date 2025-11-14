@@ -536,6 +536,10 @@ class MysteryBoxHandler {
         await this.applyTrapLoseCollectible(interaction, trap, player);
         break;
 
+      case 'lose-all-collectibles':
+        await this.applyTrapLoseAllCollectibles(interaction, trap, player);
+        break;
+
       case 'public-shame':
         await this.applyTrapShame(interaction, trap, player);
         break;
@@ -617,6 +621,44 @@ class MysteryBoxHandler {
       interaction.user.username,
       trap.name,
       randomCol.name
+    );
+  }
+
+  /**
+   * Appliquer un piège de perte de TOUS les collectibles
+   */
+  async applyTrapLoseAllCollectibles(interaction, trap, player) {
+    const theme = await db.getActiveTheme(interaction.guildId);
+    const playerCollectibles = await db.getPlayerCollectibles(interaction.guildId, player.id, theme.id);
+
+    if (playerCollectibles.length === 0) {
+      return interaction.followUp({
+        content: '😅 Tu n\'as aucun collectible à perdre... Tu as évité le pire !',
+        flags: 64
+      });
+    }
+
+    const count = playerCollectibles.length;
+    const collectibleNames = playerCollectibles.map(c => c.name).join(', ');
+
+    // Retirer TOUS les collectibles un par un
+    for (const collectible of playerCollectibles) {
+      await db.removePlayerCollectible(interaction.guildId, player.id, collectible.id);
+    }
+
+    // Message de confirmation
+    await interaction.followUp({
+      content: `💥 **CATASTROPHE TOTALE !** Tu as perdu **TOUS tes collectibles** !\n\n💔 **${count} objet${count > 1 ? 's' : ''} perdu${count > 1 ? 's' : ''}**: ${collectibleNames}`,
+      flags: 64
+    });
+
+    // Annonce publique de la catastrophe
+    await announcements.announceTrapLoseAllCollectiblesTriggered(
+      interaction.client,
+      interaction.guildId,
+      interaction.user.username,
+      trap.name,
+      count
     );
   }
 

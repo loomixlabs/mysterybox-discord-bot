@@ -5,6 +5,36 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.1.3] - 2025-11-14
+
+### ✨ Added
+
+#### **Nouveau Piège: "Perdre TOUS les Collectibles"**
+- **Type**: `lose-all-collectibles` (6ème type de piège)
+- **Description**: Un piège catastrophique qui fait perdre TOUS les collectibles d'un joueur en une seule fois
+- **Personnalisation Blanche-Neige**: "Le Sortilège Ultime de la Reine" - La Reine jalouse lance son sortilège le plus puissant et efface toute la collection
+- **Fonctionnalités**:
+  - Retire tous les collectibles du joueur avec soft delete (préservation de l'historique)
+  - Remet le compteur `collected_count` à 0
+  - Annonce publique de la catastrophe avec nombre d'objets perdus
+  - Message personnalisé avec la liste complète des objets perdus
+- **Fichiers modifiés**:
+  - `utils/trapDefaults.js` - Ajout du 6ème piège par défaut
+  - `handlers/mysteryBoxHandler.js` - Ajout du case et méthode `applyTrapLoseAllCollectibles()`
+  - `utils/announcements.js` - Ajout de la méthode `announceTrapLoseAllCollectiblesTriggered()`
+
+#### **Scripts de migration**
+- `scripts/migrations/update-traps-type-constraint.js` - Mise à jour de la contrainte CHECK pour autoriser le nouveau type
+- `scripts/migrations/add-lose-all-trap.js` - Ajout automatique du piège à tous les thèmes (personnalisé pour Blanche-Neige)
+
+### 🔧 Changed
+- Contrainte CHECK sur `traps.type` mise à jour pour inclure `'lose-all-collectibles'`
+- Template d'annonce `trap_lose_all_collectibles` créé en base de données
+
+### 📊 Database
+- 1 nouveau piège ajouté au thème Blanche-Neige
+- 1 nouveau template d'annonce créé
+
 ## [1.1.2] - 2025-11-14
 
 ### 🐛 Fixed

@@ -163,6 +163,14 @@ class AnnouncementSystem {
     });
   }
 
+  async announceTrapLoseAllCollectiblesTriggered(client, guildId, userName, trapName, count) {
+    return this.sendAnnouncement(client, guildId, 'trap_lose_all_collectibles', {
+      userName,
+      trapName,
+      count
+    });
+  }
+
   async announceMissionWordGuessed(client, guildId, userName, word, missionName) {
     return this.sendAnnouncement(client, guildId, 'mission_word_guessed', {
       userName,
