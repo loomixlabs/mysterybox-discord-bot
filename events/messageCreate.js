@@ -28,6 +28,7 @@ module.exports = {
         if (!activeMissions || activeMissions.length === 0) continue;
 
         // Traiter chaque mission correspondante
+        // FIX BUG #3: Limiter à UNE SEULE mission par mot-clé pour éviter les conflits
         for (const missionProgress of activeMissions) {
           // IMPORTANT: Vérifier que la mission n'est pas déjà terminée
           // Cela empêche les duplications de validation
@@ -44,10 +45,12 @@ module.exports = {
           // IMPORTANT: Comparer avec discord_id, pas player_id (qui est un INTEGER de la DB)
           if (message.author.id === missionOwner.discord_id) {
             await handleMissionFailure(message, missionProgress, missionOwner, word);
+            break; // Traiter seulement UNE mission par mot-clé
           }
           // CAS 2: Un autre joueur dit le mot → SUCCÈS
           else {
             await handleMissionSuccess(message, missionProgress, missionOwner, word);
+            break; // Traiter seulement UNE mission par mot-clé
           }
         }
       }
@@ -211,7 +214,7 @@ async function handleMissionSuccess(message, missionProgress, missionOwner, keyw
 
     // Ajouter le collectible si pas de doublon
     if (!alreadyHas) {
-      await db.addCollectible(message.guild.id, missionOwner.id, randomCollectible.id);
+      await db.addCollectible(message.guild.id, missionOwner.id, randomCollectible.id, 'mission');
       const playerProgress = await db.incrementProgress(message.guild.id, missionOwner.id, mission.theme_id);
 
       // Message de récompense (auto-supprimé après 20s)
@@ -326,43 +329,25 @@ async function handleMissionSuccess(message, missionProgress, missionOwner, keyw
 
 /**
  * Trouver le thread de mission pour le fermer
+ * FIX BUG #2: Utiliser thread_id directement au lieu de chercher par nom
  */
 async function findMissionThread(guild, missionProgress, missionOwner) {
   try {
-    console.log(`🔍 Recherche du thread pour ${missionOwner.username} (mission_progress=${missionProgress.id})`);
-
-    // Récupérer tous les canaux textuels
-    const channels = await guild.channels.fetch();
-    const textChannels = channels.filter(c => c.isTextBased() && !c.isThread());
-
-    console.log(`  📂 ${textChannels.size} canaux textuels à vérifier`);
-
-    // Chercher dans les threads actifs de chaque canal
-    for (const [, channel] of textChannels) {
-      try {
-        // Récupérer les threads actifs du canal
-        const activeThreads = await channel.threads.fetchActive();
-
-        console.log(`  📂 Canal "${channel.name}": ${activeThreads.threads.size} threads actifs`);
-
-        for (const [, thread] of activeThreads.threads) {
-          console.log(`    📝 Thread: "${thread.name}"`);
-
-          // Vérifier si le thread correspond au pattern et au joueur
-          if (thread.name.includes('Mission Secrète') && thread.name.includes(missionOwner.username)) {
-            console.log(`    ✅ Match trouvé: "${thread.name}"`);
-            return thread;
-          }
-        }
-      } catch (err) {
-        console.warn(`  ⚠️  Impossible de récupérer les threads du canal ${channel.name}:`, err.message);
-      }
+    if (!missionProgress.thread_id) {
+      console.log(`⚠️  Pas de thread_id pour la mission ${missionProgress.id} (${missionOwner.username})`);
+      return null;
     }
 
-    console.log(`  ❌ Aucun thread trouvé pour ${missionOwner.username}`);
-    return null;
+    console.log(`🔍 Récupération du thread ${missionProgress.thread_id} pour ${missionOwner.username}`);
+    const thread = await guild.client.channels.fetch(missionProgress.thread_id);
+
+    if (thread) {
+      console.log(`✅ Thread trouvé: "${thread.name}"`);
+    }
+
+    return thread;
   } catch (error) {
-    console.warn('⚠️  Impossible de trouver le thread de mission:', error);
+    console.warn(`⚠️  Thread ${missionProgress.thread_id} introuvable:`, error.message);
     return null;
   }
 }

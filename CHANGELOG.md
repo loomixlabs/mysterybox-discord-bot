@@ -5,6 +5,136 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.1.2] - 2025-11-14
+
+### 🐛 Fixed
+
+#### **[CRITIQUE] Bug #1: Collectibles non attribués lors de la complétion de missions**
+- **Problème**: Les missions complétées ne donnaient aucun collectible au joueur
+- **Cause**: Appel à `db.addCollectible()` sans le 4ème paramètre obligatoire `source`
+- **Impact**: 59 missions complétées sans récompense depuis le dernier reset
+- **Solution**: Ajout du paramètre `source: 'mission'` à l'appel de `addCollectible()` (ligne 214)
+- **Fichiers modifiés**: `events/messageCreate.js` (ligne 214)
+- **Compensation**: 4 joueurs compensés manuellement (joris0237, pop_corn.1203, mimie34110)
+- **Note**: olympe34370 avait déjà tous les collectibles du thème
+
+#### **Bug #2: Messages de succès envoyés dans le mauvais thread**
+- **Problème**: Quand un joueur avait plusieurs missions, le message de succès était envoyé dans le mauvais thread
+- **Cause**: Fonction `findMissionThread()` cherchait par nom de joueur au lieu d'utiliser `thread_id` de la DB
+- **Impact**: Confusion pour les joueurs (thread 1 affichait succès mais DB montrait échec, et vice-versa)
+- **Exemple**: _so_fine_ avec 2 missions simultanées - threads 1438873799436013694 et 1438873923877077062
+- **Solution**: Remplacement de la recherche par nom par fetch direct via `missionProgress.thread_id`
+- **Fichiers modifiés**: `events/messageCreate.js` (lignes 327-350)
+- **Bénéfice**: Code simplifié (40 lignes → 20 lignes) et 100% fiable
+
+#### **Bug #3: Multiples missions validées pour un même mot-clé**
+- **Problème**: Quand un joueur avait plusieurs missions avec le même mot-clé, toutes se validaient simultanément
+- **Cause**: Boucle traitait TOUTES les missions correspondantes sans s'arrêter après la première
+- **Impact**: Race conditions et états de DB incohérents
+- **Solution**: Ajout de `break` statements après traitement de chaque mission (lignes 48, 53)
+- **Fichiers modifiés**: `events/messageCreate.js` (lignes 48, 53)
+- **Note**: Limite maintenant à UNE SEULE mission validée par mot-clé prononcé
+
+### 📝 Added
+
+#### Scripts de diagnostic et compensation
+- `scripts/read-thread-messages.js` - Lecture complète d'un thread Discord avec embeds et boutons
+- `scripts/check-second-mission-thread.js` - Analyse du second thread de mission pour debugging
+- `scripts/analyze-double-mission-bug.js` - Diagnostic approfondi des missions simultanées avec même mot-clé
+- `scripts/analyze-mission-structure.js` - Analyse complète de la structure des missions en DB
+- `scripts/check-already-compensated.js` - Vérification des compensations déjà effectuées (évite doublons)
+- `scripts/compensate-missing-missions.js` - Attribution intelligente avec vérification de collection complète
+
+### 📊 Statistics
+- **59 missions** affectées par Bug #1 (collectibles non donnés)
+- **55 missions** déjà compensées manuellement avant le fix
+- **4 joueurs** compensés par script automatique
+- **3 bugs critiques** corrigés dans `events/messageCreate.js`
+- **0 collections** complétées suite aux compensations (pas de rôle à attribuer)
+
+## [1.1.1] - 2025-01-14
+
+### 🐛 Fixed
+
+#### **[CRITIQUE] Bug de race condition sur les boîtes mystères**
+- **Problème**: Plusieurs utilisateurs pouvaient cliquer et gagner la même boîte mystère pendant le délai de traitement
+- **Cause**: Aucune vérification entre `deferUpdate()` et l'attribution du gagnant dans `handleMysteryBoxOpen()`
+- **Impact**: Plusieurs joueurs recevaient la récompense d'une même boîte
+- **Solution**:
+  - Vérification immédiate si la boîte a déjà un gagnant après `deferUpdate()` (lignes 216-228)
+  - Attribution du gagnant IMMÉDIATEMENT avant le traitement de la révélation (ligne 244)
+  - Message "Trop tard !" pour les clics tardifs
+  - Suppression de l'appel dupliqué à `updateGiveWinner()` en fin de fonction
+- **Fichiers modifiés**: `handlers/mysteryBoxHandler.js` (lignes 216-244, suppression ligne 309-310)
+- **Déploiement**: Bot redémarré, annonce postée dans #discussion-blabla
+
+#### **Bug: Disparition du bouton de boîte mystère**
+- **Problème**: Le bouton "Ouvrir la boîte" disparaissait pour TOUS les utilisateurs quand un joueur sous cooldown cliquait
+- **Cause**: `interaction.editReply({ components: [] })` modifiait le message original globalement
+- **Impact**: Boîte mystère inutilisable pour les autres joueurs
+- **Exemple**: Message ID 1438655639265087528 (contenait piège "La Sorcière Voleuse")
+- **Solution**:
+  - Suppression de `editReply()` qui modifiait le message global
+  - Envoi uniquement d'un message éphémère (`flags: 64`) au joueur concerné
+- **Fichiers modifiés**: `handlers/mysteryBoxHandler.js` (lignes 220-227)
+- **Script de réparation**: `scripts/fix-missing-button.js` créé pour réparer les boîtes cassées
+
+#### **Bug: Commande /profile après reset de base de données**
+- **Problème**: Erreur `TypeError: db.createPlayer is not a function` pour tous les nouveaux joueurs
+- **Cause**: Appel à une méthode inexistante `db.createPlayer()` au lieu de `db.upsertPlayer()`
+- **Impact**: Commande `/profile` inutilisable pour les nouveaux joueurs après le reset
+- **Solution**: Remplacement par `db.upsertPlayer()` qui existe dans le module database-pg
+- **Fichiers modifiés**: `commands/player/profile.js` (lignes 30-34)
+- **Note**: Bug découvert uniquement après reset car création de joueurs n'était pas testée avant
+
+#### **Bug: Threads de mission non archivés automatiquement**
+- **Problème**: Les threads Discord des missions complétées restaient ouverts au lieu d'être archivés
+- **Threads affectés**:
+  - `1438657149353066627` - amelie0335 (mission "prince") - Complétée 23:31:24
+  - `1438649867831607316` - floerin (mission "miroir") - Complétée 23:01:53
+  - `1438657495894851726` - _so_fine_ (mission "cercueil") - Complétée 23:32:52
+- **Statut en DB**: Toutes marquées `status = 'completed'` avec `completed_at` renseigné
+- **Solution**: Script d'archivage manuel créé et exécuté
+- **Fichiers créés**: `scripts/archive-completed-threads.js`
+
+#### **Bug: Récompenses de mission non distribuées**
+- **Problème**: Les collectibles des missions "Mot Deviné" complétées n'étaient pas donnés aux joueurs
+- **Missions affectées**: 3 missions du thème Blanche-Neige (theme_id: 23)
+- **Joueurs concernés**:
+  - **amelie0335** (ID: 310, Discord: 1202557237382479912)
+  - **floerin** (ID: 313, Discord: 692649463805640724)
+  - **_so_fine_** (ID: 492, Discord: 1344750102979416084)
+- **Vérification**: Script de diagnostic confirmé - AUCUN collectible reçu autour de la date de complétion
+- **Compensation effectuée**:
+  - amelie0335 → **Dormeur** (epic) ⭐
+  - floerin → **Simplet** (common)
+  - _so_fine_ → **Simplet** (common)
+- **Scripts créés**:
+  - `scripts/check-stuck-missions.js` - Diagnostic des missions
+  - `scripts/verify-mission-rewards.js` - Vérification des récompenses distribuées
+  - `scripts/give-missing-rewards.js` - Attribution des compensations
+  - `scripts/post-compensation-message.js` - Annonce aux joueurs
+- **Annonce**: Message de compensation posté dans #discussion-blabla avec pings des joueurs
+
+### 📝 Added
+
+#### Scripts de diagnostic et maintenance
+- `scripts/check-message.js` - Vérification du contenu d'un message de boîte mystère en base de données
+- `scripts/fix-missing-button.js` - Réparation d'un message de boîte sans bouton (re-ajout du composant)
+- `scripts/check-stuck-missions.js` - Diagnostic complet des missions bloquées avec détails DB
+- `scripts/verify-mission-rewards.js` - Vérification de la distribution des récompenses de missions
+- `scripts/archive-completed-threads.js` - Archivage manuel des threads Discord complétés
+- `scripts/give-missing-rewards.js` - Attribution intelligente des récompenses manquantes (évite doublons)
+- `scripts/post-compensation-message.js` - Annonce de compensation formatée avec pings
+- `scripts/post-race-condition-fix.js` - Annonce de correction du bug de race condition
+
+### 📊 Statistics
+- **3 missions complétées** compensées
+- **3 collectibles** distribués en compensation
+- **3 progressions** mises à jour
+- **3 threads** archivés manuellement
+- **2 boîtes mystères** réparées (bouton re-ajouté)
+
 ## [1.1.0] - 2025-11-13
 
 ### ✨ Added
