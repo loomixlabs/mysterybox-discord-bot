@@ -213,22 +213,35 @@ class MysteryBoxHandler {
     // Defer immédiatement pour éviter timeout
     await interaction.deferUpdate();
 
+    // VÉRIFIER SI LA BOÎTE A DÉJÀ ÉTÉ OUVERTE (protection contre les clics multiples)
+    const giveLog = await db.query(
+      `SELECT * FROM give_logs WHERE message_id = $1`,
+      [interaction.message.id]
+    );
+
+    if (giveLog.length > 0 && giveLog[0].winner_id) {
+      // La boîte a déjà été ouverte par quelqu'un d'autre
+      return interaction.followUp({
+        content: `⚠️ Trop tard ! Cette boîte a déjà été ouverte par <@${giveLog[0].winner_id}>`,
+        flags: 64
+      });
+    }
+
     // Vérifier le cooldown du joueur
     const player = await db.upsertPlayer(interaction.guildId, interaction.user.id, interaction.user.username);
     const hasCooldown = await db.hasActiveCooldown(interaction.guildId, player.id);
 
     if (hasCooldown) {
-      // Désactiver le bouton même si cooldown
-      await interaction.editReply({
-        components: []
-      });
-
-      // Envoyer message de cooldown en followUp (éphémère)
+      // NE PAS éditer le message original (sinon le bouton disparaît pour tout le monde)
+      // Juste envoyer un message d'erreur éphémère
       return interaction.followUp({
         content: '⏰ Tu es sous l\'effet d\'un piège ! Tu ne peux pas encore ouvrir de boîtes.',
         flags: 64
       });
     }
+
+    // MARQUER IMMÉDIATEMENT LA BOÎTE COMME GAGNÉE (avant le traitement long)
+    await db.updateGiveWinner(interaction.message.id, interaction.user.id, interaction.user.username);
 
     // Récupérer le thème et sa config pour le message de félicitations
     const theme = await db.getActiveTheme(interaction.guildId);
@@ -293,8 +306,8 @@ class MysteryBoxHandler {
         break;
     }
 
-    // Mettre à jour le log
-    await db.updateGiveWinner(interaction.message.id, interaction.user.id, interaction.user.username);
+    // Le gagnant a déjà été enregistré au début de la fonction (ligne 244)
+    // pour éviter les clics multiples
   }
 
   /**

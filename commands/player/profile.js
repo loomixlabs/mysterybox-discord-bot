@@ -27,7 +27,7 @@ module.exports = {
 
       if (!player) {
         // Créer automatiquement le joueur s'il n'existe pas
-        const newPlayerId = await db.createPlayer(
+        player = await db.upsertPlayer(
           guildId,
           interaction.user.id,
           interaction.user.username
@@ -38,10 +38,7 @@ module.exports = {
           INSERT INTO player_progress (guild_id, player_id, theme_id, collected_count, started_at)
           VALUES ($1, $2, $3, 0, NOW())
           ON CONFLICT (guild_id, player_id, theme_id) DO NOTHING
-        `, [guildId, newPlayerId, theme.id]);
-
-        // Récupérer le nouveau joueur
-        player = await db.getPlayerByDiscordId(guildId, interaction.user.id);
+        `, [guildId, player.id, theme.id]);
       }
 
       // Récupérer la progression (AVEC guildId)
