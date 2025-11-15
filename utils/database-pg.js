@@ -1684,6 +1684,81 @@ class DatabaseWrapper {
     console.log(`🗑️ Collectible perdu: ${collection.name} (player=${playerId}, guild=${guildId}, nouveau compteur=${realCount?.count || 0})`);
     return collection;
   }
+
+  // ==================== GUILD BRANDING ====================
+
+  /**
+   * Récupérer la configuration de branding d'une guild
+   * Auto-create si n'existe pas
+   */
+  async getGuildBranding(guildId) {
+    guildId = this._getGuildId(guildId);
+
+    let branding = await this.queryOne(
+      'SELECT * FROM guild_branding WHERE guild_id = $1',
+      [guildId]
+    );
+
+    // Auto-create si n'existe pas
+    if (!branding) {
+      branding = await this.queryOne(`
+        INSERT INTO guild_branding (guild_id)
+        VALUES ($1)
+        RETURNING *
+      `, [guildId]);
+    }
+
+    return branding;
+  }
+
+  /**
+   * Mettre à jour la configuration de branding d'une guild
+   */
+  async updateGuildBranding(guildId, updates) {
+    guildId = this._getGuildId(guildId);
+
+    const keys = Object.keys(updates);
+    const values = Object.values(updates);
+    const setClause = keys.map((key, i) => `${key} = $${i + 1}`).join(', ');
+
+    return this.queryOne(`
+      UPDATE guild_branding
+      SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+      WHERE guild_id = $${keys.length + 1}
+      RETURNING *
+    `, [...values, guildId]);
+  }
+
+  /**
+   * Récupérer une couleur par son code hexadécimal
+   * @param {string} hexCode - Code hexadécimal de la couleur (#RRGGBB)
+   * @returns {Object|null} Objet couleur avec {name, hex_code, emoji, category}
+   */
+  async getColorByHex(hexCode) {
+    // Normaliser le hex code (avec ou sans #)
+    const normalizedHex = hexCode.toUpperCase().startsWith('#') ? hexCode.toUpperCase() : `#${hexCode.toUpperCase()}`;
+
+    return this.queryOne(
+      'SELECT * FROM colors WHERE hex_code = $1',
+      [normalizedHex]
+    );
+  }
+
+  /**
+   * Récupérer toutes les couleurs, optionnellement filtrées par catégorie
+   * @param {string} category - Catégorie optionnelle (blue, red, green, etc.)
+   * @returns {Array} Liste des couleurs
+   */
+  async getAllColors(category = null) {
+    if (category) {
+      return this.query(
+        'SELECT * FROM colors WHERE category = $1 ORDER BY name',
+        [category]
+      );
+    }
+
+    return this.query('SELECT * FROM colors ORDER BY category, name');
+  }
 }
 
 // Export singleton

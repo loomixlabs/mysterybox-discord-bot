@@ -1,6 +1,7 @@
 const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
+const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
 /**
  * Handler pour le système de missions V2
@@ -188,6 +189,9 @@ class MissionHandler {
    * Validation manuelle par admin
    */
   async handleManualValidation(interaction, mission, player, progress) {
+    // Récupérer le branding
+    const branding = await db.getGuildBranding(interaction.guildId);
+
     await interaction.followUp({
       content: '📤 Envoie maintenant ta preuve (screenshot, texte, lien, etc.) dans ce thread.\n\n⏰ Un administrateur la validera.'
     });
@@ -235,8 +239,9 @@ class MissionHandler {
         embeds: [new EmbedBuilder()
           .setTitle('📋 Preuve soumise')
           .setDescription(`**Joueur:** <@${interaction.user.id}>\n**Mission:** ${mission.name}`)
-          .setColor('#FFA500')
+          .setColor(branding.secondary_color)
           .setImage(msg.attachments.first()?.url || null)
+          .setFooter(await getLoomixFooter(interaction.guildId))
         ],
         components: [buttons]
       });
@@ -564,6 +569,9 @@ class MissionHandler {
    */
   async completeMission(interaction, mission, player, progress, proof = null) {
     try {
+      // Récupérer le branding
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       // Marquer comme complétée
       await db.query(
         `UPDATE mission_progress
@@ -597,14 +605,14 @@ class MissionHandler {
             `Félicitations ! Tu as terminé la mission **${mission.name}** !\n\n` +
             `**Récompense:** ${randomCollectible.name}`
           )
-          .setColor('#00FF00')
+          .setColor(branding.secondary_color)
           .setThumbnail(randomCollectible.image_url)
           .addFields({
             name: 'Progression',
             value: `${playerProgress.collected_count}/${mission.required_items || 7}`,
             inline: true
           })
-          .setFooter({ text: `Rareté: ${randomCollectible.rarity}` });
+          .setFooter(getLoomixFooterWithCustomText(`Rareté: ${randomCollectible.rarity}`));
 
         await interaction.channel.send({ embeds: [rewardEmbed] });
 
@@ -618,8 +626,9 @@ class MissionHandler {
         const embed = new EmbedBuilder()
           .setTitle('⚠️ Mission réussie mais doublon !')
           .setDescription(`Tu as terminé la mission mais tu avais déjà **${randomCollectible.name}** dans ta collection !`)
-          .setColor('#FFA500')
-          .setThumbnail(randomCollectible.image_url);
+          .setColor(branding.secondary_color)
+          .setThumbnail(randomCollectible.image_url)
+          .setFooter(await getLoomixFooter(interaction.guildId));
 
         await interaction.channel.send({ embeds: [embed] });
       }
@@ -653,6 +662,9 @@ class MissionHandler {
    * Gérer la collection complète
    */
   async handleCollectionComplete(interaction, player, theme) {
+    // Récupérer le branding
+    const branding = await db.getGuildBranding(interaction.guildId);
+
     // Marquer comme complété
     await db.completeCollection(interaction.guildId, player.id, theme.id);
 
@@ -673,8 +685,9 @@ class MissionHandler {
         `**${interaction.user.username}** a complété la collection **${theme.name}** !\n\n` +
         `Félicitations pour avoir collecté les ${theme.required_items} items ! 🎉`
       )
-      .setColor(theme.final_role_color || '#FFD700')
+      .setColor(theme.final_role_color || branding.secondary_color)
       .setThumbnail(interaction.user.displayAvatarURL())
+      .setFooter(await getLoomixFooter(interaction.guildId))
       .setTimestamp();
 
     if (announceChannel) {
@@ -865,8 +878,11 @@ class MissionHandler {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
-      // Récupérer la mission
-      const mission = await db.getMissionById(interaction.guildId, missionId);
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
 
       if (!mission || mission.type !== 'quiz') {
         return interaction.reply({
@@ -883,7 +899,7 @@ class MissionHandler {
         .setDescription(questions.length === 0
           ? '**Aucune question n\'a encore été créée.**\n\nCliquez sur "Ajouter une Question" pour commencer.'
           : `**${questions.length} question(s) enregistrée(s)**`)
-        .setColor('#3498db');
+        .setColor(branding.secondary_color);
 
       if (questions.length > 0) {
         questions.forEach((q, i) => {
@@ -898,6 +914,8 @@ class MissionHandler {
           });
         });
       }
+
+      embed.setFooter(await getLoomixFooter(interaction.guildId));
 
       const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -940,8 +958,11 @@ class MissionHandler {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
-      // Récupérer la mission
-      const mission = await db.getMissionById(interaction.guildId, missionId);
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
 
       if (!mission || mission.type !== 'keyword-message') {
         return interaction.reply({
@@ -959,7 +980,7 @@ class MissionHandler {
         .setDescription(keywords.length === 0
           ? '**Aucun mot-clé n\'a encore été défini.**\n\nCliquez sur "Ajouter un Mot-Clé" pour commencer.\n\n💡 **Conseil:** Ajoutez plusieurs mots-clés différents pour éviter la répétition et rendre les missions plus variées !'
           : `**${keywords.length} mot(s)-clé(s) enregistré(s)**\n\nLes joueurs devront faire dire **un de ces mots** à un autre joueur.`)
-        .setColor('#e67e22');
+        .setColor(branding.secondary_color);
 
       if (keywords.length > 0) {
         const difficultyEmojis = {
@@ -979,6 +1000,8 @@ class MissionHandler {
           inline: false
         });
       }
+
+      embed.setFooter(await getLoomixFooter(interaction.guildId));
 
       // Créer les boutons
       const buttons = new ActionRowBuilder().addComponents(
@@ -1024,6 +1047,9 @@ class MissionHandler {
     try {
       await interaction.deferUpdate();
 
+      // Récupérer le branding
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       // Créer l'embed avec les instructions
       const embed = new EmbedBuilder()
         .setTitle('📝 Ajouter un Mot-Clé')
@@ -1039,7 +1065,8 @@ class MissionHandler {
           '🔴 **Difficile** - Mots rares ou complexes (ex: épiphanie, ubiquité)\n\n' +
           '💡 Le mot-clé sera automatiquement en minuscule.'
         )
-        .setColor('#3498db');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       // Menu de sélection de difficulté
       const difficultySelect = new ActionRowBuilder().addComponents(
@@ -1228,8 +1255,11 @@ class MissionHandler {
     try {
       await interaction.deferUpdate();
 
-      // Récupérer la mission pour obtenir le theme_id
-      const mission = await db.getMissionById(interaction.guildId, missionId);
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
 
       if (!mission || mission.type !== 'quiz') {
         return interaction.editReply({
@@ -1254,7 +1284,8 @@ class MissionHandler {
           '🔴 **Difficile** - Questions complexes (ex: dates précises, détails)\n\n' +
           '💡 Le joueur pourra essayer plusieurs fois dans le temps imparti.'
         )
-        .setColor('#3498db');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       // Menu de sélection de difficulté
       const difficultySelect = new ActionRowBuilder().addComponents(
@@ -1374,8 +1405,11 @@ class MissionHandler {
       // Extraire missionId depuis le customId: mission_max_attempts_config_{missionId}
       const missionId = parseInt(interaction.customId.split('_')[4]);
 
-      // Récupérer la mission
-      const mission = await db.getMissionById(interaction.guildId, missionId);
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
 
       if (!mission) {
         return interaction.editReply({
@@ -1396,7 +1430,8 @@ class MissionHandler {
           '• **Illimité**: Le joueur peut essayer autant de fois qu\'il veut (limité par le timeout)\n' +
           '• **1-10**: Nombre d\'essais fixes avant échec automatique'
         )
-        .setColor('#3498db');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       // Créer le select menu
       const options = [
@@ -1451,6 +1486,9 @@ class MissionHandler {
       const missionId = parseInt(interaction.customId.split('_')[4]);
       const selectedValue = interaction.values[0]; // 'unlimited' ou '1'-'10'
 
+      // Récupérer le branding
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       // Déterminer la valeur à enregistrer
       let maxAttempts = null; // Par défaut illimité
       if (selectedValue !== 'unlimited') {
@@ -1472,7 +1510,8 @@ class MissionHandler {
           `Le nombre maximum d'essais a été configuré à **${displayValue}**.\n\n` +
           '💡 Cette configuration s\'appliquera à toutes les futures tentatives de quiz pour cette mission.'
         )
-        .setColor('#2ecc71');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       // Bouton retour à la mission
       const row = new ActionRowBuilder().addComponents(
@@ -1629,8 +1668,11 @@ class MissionHandler {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
-      // Récupérer la mission
-      const mission = await db.getMissionById(interaction.guildId, missionId);
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
 
       if (!mission || mission.type !== 'keyword-message') {
         return interaction.followUp({
@@ -1646,7 +1688,8 @@ class MissionHandler {
           'Sélectionne les canaux dans lesquels les missions peuvent être assignées.\n\n' +
           '**Note:** Si aucun canal n\'est sélectionné, tous les canaux texte seront disponibles.'
         )
-        .setColor('#3498db');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       // Afficher les canaux actuellement configurés
       if (mission.allowed_channels && mission.allowed_channels.length > 0) {
@@ -1712,6 +1755,9 @@ class MissionHandler {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
+      // Récupérer le branding
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       const selectedChannels = interaction.values; // IDs des canaux sélectionnés
 
       // Mettre à jour la base de données
@@ -1728,7 +1774,8 @@ class MissionHandler {
           `Les canaux autorisés pour cette mission ont été configurés avec succès !\n\n` +
           `**Canaux sélectionnés:**\n${channelsList}`
         )
-        .setColor('#2ecc71');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       const button = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -1759,6 +1806,9 @@ class MissionHandler {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
+      // Récupérer le branding
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       // Mettre à jour la base de données (null = tous les canaux)
       await db.updateMissionAllowedChannels(interaction.guildId, missionId, null);
 
@@ -1768,7 +1818,8 @@ class MissionHandler {
           `Les restrictions de canaux ont été supprimées.\n\n` +
           `La mission peut maintenant être assignée dans **tous les canaux texte**.`
         )
-        .setColor('#2ecc71');
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       const button = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -1914,6 +1965,9 @@ class MissionHandler {
             continue;
           }
 
+          // Récupérer le branding
+          const branding = await db.getGuildBranding(mission.guild_id);
+
           // Convertir le timeout pour l'affichage
           const timeoutSeconds = mission.timeout || 300;
           const timeoutDisplay = timeoutSeconds >= 60 && timeoutSeconds % 60 === 0
@@ -1930,7 +1984,8 @@ class MissionHandler {
               `Clique sur le nouveau bouton ci-dessous pour lancer ta mission !\n\n` +
               `⏰ Tu auras **${timeoutDisplay}** pour l'accomplir.`
             )
-            .setColor('#FFA500');
+            .setColor(branding.secondary_color)
+            .setFooter(await getLoomixFooter(mission.guild_id));
 
           const button = new ButtonBuilder()
             .setCustomId(`mission_start_${mission.mission_id}_${mission.discord_id}`)

@@ -5,6 +5,100 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.2.0] - 2025-11-15
+
+### ✨ Added
+
+#### **Système de Branding Complet avec Footer Loomix**
+- **Footer centralisé avec branding imposé**:
+  - Helper `utils/footerHelper.js` créé pour gérer les footers de manière centralisée
+  - Logo Loomix automatiquement affiché sur tous les footers (https://avatars.githubusercontent.com/u/241378179)
+  - Format imposé: `{texte_serveur} • Powered by Loomix Bot`
+  - 3 fonctions disponibles: `getLoomixFooter()`, `getLoomixFooterWithCustomText()`, `getLoomixFooterOnly()`
+
+- **Mise à jour massive des embeds** (35+ embeds modifiés):
+  - `handlers/mysteryBoxHandler.js` - 10 embeds avec footer Loomix
+  - `handlers/missionHandler.js` - 14 embeds avec footer Loomix
+  - `views/profileView.js` - 5 embeds avec footer Loomix
+  - `handlers/modalHandler.js` - 4 embeds avec footer Loomix
+  - `handlers/serverConfigHandler.js` - 4 embeds avec footer Loomix et couleur secondaire
+
+- **Système de couleurs amélioré**:
+  - 32 couleurs ajoutées dans la base de données (table `colors`)
+  - Sélecteurs de palette corrigés: 5 menus distincts (Basiques+Tendances, Pastel, Vives, Professionnelles)
+  - Affichage des noms de couleurs avec emoji au lieu du code hexadécimal
+  - Script `scripts/verify-palette-colors.js` créé pour vérifier et ajouter les couleurs manquantes
+  - Script `scripts/add-missing-colors.js` créé pour ajouter 18 couleurs couramment utilisées
+
+#### **Fonctionnalités de personnalisation `/server-config`**
+- **Labels clarifiés**:
+  - "Couleur principale" → "Couleur du bot" (🤖)
+  - "Couleur secondaire" → "Couleur des embeds" (📋)
+
+- **Embeds de configuration**:
+  - Tous les embeds utilisent maintenant `secondary_color` pour cohérence visuelle
+  - Footer Loomix appliqué à tous les menus de configuration
+  - Gestion améliorée des erreurs d'interaction Discord
+
+### 🔧 Changed
+
+#### **Architecture des footers**
+- Remplacement de `branding.embed_footer_text` et `branding.embed_footer_icon_url` par appels à `getLoomixFooter()`
+- Footers dynamiques préservés pour les infos importantes (rareté, date de collecte, etc.)
+- Footers combinés: `${info_dynamique} • Powered by Loomix Bot`
+
+#### **Sélecteurs de couleurs**
+- Séparation des sélecteurs "Vives" et "Professionnelles" (auparavant combinés)
+- Combinaison de "Basiques" et "Tendances 2025" pour respecter la limite Discord (5 ActionRows max)
+- Description dans la palette mise à jour pour refléter les 5 catégories disponibles
+
+#### **Couleurs des embeds**
+- Menu principal: `primary_color` → `secondary_color`
+- Menu branding: `primary_color` → `secondary_color`
+- Menu paramètres: `primary_color` → `secondary_color`
+- Menu modules: `primary_color` → `secondary_color`
+- Couleurs dynamiques conservées pour les aperçus de sélection
+
+### 📊 Database
+
+#### **Nouvelles tables et migrations**
+- 32 couleurs ajoutées à la table `colors` (noms, codes hex, emojis, catégories)
+- Fonction `db.getColorByHex()` utilisée pour récupération des noms de couleurs
+- Catégories: red, orange, yellow, green, blue, purple, pink, neutral, gold
+
+#### **Couleurs ajoutées**
+- **Basiques**: Bleu Ciel (#0099FF)
+- **Tendances 2025**: Bleu Océan (#1ABC9C)
+- **Pastel**: Rose, Bleu, Violet, Vert, Pêche, Lavande (6 couleurs)
+- **Vives**: Vert Néon, Cyan Néon, Orange Fluo (3 couleurs)
+- **Professionnelles**: Or Premium (#D4AF37)
+- **Communes**: Rouge Alizarine, Rouge Brique, Orange Carotte, Vert Émeraude, Bleu Rivière, Violet Améthyste, Jaune Tournesol, et plus (18 au total)
+
+### 📝 Files Modified
+- `utils/footerHelper.js` - **CRÉÉ** - Helper centralisé pour les footers Loomix
+- `handlers/mysteryBoxHandler.js` - 10 embeds mis à jour
+- `handlers/missionHandler.js` - 14 embeds mis à jour
+- `views/profileView.js` - 5 embeds mis à jour
+- `handlers/modalHandler.js` - 4 embeds mis à jour (+ fix erreur syntaxe double déclaration)
+- `handlers/serverConfigHandler.js` - 4 embeds + sélecteurs de couleurs corrigés
+- `scripts/verify-palette-colors.js` - **CRÉÉ** - Vérification des couleurs des palettes
+- `scripts/add-missing-colors.js` - **CRÉÉ** - Ajout de 18 couleurs manquantes
+- `package.json` - Version mise à jour à 1.2.0
+
+### 🎨 Visual Improvements
+- Interface `/server-config` plus claire avec labels explicites
+- Footers uniformes sur l'ensemble du bot avec branding Loomix
+- Affichage des couleurs avec noms lisibles au lieu de codes hexadécimaux
+- Cohérence visuelle améliorée avec utilisation de `secondary_color` pour tous les embeds de configuration
+
+### 📊 Statistics
+- **35+ embeds** mis à jour avec footer Loomix
+- **32 couleurs** ajoutées à la base de données
+- **5 sélecteurs** de couleurs distincts disponibles
+- **4 fichiers handlers** modifiés
+- **1 helper centralisé** créé pour les footers
+- **2 scripts** de maintenance créés pour les couleurs
+
 ## [1.1.3] - 2025-11-14
 
 ### ✨ Added

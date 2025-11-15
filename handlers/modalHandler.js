@@ -6,6 +6,7 @@ const trapAdminHandler = require('./trapAdminHandler');
 const audit = require('../utils/auditLogger');
 const { EmbedBuilder } = require('discord.js');
 const { canAccessAdminPanel } = require('../utils/permissions');
+const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
 /**
  * Handler pour les soumissions de modals
@@ -97,6 +98,12 @@ class ModalHandler {
       const superAdminHandler = require('./superAdminHandler');
       const guildId = customId.replace('superadmin_add_role_modal_', '');
       return superAdminHandler.handleAddAdminRole(interaction, guildId);
+    }
+    // Gestion des modals server-config (délégation)
+    else if (customId.startsWith('modal_edit_')) {
+      const ServerConfigHandler = require('./serverConfigHandler');
+      const handler = new ServerConfigHandler();
+      return handler.handleModalSubmit(interaction);
     }
   }
 
@@ -471,6 +478,9 @@ class ModalHandler {
   async handleAddCollectible(interaction) {
     // Le deferReply est déjà fait dans handleModalSubmit
     try {
+      // Récupérer le branding dès le début
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       // Récupérer la rareté et le themeId depuis le customId
       // Format: modal_add_collectible_{rarity} ou modal_add_collectible_{rarity}_{themeId}
       const parts = interaction.customId.split('_');
@@ -598,7 +608,8 @@ class ModalHandler {
           const embed = new EmbedBuilder()
             .setTitle('🎁 Gestion des Collectibles')
             .setDescription(`**Thème:** ${theme.name}\n**Total:** ${updatedCollectibles.length}/${collectiblesCount.count}`)
-            .setColor('#2ecc71');
+            .setColor(branding.secondary_color)
+            .setFooter(await getLoomixFooter(interaction.guildId));
 
           if (updatedCollectibles.length > 0) {
             const list = updatedCollectibles.map(c => `• **${c.name}** (${c.rarity})`).join('\n');
@@ -686,6 +697,7 @@ class ModalHandler {
           { name: '🆔 ID', value: collectibleId, inline: true }
         )
         .setColor(rarityColors[rarity])
+        .setFooter(await getLoomixFooter(interaction.guildId))
         .setTimestamp();
 
       if (imageUrl) {
@@ -1587,6 +1599,9 @@ class ModalHandler {
         'hard': '🔴'
       };
 
+      // Récupérer le branding
+      const branding = await db.getGuildBranding(interaction.guildId);
+
       // Message de succès éphémère
       const successEmbed = new EmbedBuilder()
         .setTitle('✅ Mot-clé ajouté avec succès !')
@@ -1596,7 +1611,8 @@ class ModalHandler {
           { name: '📍 Canal', value: channelId ? `<#${channelId}>` : 'Tous les canaux', inline: true },
           { name: '⚡ Difficulté', value: `${difficultyEmojis[difficulty]} ${difficulty}`, inline: true }
         )
-        .setColor('#2ecc71')
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId))
         .setTimestamp();
 
       await interaction.reply({
@@ -1648,8 +1664,11 @@ class ModalHandler {
       const validDifficulties = ['easy', 'medium', 'hard'];
       const finalDifficulty = validDifficulties.includes(difficulty) ? difficulty : 'medium';
 
-      // Récupérer la mission pour obtenir le theme_id
-      const mission = await db.getMissionById(interaction.guildId, missionId);
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
 
       if (!mission || mission.type !== 'quiz') {
         return interaction.reply({
@@ -1694,7 +1713,8 @@ class ModalHandler {
           { name: '✅ Réponse correcte', value: correctAnswer, inline: true },
           { name: '💡 Difficulté', value: `${difficultyEmoji[finalDifficulty]} ${finalDifficulty}`, inline: true }
         )
-        .setColor('#2ecc71')
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId))
         .setTimestamp();
 
       if (hint) {

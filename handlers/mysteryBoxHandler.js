@@ -4,6 +4,7 @@ const announcements = require('../utils/announcements');
 const superBonusHandler = require('./superBonusHandler');
 const themeExpirationHandler = require('./themeExpirationHandler');
 const { SUPER_ADMINS } = require('../utils/permissions');
+const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
 /**
  * Handler pour le système de boîte mystère
@@ -23,10 +24,11 @@ class MysteryBoxHandler {
     // Récupérer le guildId si non fourni
     guildId = guildId || channel.guild.id;
 
-    // Récupérer le thème et sa config avec guild_id
-    const [theme, config] = await Promise.all([
+    // Récupérer le thème, sa config et le branding avec guild_id
+    const [theme, config, branding] = await Promise.all([
       db.queryOne('SELECT * FROM themes WHERE id = $1 AND guild_id = $2', [themeId, guildId]),
-      db.getThemeConfig(guildId, themeId)
+      db.getThemeConfig(guildId, themeId),
+      db.getGuildBranding(guildId)
     ]);
 
     if (!theme || !config) {
@@ -54,8 +56,8 @@ class MysteryBoxHandler {
         '• Un piège ? ⚠️\n\n' +
         'Premier arrivé, premier servi !'
       )
-      .setColor('#FFD700')
-      .setFooter({ text: `Thème: ${theme.name}` })
+      .setColor(branding.secondary_color)
+      .setFooter(await getLoomixFooter(guildId))
       .setTimestamp();
 
     // Ajouter l'image si configurée
@@ -260,6 +262,9 @@ class MysteryBoxHandler {
       ? config.mystery_box_celebration_emojis.split(',').map(e => e.trim())
       : ['🎉', '🎊', '✨', '🌟'];
 
+    // Récupérer le branding
+    const branding = await db.getGuildBranding(interaction.guildId);
+
     // Créer des confettis décoratifs
     const confettiLine = celebrationEmojis.slice(0, 3).join(' ').repeat(2);
 
@@ -267,9 +272,10 @@ class MysteryBoxHandler {
     const winnerEmbed = new EmbedBuilder()
       .setTitle(`${celebrationEmojis[0]} FÉLICITATIONS ! ${celebrationEmojis[0]}`)
       .setDescription(`${confettiLine}\n\n${winnerMessage.replace('{player}', `<@${interaction.user.id}>`)}\n\n${confettiLine}`)
-      .setColor('#FFD700') // Or brillant
+      .setColor(branding.secondary_color)
       .setThumbnail(interaction.user.displayAvatarURL())
       .setImage(celebrationGif) // GIF de célébration
+      .setFooter(await getLoomixFooter(interaction.guildId))
       .setTimestamp();
 
     // Transformer le message de la box pour afficher le gagnant
@@ -314,7 +320,10 @@ class MysteryBoxHandler {
    * Révéler un collectible
    */
   async revealCollectible(interaction, collectibleId, player) {
-    const collectible = await db.getCollectibleById(interaction.guildId, collectibleId);
+    const [collectible, branding] = await Promise.all([
+      db.getCollectibleById(interaction.guildId, collectibleId),
+      db.getGuildBranding(interaction.guildId)
+    ]);
 
     if (!collectible) {
       return interaction.followUp({
@@ -331,8 +340,9 @@ class MysteryBoxHandler {
       const embed = new EmbedBuilder()
         .setTitle('⚠️ Doublon !')
         .setDescription(`Tu as déjà **${collectible.name}** dans ta collection !`)
-        .setColor('#FFA500')
-        .setThumbnail(collectible.image_url);
+        .setColor(branding.secondary_color)
+        .setThumbnail(collectible.image_url)
+        .setFooter(await getLoomixFooter(interaction.guildId));
 
       return interaction.followUp({ embeds: [embed], flags: 64 });
     }
@@ -364,14 +374,14 @@ class MysteryBoxHandler {
     const embed = new EmbedBuilder()
       .setTitle('🎉 Collectible Obtenu !')
       .setDescription(description)
-      .setColor(collectible.role_color || '#00FF00')
+      .setColor(collectible.role_color || branding.secondary_color)
       .setThumbnail(collectible.image_url)
       .addFields({
         name: 'Progression',
         value: `${progress.collected_count}/${collectible.required_items}`,
         inline: true
       })
-      .setFooter({ text: `Rareté: ${collectible.rarity}` });
+      .setFooter(getLoomixFooterWithCustomText(`Rareté: ${collectible.rarity}`));
 
     await interaction.followUp({ embeds: [embed], flags: 64 });
 
@@ -396,7 +406,10 @@ class MysteryBoxHandler {
    * Révéler une mission
    */
   async revealMission(interaction, missionId, player) {
-    const mission = await db.getMissionById(interaction.guildId, missionId);
+    const [mission, branding] = await Promise.all([
+      db.getMissionById(interaction.guildId, missionId),
+      db.getGuildBranding(interaction.guildId)
+    ]);
 
     if (!mission) {
       return interaction.followUp({
@@ -436,8 +449,9 @@ class MysteryBoxHandler {
     const revealEmbed = new EmbedBuilder()
       .setTitle('📋 MISSION DÉBLOQUÉE !')
       .setDescription(`Tu as déclenché une mission secrète !\n\nUn thread privé a été créé pour toi. Consulte-le pour découvrir ta mission !`)
-      .setColor('#3498db')
-      .setImage('https://media.giphy.com/media/xT9IgBwI5SLzZGV2PC/giphy.gif'); // Mission secrète générique
+      .setColor(branding.secondary_color)
+      .setImage('https://media.giphy.com/media/xT9IgBwI5SLzZGV2PC/giphy.gif')
+      .setFooter(await getLoomixFooter(interaction.guildId));
 
     await interaction.followUp({ embeds: [revealEmbed], flags: 64 });
 
@@ -459,8 +473,8 @@ class MysteryBoxHandler {
     const missionEmbed = new EmbedBuilder()
       .setTitle(msgConfig.title)
       .setDescription(msgConfig.description)
-      .setColor('#FFD700')
-      .setFooter({ text: 'Mission Secrète' }); // FIX: Ne pas révéler le nom de la mission
+      .setColor(branding.secondary_color)
+      .setFooter(await getLoomixFooter(interaction.guildId));
 
     if (mission.image_url) {
       missionEmbed.setThumbnail(mission.image_url);
@@ -488,7 +502,10 @@ class MysteryBoxHandler {
    * Révéler un piège
    */
   async revealTrap(interaction, trapId, player) {
-    const trap = await db.queryOne('SELECT * FROM traps WHERE id = $1 AND guild_id = $2', [trapId, interaction.guildId]);
+    const [trap, branding] = await Promise.all([
+      db.queryOne('SELECT * FROM traps WHERE id = $1 AND guild_id = $2', [trapId, interaction.guildId]),
+      db.getGuildBranding(interaction.guildId)
+    ]);
 
     if (!trap) {
       return interaction.followUp({
@@ -511,8 +528,8 @@ class MysteryBoxHandler {
           `Tu as activé une **${trap.name}**, mais ton super bonus **${trapShield.name}** ${trapShield.icon} t'a protégé !\n\n` +
           `Le piège a été annulé. Tu es sain et sauf ! ✨`
         )
-        .setColor('#3498db')
-        .setFooter({ text: `Bonus utilisé: ${trapShield.name}` });
+        .setColor(branding.secondary_color)
+        .setFooter(getLoomixFooterWithCustomText(`Bonus utilisé: ${trapShield.name}`));
 
       return interaction.followUp({ embeds: [embed], flags: 64 });
     }
@@ -521,8 +538,9 @@ class MysteryBoxHandler {
     const embed = new EmbedBuilder()
       .setTitle('💀 PIÈGE !')
       .setDescription(`**${trap.name}**\n\n${trap.description}`)
-      .setColor('#FF0000')
-      .setImage(trap.image_url);
+      .setColor(branding.secondary_color)
+      .setImage(trap.image_url)
+      .setFooter(await getLoomixFooter(interaction.guildId));
 
     await interaction.followUp({ embeds: [embed], flags: 64 });
 
@@ -725,7 +743,10 @@ class MysteryBoxHandler {
    * Révéler un super bonus
    */
   async revealSuperBonus(interaction, bonusId, player) {
-    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2', [bonusId, interaction.guildId]);
+    const [bonus, branding] = await Promise.all([
+      db.queryOne('SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2', [bonusId, interaction.guildId]),
+      db.getGuildBranding(interaction.guildId)
+    ]);
 
     if (!bonus) {
       return interaction.followUp({
@@ -754,9 +775,10 @@ class MysteryBoxHandler {
             `**${interaction.user.username}** vient de recevoir le super bonus légendaire **${bonus.name}** ${bonus.icon} !\n\n` +
             `${bonus.description}`
           )
-          .setColor(bonus.color || '#FFD700')
+          .setColor(bonus.color || branding.secondary_color)
           .setThumbnail(interaction.user.displayAvatarURL())
           .setImage(bonus.image_url)
+          .setFooter(await getLoomixFooter(interaction.guildId))
           .setTimestamp();
 
         await announceChannel.send({ embeds: [announceEmbed] });
@@ -770,7 +792,10 @@ class MysteryBoxHandler {
    * Gérer la collection complète
    */
   async handleCollectionComplete(interaction, player, collectible) {
-    const theme = await db.queryOne('SELECT * FROM themes WHERE id = $1 AND guild_id = $2', [collectible.theme_id, interaction.guildId]);
+    const [theme, branding] = await Promise.all([
+      db.queryOne('SELECT * FROM themes WHERE id = $1 AND guild_id = $2', [collectible.theme_id, interaction.guildId]),
+      db.getGuildBranding(interaction.guildId)
+    ]);
 
     // Marquer comme complété
     await db.completeCollection(interaction.guildId, player.id, collectible.theme_id);
@@ -801,6 +826,7 @@ class MysteryBoxHandler {
         )
         .setColor(theme.final_role_color)
         .setThumbnail(interaction.user.displayAvatarURL())
+        .setFooter(await getLoomixFooter(interaction.guildId))
         .setTimestamp();
 
       await interaction.user.send({

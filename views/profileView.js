@@ -16,12 +16,16 @@ const {
   getInventoryGrouped,
   getServerComparison
 } = require('../utils/profileQueries');
+const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
 /**
  * 🌟 VIEW 1: OVERVIEW - Vue principale du profil
  */
 async function showOverview(interaction, player, theme, progress) {
   const guildId = interaction.guildId;
+
+  // Récupérer le branding
+  const branding = await db.getGuildBranding(guildId);
 
   // Calculer la couleur dynamique basée sur la progression
   const color = getDynamicColor(progress.collected_count, theme.required_items);
@@ -67,11 +71,11 @@ async function showOverview(interaction, player, theme, progress) {
       }
     )
 
-  // Footer avec dernière activité
+  // Footer avec dernière activité et branding
   if (progress.last_collected_at) {
-    embed.setFooter({
-      text: `Dernière collecte: ${formatRelativeTime(progress.last_collected_at)}`
-    });
+    embed.setFooter(getLoomixFooterWithCustomText(`Dernière collecte: ${formatRelativeTime(progress.last_collected_at)}`));
+  } else {
+    embed.setFooter(await getLoomixFooter(guildId));
   }
 
   embed.setTimestamp();
@@ -128,6 +132,9 @@ async function showOverview(interaction, player, theme, progress) {
 async function showInventory(interaction, player, theme, progress, selectedRarity = 'all', page = 0) {
   const guildId = interaction.guildId;
   const itemsPerPage = 3; // Réduit à 3 pour éviter de dépasser la limite Discord de 1024 caractères
+
+  // Récupérer le branding
+  const branding = await db.getGuildBranding(guildId);
 
   // Récupérer l'inventaire groupé par rareté
   const inventory = await getInventoryGrouped(player.id, guildId, theme.id);
@@ -221,9 +228,7 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
     });
   }
 
-  embed.setFooter({
-    text: `Filtré par: ${selectedRarity === 'all' ? 'Tous' : selectedRarity} | Page ${currentPage + 1}/${totalPages}`
-  });
+  embed.setFooter(getLoomixFooterWithCustomText(`Filtré par: ${selectedRarity === 'all' ? 'Tous' : selectedRarity} | Page ${currentPage + 1}/${totalPages}`));
 
   embed.setTimestamp();
 
@@ -334,10 +339,13 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
 async function showHistory(interaction, player, theme) {
   const guildId = interaction.guildId;
 
+  // Récupérer le branding
+  const branding = await db.getGuildBranding(guildId);
+
   // Récupérer l'historique groupé par jour
   const timeline = await getActivityTimeline(player.id, guildId, theme.id, 20);
 
-  const color = '#3498DB'; // Bleu pour historique
+  const color = branding.secondary_color;
   const embed = new EmbedBuilder()
     .setTitle(`📜 Historique - ${player.username}`)
     .setColor(color)
@@ -398,6 +406,8 @@ async function showHistory(interaction, player, theme) {
     });
   }
 
+  embed.setFooter(await getLoomixFooter(guildId));
+
   embed.setTimestamp();
 
   // Boutons de navigation
@@ -447,6 +457,9 @@ async function showHistory(interaction, player, theme) {
 async function showAchievements(interaction, player, theme, progress) {
   const guildId = interaction.guildId;
 
+  // Récupérer le branding
+  const branding = await db.getGuildBranding(guildId);
+
   // Récupérer les stats détaillées
   const stats = await getDetailedStats(player.id, guildId, theme.id);
 
@@ -457,7 +470,7 @@ async function showAchievements(interaction, player, theme, progress) {
   // Récupérer la comparaison serveur
   const serverComparison = await getServerComparison(player.id, guildId);
 
-  const color = '#FFD700'; // Or pour achievements
+  const color = branding.secondary_color;
   const embed = new EmbedBuilder()
     .setTitle(`🏅 Succès & Statistiques - ${player.username}`)
     .setColor(color)
@@ -520,9 +533,7 @@ async function showAchievements(interaction, player, theme, progress) {
     inline: false
   });
 
-  embed.setFooter({
-    text: `Continue de collecter pour débloquer tous les badges !`
-  });
+  embed.setFooter(getLoomixFooterWithCustomText('Continue de collecter pour débloquer tous les badges !'));
 
   embed.setTimestamp();
 
