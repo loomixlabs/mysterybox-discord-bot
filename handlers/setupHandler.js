@@ -1,6 +1,8 @@
 const permissions = require('../utils/permissions');
 const setupCommand = require('../commands/admin/setup');
 const announcementTemplates = require('../utils/announcementTemplates');
+const BotRoleManager = require('../utils/botRoleManager');
+const db = require('../utils/database-pg');
 
 /**
  * Gérer la sélection des rôles admin
@@ -103,6 +105,26 @@ async function handleFinish(interaction) {
   } catch (error) {
     console.error('❌ Erreur lors de la création des templates d\'annonces:', error);
     message += '⚠️ **Erreur lors de la création des templates d\'annonces** (non bloquant).\n\n';
+  }
+
+  // Créer le rôle dédié au bot pour la personnalisation de couleur
+  try {
+    const branding = await db.getGuildBranding(interaction.guildId);
+    const botRole = await BotRoleManager.createOrGetBotRole(
+      interaction.guild,
+      branding.bot_display_name,
+      branding.primary_color
+    );
+
+    console.log(`✅ Rôle bot créé/récupéré: ${botRole.name} (${botRole.id})`);
+    message += `✅ **Rôle bot créé:** ${botRole.name}\n` +
+               `   • Couleur: ${botRole.hexColor} ■\n` +
+               `   • Ce rôle permet de personnaliser la couleur du bot dans Discord\n\n` +
+               `⚠️  **Important:** Pour que la couleur soit visible, vous devez remonter ce rôle dans la hiérarchie.\n` +
+               `   → Utilisez \`/server-config\` puis consultez le tutoriel de positionnement du rôle.\n\n`;
+  } catch (error) {
+    console.error('❌ Erreur lors de la création du rôle bot:', error);
+    message += '⚠️ **Erreur lors de la création du rôle bot** (non bloquant).\n\n';
   }
 
   message += '**Prochaines étapes:**\n' +

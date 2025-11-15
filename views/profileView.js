@@ -16,7 +16,7 @@ const {
   getInventoryGrouped,
   getServerComparison
 } = require('../utils/profileQueries');
-const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
+const { getLoomixFooter, getLoomixFooterWithCustomText, LOOMIX_BRANDING } = require('../utils/footerHelper');
 
 /**
  * 🌟 VIEW 1: OVERVIEW - Vue principale du profil
@@ -27,8 +27,8 @@ async function showOverview(interaction, player, theme, progress) {
   // Récupérer le branding
   const branding = await db.getGuildBranding(guildId);
 
-  // Calculer la couleur dynamique basée sur la progression
-  const color = getDynamicColor(progress.collected_count, theme.required_items);
+  // Utiliser la couleur préférée du joueur, sinon la couleur dynamique
+  const color = player.preferred_color || getDynamicColor(progress.collected_count, theme.required_items);
 
   // Créer la barre de progression
   const progressBar = createProgressBar(progress.collected_count, theme.required_items);
@@ -117,12 +117,27 @@ async function showOverview(interaction, player, theme, progress) {
         .setCustomId('profile_share')
         .setLabel('Partager')
         .setEmoji('📤')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('profile_color_settings')
+        .setLabel('Couleur de l\'embed')
+        .setEmoji('🎨')
         .setStyle(ButtonStyle.Secondary)
+    );
+
+  // Bouton Loomix Discord (Link Button)
+  const loomixRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setLabel('Rejoindre Loomix Discord')
+        .setEmoji('🌟')
+        .setStyle(ButtonStyle.Link)
+        .setURL(LOOMIX_BRANDING.discordInvite)
     );
 
   return {
     embeds: [embed],
-    components: [navigationRow, actionRow]
+    components: [navigationRow, actionRow, loomixRow]
   };
 }
 
@@ -157,8 +172,8 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
   const end = start + itemsPerPage;
   const pageItems = filteredItems.slice(start, end);
 
-  // Créer l'embed
-  const color = getDynamicColor(progress.collected_count, theme.required_items);
+  // Créer l'embed - Utiliser la couleur préférée si définie
+  const color = player.preferred_color || getDynamicColor(progress.collected_count, theme.required_items);
   const progressPercentage = Math.round((progress.collected_count / theme.required_items) * 100);
   const progressBar = createProgressBar(progress.collected_count, theme.required_items);
 

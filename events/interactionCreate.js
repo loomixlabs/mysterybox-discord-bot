@@ -7,6 +7,7 @@ const modalHandler = require('../handlers/modalHandler');
 const superAdminHandler = require('../handlers/superAdminHandler');
 const setupHandler = require('../handlers/setupHandler');
 const profileHandler = require('../handlers/profileHandler');
+const ServerConfigHandler = require('../handlers/serverConfigHandler');
 
 module.exports = {
   name: 'interactionCreate',
@@ -57,6 +58,12 @@ module.exports = {
         // Boutons de profil (profile_*)
         if (customId.startsWith('profile_')) {
           await profileHandler.handleProfileInteraction(interaction);
+        }
+
+        // Boutons de configuration serveur (server_config_*)
+        else if (customId.startsWith('server_config_') || customId.startsWith('edit_') || customId === 'show_role_tutorial') {
+          const handler = new ServerConfigHandler();
+          await handler.handleButtonInteraction(interaction);
         }
 
         // Boutons de boîte mystère (mystery_open_type_id)
@@ -200,7 +207,20 @@ module.exports = {
     // Gérer les modals
     else if (interaction.isModalSubmit()) {
       try {
-        await modalHandler.handleModalSubmit(interaction);
+        // Modals de server-config
+        if (interaction.customId.startsWith('modal_edit_')) {
+          const handler = new ServerConfigHandler();
+          await handler.handleModalSubmit(interaction);
+        }
+        // Modal de couleur personnalisée du profil
+        else if (interaction.customId === 'profile_color_custom_modal') {
+          const profileColorHandler = require('../handlers/profileColorHandler');
+          await profileColorHandler.handleCustomColorModal(interaction);
+        }
+        // Autres modals
+        else {
+          await modalHandler.handleModalSubmit(interaction);
+        }
       } catch (error) {
         console.error(`🔴 Erreur lors du traitement du modal ${interaction.customId}:`, error);
 
@@ -220,8 +240,13 @@ module.exports = {
     // Gérer les select menus
     else if (interaction.isStringSelectMenu()) {
       try {
+        // Select menu de sélection de couleur (server-config)
+        if (interaction.customId.startsWith('color_select_')) {
+          const handler = new ServerConfigHandler();
+          await handler.handleSelectMenu(interaction);
+        }
         // Select menu du profil (filtrage inventaire)
-        if (interaction.customId.startsWith('profile_')) {
+        else if (interaction.customId.startsWith('profile_')) {
           await profileHandler.handleProfileInteraction(interaction);
         }
         // Select menus des missions

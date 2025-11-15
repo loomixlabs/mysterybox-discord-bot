@@ -148,7 +148,7 @@ async function showPrerequisitesChecklist(interaction) {
       'Vous pourrez ensuite:\n' +
       '• Lancer des **Give Unique** (admin)\n' +
       '• Créer des **Campagnes** programmées\n' +
-      '• Les joueurs pourront utiliser `/collection`, `/missions`, `/leaderboard`'
+      '• Les joueurs pourront utiliser `/profile`, `/leaderboard`'
     )
     .setColor('#2ecc71')
     .setFooter({ text: 'Accédez au panneau admin avec /admin-panel' })

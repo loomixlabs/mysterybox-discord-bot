@@ -1,5 +1,17 @@
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/database-pg');
 const { showOverview, showInventory, showHistory, showAchievements } = require('../views/profileView');
+const {
+  getRarityEmoji,
+  createProgressBar,
+  calculateBadges,
+  formatRelativeTime,
+  getSourceEmoji,
+  getDynamicColor
+} = require('../utils/profileHelpers');
+const { getInventoryGrouped, getActivityTimeline } = require('../utils/profileQueries');
+const { getLoomixFooter, LOOMIX_BRANDING } = require('../utils/footerHelper');
+const profileColorHandler = require('./profileColorHandler');
 
 /**
  * 🎯 PROFILE HANDLER - Router principal pour toutes les interactions du profil
@@ -49,6 +61,16 @@ async function handleProfileInteraction(interaction) {
   const { customId, user } = interaction;
 
   try {
+    // Gérer les select menus de couleur (ne PAS déférer car le handler le fait)
+    if (customId.startsWith('profile_color_select_')) {
+      return profileColorHandler.handleProfileColorSelect(interaction);
+    }
+
+    // Gérer le modal de couleur custom (ne PAS déférer car showModal répond immédiatement)
+    if (customId === 'profile_color_custom') {
+      return profileColorHandler.showCustomColorModal(interaction);
+    }
+
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT
     await interaction.deferUpdate();
 
@@ -107,6 +129,10 @@ async function handleProfileInteraction(interaction) {
       await handleInventoryPagination(interaction, player, theme, progress, state, 'next');
     } else if (customId === 'profile_inventory_last') {
       await handleInventoryPagination(interaction, player, theme, progress, state, 'last');
+    } else if (customId === 'profile_color_settings') {
+      await profileColorHandler.showProfileColorPalette(interaction, player, theme, progress);
+    } else if (customId === 'profile_color_auto') {
+      await profileColorHandler.resetToAutoColor(interaction);
     }
 
   } catch (error) {
@@ -206,24 +232,96 @@ async function handleRefresh(interaction, player, theme, progress, state) {
 }
 
 /**
- * 📤 Handler: Partager le profil
+ * 📤 Handler: Partager le profil (Version 2.0 - Rich Embed + Loomix Promo)
  */
 async function handleShare(interaction, player, theme, progress) {
-  // Créer un message public avec les stats du joueur
+  const guildId = interaction.guildId;
+
+  // Récupérer les données nécessaires
+  const [badges, leaderboard, inventory, recentActivity] = await Promise.all([
+    calculateBadges(player.id, guildId, theme.id),
+    db.getLeaderboard(guildId, theme.id, 100),
+    getInventoryGrouped(player.id, guildId, theme.id),
+    getActivityTimeline(player.id, guildId, theme.id, 3) // 3 dernières activités
+  ]);
+
+  // Calculer les stats
   const percentage = Math.round((progress.collected_count / theme.required_items) * 100);
-  const status = progress.is_completed ? '✅ COMPLÉTÉ' : `${percentage}%`;
+  const progressBar = createProgressBar(progress.collected_count, theme.required_items);
+  const badgeDisplay = badges.length > 0 ? badges.join(' ') : '🔰';
+  const userRank = leaderboard.findIndex(p => p.discord_id === interaction.user.id) + 1;
+  const rankDisplay = userRank > 0 ? `#${userRank}/${leaderboard.length}` : 'Non classé';
+  // Utiliser la couleur préférée si définie, sinon la couleur dynamique
+  const color = player.preferred_color || getDynamicColor(progress.collected_count, theme.required_items);
 
-  const shareMessage = [
-    `🎮 **Profil de ${player.username}**`,
-    `📊 Thème: **${theme.name}**`,
-    `🎯 Progression: **${progress.collected_count}/${theme.required_items}** (${status})`,
-    ``,
-    `Utilise \`/profile\` pour voir ton propre profil !`
-  ].join('\n');
+  // Calculer les stats par rareté
+  const rarityStats = Object.entries(inventory)
+    .map(([rarity, items]) => {
+      const collected = items.filter(item => item.collected).length;
+      const total = items.length;
+      const rarityPercentage = total > 0 ? Math.round((collected / total) * 100) : 0;
+      const emoji = getRarityEmoji(rarity);
+      return `${emoji} **${rarity}:** ${collected}/${total} (${rarityPercentage}%)`;
+    })
+    .join('\n');
 
-  // Envoyer dans le channel (non-éphémère)
+  // Créer l'embed riche
+  const embed = new EmbedBuilder()
+    .setTitle(`${badgeDisplay} Profil de ${player.username}`)
+    .setColor(color)
+    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
+    .setDescription(
+      `🎨 **Thème:** ${theme.name}\n` +
+      `📊 **Progression:** ${progress.collected_count}/${theme.required_items} items\n` +
+      `${progressBar} **${percentage}%**\n\n` +
+      `${progress.is_completed ? '✅ **COLLECTION COMPLÈTE !** 🎉' : '🔄 En cours de collection'}`
+    )
+    .addFields(
+      {
+        name: '💎 Collection par Rareté',
+        value: rarityStats || 'Aucun collectible',
+        inline: false
+      },
+      {
+        name: '🏆 Classement Serveur',
+        value: rankDisplay,
+        inline: true
+      },
+      {
+        name: '📅 Joue depuis',
+        value: formatRelativeTime(player.created_at),
+        inline: true
+      }
+    );
+
+  // Ajouter l'historique récent si disponible
+  if (recentActivity.length > 0) {
+    const activityText = recentActivity.map(activity => {
+      const emoji = getRarityEmoji(activity.rarity);
+      const source = getSourceEmoji(activity.source);
+      const time = formatRelativeTime(activity.event_date);
+
+      if (activity.event_type === 'lost') {
+        return `❌ **${activity.name}** *(Perdu ${time})*`;
+      } else {
+        return `${emoji} **${activity.name}** ${source} *(${time})*`;
+      }
+    }).join('\n');
+
+    embed.addFields({
+      name: '📜 Activité Récente',
+      value: activityText,
+      inline: false
+    });
+  }
+
+  // Footer avec call-to-action Loomix
+  embed.setFooter(await getLoomixFooter(guildId, '🎮 Utilise /profile pour voir ton propre profil !'));
+  embed.setTimestamp();
+
+  // Envoyer dans le channel (non-éphémère) - Sans bouton
   await interaction.followUp({
-    content: shareMessage,
+    embeds: [embed],
     flags: 0 // Public
   });
 

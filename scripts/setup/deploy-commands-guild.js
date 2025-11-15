@@ -9,7 +9,7 @@ const commands = [];
 const commandFolders = ['admin', 'player', 'superadmin'];
 
 for (const folder of commandFolders) {
-  const commandsPath = path.join(__dirname, 'commands', folder);
+  const commandsPath = path.join(__dirname, '../../commands', folder);
 
   if (fs.existsSync(commandsPath)) {
     const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));

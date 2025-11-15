@@ -5,6 +5,99 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+## [1.3.0] - 2025-11-15
+
+### 🐛 Fixed
+- **[Profile Color]**: Correction bug bouton "Couleur automatique"
+  - Fichiers modifiés:
+    - `handlers/profileColorHandler.js` (ligne 335 - retrait deferUpdate dupliqué)
+    - `handlers/profileHandler.js` (lignes 69-72 - routing modal avant defer)
+  - Cause: `resetToAutoColor()` appelait `deferUpdate()` alors que déjà déféré par `handleProfileInteraction()`
+  - Erreur: "InteractionAlreadyReplied"
+  - Solution: Routing de `profile_color_custom` avant le defer pour permettre showModal()
+
+### ✨ Added
+
+#### **Système de Partage de Profil Amélioré (v2.0)**
+- **Embed riche pour le partage de profil**:
+  - Fichiers modifiés: `handlers/profileHandler.js` (lignes 219-338)
+  - Remplace le message texte basique par un embed visuel complet
+  - Affichage des badges du joueur dans le titre
+  - Avatar du joueur en thumbnail
+  - Barre de progression visuelle avec pourcentage
+  - Couleur dynamique selon la progression (rouge → orange → vert)
+
+- **Stats détaillées dans le partage**:
+  - Collection par rareté avec emojis (🌟 💎 💠 ⚪)
+  - Affichage du nombre d'items collectés par rareté avec pourcentage
+  - Classement serveur (#X/Total joueurs)
+  - Date d'inscription au bot
+  - Historique des 3 dernières activités (collectes récentes)
+
+- **Promotion Loomix Bot**:
+  - Fichiers modifiés:
+    - `utils/footerHelper.js` (lignes 6-11) - Ajout des liens Loomix
+    - `views/profileView.js` (lignes 19, 123-136) - Ajout du bouton dans Overview
+    - `handlers/profileHandler.js` (lignes 306-310) - Retrait du bouton du partage public
+  - Ajout du lien Discord Loomix dans `LOOMIX_BRANDING.discordInvite`
+  - Link Button "Rejoindre Loomix Discord" 🌟 affiché dans le menu `/profile` (vue Overview)
+  - Bouton cliquable avec lien direct vers le serveur Discord (https://discord.gg/JBKPw6gv)
+  - Footer avec logo Loomix automatiquement affiché sur tous les embeds
+  - Positionnement stratégique : dans le menu privé `/profile`, pas dans le partage public
+
+#### **Système de Personnalisation de Couleur de Profil**
+- **Nouvelle colonne en base de données**:
+  - Migration: `scripts/migrations/add-preferred-color-column.js`
+  - Ajout de `preferred_color` (TEXT, nullable) dans la table `players`
+  - NULL par défaut = couleur automatique basée sur la progression
+
+- **Handler de personnalisation de couleur**:
+  - Fichier créé: `handlers/profileColorHandler.js` (455 lignes)
+  - Réutilise les 5 palettes de couleurs de `/server-config` (basiques, tendances 2025, pastel, vives, professionnelles)
+  - Total de 32 couleurs prédéfinies disponibles
+  - Fonctionnalités:
+    - Menu de sélection avec 4 SelectMenus (palettes)
+    - Code hexadécimal personnalisé via modal
+    - Bouton "Couleur automatique" pour revenir à la couleur dynamique
+    - Validation complète des codes hex (#FFFFFF ou #FFF)
+
+- **Nouveau bouton dans `/profile`**:
+  - Fichier modifié: `views/profileView.js` (lignes 121-126)
+  - Bouton "🎨 Couleur de l'embed" dans la vue Overview
+  - Positionné dans la 2ème rangée de boutons (avec Actualiser et Partager)
+
+- **Logique de couleur mise à jour**:
+  - Fichiers modifiés:
+    - `views/profileView.js` (lignes 31, 176) - Vue Overview et Inventory
+    - `handlers/profileHandler.js` (ligne 240) - Partage de profil
+  - Utilise `player.preferred_color` si défini, sinon couleur dynamique
+  - Couleur personnalisée s'applique à:
+    - Menu `/profile` (toutes les vues)
+    - Partage de profil public
+    - Toutes les stats personnelles
+
+- **Routing des interactions**:
+  - `handlers/profileHandler.js` (lignes 14, 65-67, 122-128) - Import + routes boutons et selectmenus
+  - `events/interactionCreate.js` (lignes 216-219) - Route modal couleur personnalisée
+  - CustomIds gérés:
+    - `profile_color_settings` - Ouvre le menu de sélection
+    - `profile_color_select_*` - Sélection dans les palettes
+    - `profile_color_custom` - Modal code hex personnalisé
+    - `profile_color_auto` - Réinitialise à la couleur automatique
+    - `profile_color_custom_modal` - Soumission modal
+
+### 📊 Impact
+- Amélioration significative de l'attractivité visuelle du partage de profil
+- Promotion discrète et stratégique du serveur Loomix via le menu `/profile`
+- Augmentation anticipée des partages de profil grâce au design amélioré
+- Visibilité optimale du bouton Loomix sans polluer les partages publics
+- **Nouvelle personnalisation**: Les joueurs peuvent désormais personnaliser la couleur de leur profil
+- Engagement accru grâce à la personnalisation individuelle
+- 32 couleurs prédéfinies + possibilité de code hex personnalisé = personnalisation illimitée
+- Flexibilité totale: couleur fixe OU couleur automatique selon la progression
+
 ## [1.2.0] - 2025-11-15
 
 ### ✨ Added
