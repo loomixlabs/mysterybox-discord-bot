@@ -89,6 +89,144 @@ class MysteryBoxHandler {
   }
 
   /**
+   * Sélectionner un super bonus aléatoire avec pondération par rareté
+   * @param {string} guildId - ID du serveur Discord
+   * @param {object} config - Configuration du thème (pour probabilités rareté - FUTUR)
+   * @returns {object|null} Super bonus sélectionné ou null si aucun disponible
+   */
+  async selectSuperBonus(guildId, config = null) {
+    console.log(`🎁 [SUPER BONUS] Sélection d'un super bonus pour guild ${guildId}...`);
+
+    // Récupérer tous les super bonuses disponibles
+    const bonuses = await db.queryAll(`
+      SELECT id, bonus_id, name, rarity, icon, description,
+             duration_type, duration_value, effect_type
+      FROM super_bonuses
+      WHERE guild_id = $1
+      ORDER BY rarity DESC, name
+    `, [guildId]);
+
+    if (!bonuses || bonuses.length === 0) {
+      console.error('❌ Aucun super bonus disponible pour guild', guildId);
+      return null;
+    }
+
+    console.log(`📊 ${bonuses.length} super bonuses trouvés`);
+
+    // Pourcentages par rareté depuis la config DB
+    const percentages = {
+      legendary: config?.super_bonus_rarity_legendary || 5,
+      epic: config?.super_bonus_rarity_epic || 10,
+      rare: config?.super_bonus_rarity_rare || 20,
+      common: config?.super_bonus_rarity_common || 40
+    };
+
+    console.log(`🎲 Pourcentages rareté super bonuses:`, percentages);
+
+    // Grouper les bonuses par rareté
+    const byRarity = {
+      legendary: bonuses.filter(b => b.rarity === 'legendary'),
+      epic: bonuses.filter(b => b.rarity === 'epic'),
+      rare: bonuses.filter(b => b.rarity === 'rare'),
+      common: bonuses.filter(b => b.rarity === 'common')
+    };
+
+    console.log(`📊 Distribution: ${byRarity.legendary.length} legendary, ${byRarity.epic.length} epic, ${byRarity.rare.length} rare, ${byRarity.common.length} common`);
+
+    // Sélection de la rareté basée sur les pourcentages
+    const rand = Math.random() * 100;
+    let cumulative = 0;
+    let selectedRarity = 'common';
+
+    if (rand < (cumulative += percentages.legendary) && byRarity.legendary.length > 0) {
+      selectedRarity = 'legendary';
+    } else if (rand < (cumulative += percentages.epic) && byRarity.epic.length > 0) {
+      selectedRarity = 'epic';
+    } else if (rand < (cumulative += percentages.rare) && byRarity.rare.length > 0) {
+      selectedRarity = 'rare';
+    } else if (byRarity.common.length > 0) {
+      selectedRarity = 'common';
+    } else {
+      // Fallback: si la rareté sélectionnée n'a pas d'items, prendre n'importe quel bonus
+      const allAvailable = [...byRarity.legendary, ...byRarity.epic, ...byRarity.rare, ...byRarity.common];
+      if (allAvailable.length > 0) {
+        const fallbackBonus = allAvailable[Math.floor(Math.random() * allAvailable.length)];
+        console.log(`✅ Fallback - Super bonus sélectionné: ${fallbackBonus.icon} ${fallbackBonus.name} (${fallbackBonus.rarity})`);
+        return fallbackBonus;
+      }
+    }
+
+    // Sélection uniforme parmi les bonuses de la rareté choisie
+    const bonusesOfRarity = byRarity[selectedRarity];
+    const selected = bonusesOfRarity[Math.floor(Math.random() * bonusesOfRarity.length)];
+
+    console.log(`✅ Rareté sélectionnée: ${selectedRarity} (roll: ${rand.toFixed(2)})`);
+    console.log(`   Super bonus: ${selected.icon} ${selected.name}`);
+    console.log(`   Duration: ${selected.duration_type} = ${selected.duration_value}`);
+    console.log(`   Effect: ${selected.effect_type}`);
+
+    return selected;
+  }
+
+  /**
+   * Sélectionner un collectible de manière pondérée selon la rareté
+   * @param {array} collectibles - Liste des collectibles disponibles
+   * @param {object} config - Configuration du thème (contient les pourcentages par rareté)
+   * @returns {object} Collectible sélectionné
+   */
+  selectCollectibleWeighted(collectibles, config) {
+    // Récupérer les pourcentages depuis la config (défauts: legendary=5, epic=10, rare=20, common=40)
+    const percentages = {
+      legendary: config.collectible_rarity_legendary || 5,
+      epic: config.collectible_rarity_epic || 10,
+      rare: config.collectible_rarity_rare || 20,
+      common: config.collectible_rarity_common || 40
+    };
+
+    console.log(`🎲 Pourcentages rareté collectibles:`, percentages);
+
+    // Grouper les collectibles par rareté
+    const byRarity = {
+      legendary: collectibles.filter(c => c.rarity === 'legendary'),
+      epic: collectibles.filter(c => c.rarity === 'epic'),
+      rare: collectibles.filter(c => c.rarity === 'rare'),
+      common: collectibles.filter(c => c.rarity === 'common')
+    };
+
+    console.log(`📊 Distribution: ${byRarity.legendary.length} legendary, ${byRarity.epic.length} epic, ${byRarity.rare.length} rare, ${byRarity.common.length} common`);
+
+    // Sélection de la rareté basée sur les pourcentages
+    const rand = Math.random() * 100;
+    let cumulative = 0;
+    let selectedRarity = 'common';
+
+    if (rand < (cumulative += percentages.legendary) && byRarity.legendary.length > 0) {
+      selectedRarity = 'legendary';
+    } else if (rand < (cumulative += percentages.epic) && byRarity.epic.length > 0) {
+      selectedRarity = 'epic';
+    } else if (rand < (cumulative += percentages.rare) && byRarity.rare.length > 0) {
+      selectedRarity = 'rare';
+    } else if (byRarity.common.length > 0) {
+      selectedRarity = 'common';
+    } else {
+      // Fallback: si la rareté sélectionnée n'a pas d'items, prendre n'importe quel item
+      const allAvailable = [...byRarity.legendary, ...byRarity.epic, ...byRarity.rare, ...byRarity.common];
+      if (allAvailable.length > 0) {
+        return allAvailable[Math.floor(Math.random() * allAvailable.length)];
+      }
+    }
+
+    // Sélection uniforme parmi les items de la rareté choisie
+    const itemsOfRarity = byRarity[selectedRarity];
+    const selected = itemsOfRarity[Math.floor(Math.random() * itemsOfRarity.length)];
+
+    console.log(`✅ Rareté sélectionnée: ${selectedRarity} (roll: ${rand.toFixed(2)})`);
+    console.log(`   Collectible: ${selected.name}`);
+
+    return selected;
+  }
+
+  /**
    * Tirer aléatoirement le contenu de la boîte
    * @param {string} guildId - ID du serveur Discord
    * @param {number} themeId - ID du thème
@@ -146,8 +284,11 @@ class MysteryBoxHandler {
     const probCollectible = config.probability_collectible;
     const probMission = config.probability_mission;
     const probTrap = config.probability_trap;
+    const probSuperBonus = config.probability_super_bonus || 0; // NOUVEAU - Fallback à 0 si pas défini
 
-    // Déterminer le type selon les probabilités
+    console.log(`🎲 Roll: ${rand} | Collectible: 1-${probCollectible} | Mission: ${probCollectible + 1}-${probCollectible + probMission} | Trap: ${probCollectible + probMission + 1}-${probCollectible + probMission + probTrap} | Super Bonus: ${probCollectible + probMission + probTrap + 1}-100`);
+
+    // Déterminer le type selon les probabilités (4 types maintenant)
     if (rand <= probCollectible) {
       // COLLECTIBLE
       type = 'collectible';
@@ -158,10 +299,27 @@ class MysteryBoxHandler {
       type = 'mission';
       items = await db.getMissionsByTheme(guildId, themeId);
 
-    } else {
+    } else if (rand <= probCollectible + probMission + probTrap) {
       // PIÈGE
       type = 'trap';
       items = await db.getTrapsByTheme(guildId, themeId); // Récupère seulement les pièges actifs
+
+    } else {
+      // SUPER BONUS (nouveau - reste des 100%)
+      type = 'super_bonus';
+
+      // Appeler selectSuperBonus() qui fait la sélection pondérée par rareté
+      const selectedBonus = await this.selectSuperBonus(guildId, config);
+
+      if (!selectedBonus) {
+        console.error('❌ Aucun super bonus disponible, redistribution...');
+        // Redistribuer vers un autre type
+        items = null;
+      } else {
+        // Retourner directement le bonus (pas besoin de random selection après)
+        console.log(`✅ Super bonus tiré: ${selectedBonus.name} (${selectedBonus.rarity})`);
+        return { type: 'super_bonus', id: selectedBonus.id, item: selectedBonus };
+      }
     }
 
     // Si le type sélectionné n'a pas d'items disponibles, redistribuer
@@ -186,9 +344,16 @@ class MysteryBoxHandler {
         availableTypes.push({ type: 'trap', items: traps });
       }
 
+      // Pour super_bonus, vérifier qu'au moins 1 existe
+      const hasSuperBonuses = await db.queryOne('SELECT COUNT(*) as count FROM super_bonuses WHERE guild_id = $1', [guildId]);
+      if (hasSuperBonuses && parseInt(hasSuperBonuses.count) > 0) {
+        // On met un placeholder, selectSuperBonus() sera appelé si ce type est choisi
+        availableTypes.push({ type: 'super_bonus', items: [{ id: 'placeholder' }] });
+      }
+
       // Si aucun type n'a d'items, erreur
       if (availableTypes.length === 0) {
-        throw new Error(`Aucun contenu disponible (collectibles, missions ou pièges actifs) pour le thème ${themeId}`);
+        throw new Error(`Aucun contenu disponible (collectibles, missions, pièges ou super bonuses) pour le thème ${themeId}`);
       }
 
       // Sélectionner un type aléatoire parmi ceux disponibles
@@ -197,10 +362,28 @@ class MysteryBoxHandler {
       items = selected.items;
 
       console.log(`✅ Redistribution vers: ${type}`);
+
+      // Si redistribution vers super_bonus, appeler selectSuperBonus() directement
+      if (type === 'super_bonus') {
+        const selectedBonus = await this.selectSuperBonus(guildId, config);
+        if (selectedBonus) {
+          console.log(`✅ Super bonus redistribué: ${selectedBonus.name}`);
+          return { type: 'super_bonus', id: selectedBonus.id, item: selectedBonus };
+        } else {
+          throw new Error('Redistribution vers super_bonus échouée: aucun bonus disponible');
+        }
+      }
     }
 
-    // Sélectionner un item aléatoire du type
-    item = items[Math.floor(Math.random() * items.length)];
+    // Sélectionner un item du type
+    if (type === 'collectible') {
+      // Sélection pondérée par rareté pour les collectibles
+      item = this.selectCollectibleWeighted(items, config);
+      console.log(`🎯 Collectible sélectionné (pondéré): ${item.name} (${item.rarity})`);
+    } else {
+      // Sélection uniforme pour missions et pièges (pas de rareté)
+      item = items[Math.floor(Math.random() * items.length)];
+    }
 
     return { type, id: item.id, item };
   }
@@ -210,7 +393,16 @@ class MysteryBoxHandler {
    * @param {ButtonInteraction} interaction
    */
   async handleMysteryBoxOpen(interaction) {
-    const [, , type, itemId] = interaction.customId.split('_');
+    // Format: mystery_open_TYPE_ID
+    // où TYPE peut contenir des underscores (ex: super_bonus)
+    const customIdParts = interaction.customId.split('_');
+    // Le dernier élément est toujours l'ID
+    const itemId = customIdParts[customIdParts.length - 1];
+    // Tout entre "open" et l'ID est le type
+    const type = customIdParts.slice(2, -1).join('_');
+
+    console.log(`🔍 [MYSTERY BOX] Ouverture demandée - customId: ${interaction.customId}`);
+    console.log(`🔍 [MYSTERY BOX] Type: ${type}, ItemId: ${itemId}`);
 
     // Defer immédiatement pour éviter timeout
     await interaction.deferUpdate();
@@ -294,22 +486,32 @@ class MysteryBoxHandler {
     }
 
     // Révéler le contenu selon le type
+    console.log(`🔍 [MYSTERY BOX] Switch statement - type="${type}", itemId="${itemId}"`);
+
     switch (type) {
       case 'collectible':
+        console.log('🎁 [MYSTERY BOX] Case collectible atteint');
         await this.revealCollectible(interaction, parseInt(itemId), player);
         break;
 
       case 'mission':
+        console.log('📋 [MYSTERY BOX] Case mission atteint');
         await this.revealMission(interaction, parseInt(itemId), player);
         break;
 
       case 'trap':
+        console.log('⚠️ [MYSTERY BOX] Case trap atteint');
         await this.revealTrap(interaction, parseInt(itemId), player);
         break;
 
       case 'super_bonus':
+        console.log('✨ [MYSTERY BOX] Case super_bonus atteint - Appel revealSuperBonus()');
         await this.revealSuperBonus(interaction, parseInt(itemId), player);
+        console.log('✨ [MYSTERY BOX] revealSuperBonus() terminé');
         break;
+
+      default:
+        console.error(`❌ [MYSTERY BOX] Type inconnu: "${type}"`);
     }
 
     // Le gagnant a déjà été enregistré au début de la fonction (ligne 244)
@@ -579,6 +781,271 @@ class MysteryBoxHandler {
   }
 
   /**
+   * Révéler un super bonus
+   */
+  async revealSuperBonus(interaction, bonusId, player) {
+    const auditLogger = require('../utils/auditLogger');
+
+    // Récupérer le bonus et le branding
+    const [bonus, branding] = await Promise.all([
+      db.queryOne(`
+        SELECT * FROM super_bonuses
+        WHERE id = $1 AND guild_id = $2
+      `, [bonusId, interaction.guildId]),
+      db.getGuildBranding(interaction.guildId)
+    ]);
+
+    if (!bonus) {
+      return interaction.followUp({
+        content: '❌ Super bonus introuvable.',
+        flags: 64
+      });
+    }
+
+    // Vérifier si le joueur a déjà ce bonus actif
+    const existingBonus = await db.queryOne(`
+      SELECT * FROM player_active_bonuses
+      WHERE user_id = $1
+      AND guild_id = $2
+      AND bonus_id = $3
+      AND is_active = true
+      AND (expires_at IS NULL OR expires_at > NOW())
+    `, [interaction.user.id, interaction.guildId, bonusId]);
+
+    if (existingBonus) {
+      // SYSTÈME DE CUMUL - Tous les bonus sont cumulables
+      console.log(`📦 [SUPER BONUS] Cumul détecté - Bonus existant trouvé (ID: ${existingBonus.id})`);
+      console.log(`📦 [SUPER BONUS] Type de durée: ${bonus.duration_type}`);
+
+      if (bonus.duration_type === 'charges') {
+        // CHARGES: Additionner les charges
+        const currentCharges = existingBonus.remaining_charges || 0;
+        const newCharges = currentCharges + bonus.duration_value;
+
+        await db.query(`
+          UPDATE player_active_bonuses
+          SET remaining_charges = $1
+          WHERE id = $2
+        `, [newCharges, existingBonus.id]);
+
+        console.log(`✅ [SUPER BONUS] Charges cumulées: ${currentCharges} + ${bonus.duration_value} = ${newCharges}`);
+
+        // Message de cumul
+        const embed = new EmbedBuilder()
+          .setTitle(`✨ ${bonus.icon} Bonus cumulé !`)
+          .setDescription(`**${bonus.name}** a été cumulé !\n\n🔢 Charges totales: **${newCharges}**`)
+          .setColor(bonus.color || branding.secondary_color)
+          .setFooter(await getLoomixFooter(interaction.guildId));
+
+        await interaction.followUp({ embeds: [embed], flags: 64 });
+
+        // TODO: Ajouter audit logging pour cumul de bonus (action: super_bonus_cumulated)
+        // await auditLogger.logBonusUsed(...) ou créer nouvelle méthode
+
+        return;
+
+      } else if (bonus.duration_type === 'temporary') {
+        // TEMPORARY: Étendre la durée
+        const currentExpires = new Date(existingBonus.expires_at);
+        const newExpires = new Date(currentExpires.getTime() + (bonus.duration_value * 1000));
+
+        await db.query(`
+          UPDATE player_active_bonuses
+          SET expires_at = $1
+          WHERE id = $2
+        `, [newExpires, existingBonus.id]);
+
+        console.log(`✅ [SUPER BONUS] Durée étendue: ${currentExpires.toISOString()} → ${newExpires.toISOString()}`);
+
+        // Calculer temps restant
+        const secondsRemaining = Math.floor((newExpires - new Date()) / 1000);
+        const hoursRemaining = Math.floor(secondsRemaining / 3600);
+        const minutesRemaining = Math.floor((secondsRemaining % 3600) / 60);
+
+        const embed = new EmbedBuilder()
+          .setTitle(`✨ ${bonus.icon} Bonus cumulé !`)
+          .setDescription(`**${bonus.name}** a été prolongé !\n\n⏱️ Temps restant: **${hoursRemaining}h ${minutesRemaining}min**`)
+          .setColor(bonus.color || branding.secondary_color)
+          .setFooter(await getLoomixFooter(interaction.guildId));
+
+        await interaction.followUp({ embeds: [embed], flags: 64 });
+
+        // TODO: Ajouter audit logging pour cumul de bonus (action: super_bonus_cumulated)
+        // await auditLogger.logBonusUsed(...) ou créer nouvelle méthode
+
+        return;
+
+      } else if (bonus.duration_type === 'permanent') {
+        // PERMANENT: Pas de cumul possible (déjà actif en permanence)
+        console.log(`ℹ️  [SUPER BONUS] Bonus permanent déjà actif - Pas de cumul`);
+
+        const embed = new EmbedBuilder()
+          .setTitle('✨ Bonus déjà actif')
+          .setDescription(`Tu possèdes déjà **${bonus.icon} ${bonus.name}** (permanent).`)
+          .setColor(bonus.color || branding.secondary_color)
+          .setFooter(await getLoomixFooter(interaction.guildId));
+
+        return interaction.followUp({ embeds: [embed], flags: 64 });
+      }
+    }
+
+    // Déterminer si activation automatique ou manuelle
+    const isAutomatic = bonus.activation_mode === 'automatic';
+
+    console.log(`🔍 [SUPER BONUS] Bonus: ${bonus.name}`);
+    console.log(`🔍 [SUPER BONUS] activation_mode: ${bonus.activation_mode} (isAutomatic=${isAutomatic})`);
+    console.log(`🔍 [SUPER BONUS] duration_type: ${bonus.duration_type}, duration_value: ${bonus.duration_value}`);
+
+    let activated_at = null;
+    let expires_at = null;
+    let remaining_charges = null;
+
+    if (isAutomatic) {
+      // ACTIVATION AUTOMATIQUE - Passive effects
+      activated_at = new Date(); // NOW()
+      console.log(`✅ [SUPER BONUS] AUTOMATIQUE - activated_at défini: ${activated_at}`);
+
+      // Calculer expires_at selon duration_type
+      if (bonus.duration_type === 'temporary') {
+        // Temporaire: ajouter les secondes
+        expires_at = new Date(activated_at.getTime() + (bonus.duration_value * 1000));
+        console.log(`✅ [SUPER BONUS] expires_at calculé: ${expires_at}`);
+      } else if (bonus.duration_type === 'charges') {
+        // Charges: pas d'expiration temporelle
+        remaining_charges = bonus.duration_value;
+        console.log(`✅ [SUPER BONUS] remaining_charges: ${remaining_charges}`);
+      }
+      // permanent: pas d'expiration
+    } else {
+      console.log(`📱 [SUPER BONUS] MANUEL - activated_at reste NULL`);
+    }
+    // else: MANUEL - activated_at et expires_at restent NULL jusqu'à activation via /profile
+
+    // Insérer le bonus dans player_active_bonuses
+    await db.query(`
+      INSERT INTO player_active_bonuses (
+        user_id, guild_id, bonus_id, activated_at, expires_at,
+        remaining_charges, is_active, obtained_from
+      ) VALUES ($1, $2, $3, $4, $5, $6, true, 'mystery_box')
+    `, [
+      interaction.user.id,
+      interaction.guildId,
+      bonusId,
+      activated_at,
+      expires_at,
+      remaining_charges
+    ]);
+
+    console.log(`🎁 Super bonus attribué: ${bonus.name} (${bonus.activation_mode}) à ${interaction.user.username}`);
+
+    // Logger l'événement
+    await auditLogger.logBonusGranted(
+      interaction.guildId,
+      interaction.user.id,
+      bonus.name,
+      {
+        obtained_from: 'mystery_box',
+        bonus_id: bonus.bonus_id,
+        rarity: bonus.rarity,
+        duration_type: bonus.duration_type,
+        duration_value: bonus.duration_value,
+        activation_mode: bonus.activation_mode
+      }
+    );
+
+    // Créer l'embed de révélation
+    let description = `${bonus.description}\n\n`;
+
+    if (isAutomatic) {
+      // Bonus automatique activé immédiatement
+      description += `✨ **Bonus activé automatiquement !**\n\n`;
+
+      if (bonus.duration_type === 'temporary') {
+        const hours = Math.floor(bonus.duration_value / 3600);
+        const days = Math.floor(hours / 24);
+
+        if (days > 0) {
+          description += `⏱️ Durée: **${days} jour${days > 1 ? 's' : ''}**\n`;
+        } else if (hours > 0) {
+          description += `⏱️ Durée: **${hours}h**\n`;
+        } else {
+          const minutes = Math.floor(bonus.duration_value / 60);
+          description += `⏱️ Durée: **${minutes}min**\n`;
+        }
+      } else if (bonus.duration_type === 'charges') {
+        description += `🔢 Charges: **${bonus.duration_value}**\n`;
+      } else if (bonus.duration_type === 'permanent') {
+        description += `♾️ Durée: **Jusqu'à utilisation**\n`;
+      }
+    } else {
+      // Bonus manuel - à activer via /profile
+      description += `📱 **Activation manuelle**\n\n`;
+      description += `Ce bonus a été ajouté à ton inventaire !\n\n`;
+      description += `Tu peux l'activer quand tu le souhaites via la commande \`/profile\`, section **🎁 Mes Super Bonus**.\n\n`;
+
+      if (bonus.duration_type === 'charges') {
+        description += `🔢 Nombre d'utilisations: **${bonus.duration_value}**\n`;
+      } else if (bonus.duration_type === 'temporary') {
+        const hours = Math.floor(bonus.duration_value / 3600);
+        const days = Math.floor(hours / 24);
+
+        if (days > 0) {
+          description += `⏱️ Durée après activation: **${days} jour${days > 1 ? 's' : ''}**\n`;
+        } else if (hours > 0) {
+          description += `⏱️ Durée après activation: **${hours}h**\n`;
+        }
+      } else if (bonus.duration_type === 'permanent') {
+        description += `♾️ Durée: **Jusqu'à utilisation**\n`;
+      }
+    }
+
+    // Rareté emoji
+    const rarityEmoji = {
+      legendary: '🌟',
+      epic: '💜',
+      rare: '💙',
+      common: '⚪'
+    }[bonus.rarity] || '⚪';
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${bonus.icon} Super Bonus Obtenu !`)
+      .setDescription(description)
+      .setColor(bonus.color || branding.secondary_color)
+      .setThumbnail(bonus.image_url)
+      .addFields({
+        name: 'Rareté',
+        value: `${rarityEmoji} ${bonus.rarity.toUpperCase()}`,
+        inline: true
+      })
+      .setFooter(await getLoomixFooter(interaction.guildId));
+
+    if (bonus.image_url) {
+      embed.setImage(bonus.image_url);
+    }
+
+    await interaction.followUp({ embeds: [embed], flags: 64 });
+
+    // Annonce si bonus légendaire (optionnel)
+    if (bonus.rarity === 'legendary') {
+      await announcements.announceSuperBonus(
+        interaction.client,
+        interaction.guildId,
+        interaction.user.username,
+        bonus.name,
+        bonus.icon,
+        bonus.image_url
+      );
+    }
+
+    // Si activation automatique, appliquer l'effet immédiatement si nécessaire
+    if (isAutomatic) {
+      // Les effets passifs (Chance du Diable, Aimant, Détecteur) sont appliqués automatiquement
+      // via les méthodes existantes dans superBonusHandler (applyProbabilityBonuses, etc.)
+      console.log(`✅ Bonus automatique ${bonus.name} prêt à l'emploi`);
+    }
+  }
+
+  /**
    * Appliquer un piège de type cooldown
    */
   async applyTrapCooldown(interaction, trap, player) {
@@ -737,55 +1204,6 @@ class MysteryBoxHandler {
       interaction.user.username,
       trap.name
     );
-  }
-
-  /**
-   * Révéler un super bonus
-   */
-  async revealSuperBonus(interaction, bonusId, player) {
-    const [bonus, branding] = await Promise.all([
-      db.queryOne('SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2', [bonusId, interaction.guildId]),
-      db.getGuildBranding(interaction.guildId)
-    ]);
-
-    if (!bonus) {
-      return interaction.followUp({
-        content: '❌ Super bonus introuvable.',
-        flags: 64
-      });
-    }
-
-    // Ajouter le bonus au joueur (via mystery_box)
-    await db.addBonusToPlayer(interaction.guildId, interaction.user.id, bonusId, 'mystery_box', null);
-
-    // Créer l'embed de révélation
-    const embed = superBonusHandler.createBonusReceivedEmbed(bonus, `<@${interaction.user.id}>`);
-
-    // Message de révélation
-    await interaction.followUp({ embeds: [embed], flags: 64 });
-
-    // Annonce si le bonus est légendaire
-    if (bonus.rarity === 'legendary') {
-      const announceChannel = interaction.guild.channels.cache.get(process.env.ANNOUNCE_CHANNEL_ID);
-
-      if (announceChannel) {
-        const announceEmbed = new EmbedBuilder()
-          .setTitle('🌟 SUPER BONUS LÉGENDAIRE !')
-          .setDescription(
-            `**${interaction.user.username}** vient de recevoir le super bonus légendaire **${bonus.name}** ${bonus.icon} !\n\n` +
-            `${bonus.description}`
-          )
-          .setColor(bonus.color || branding.secondary_color)
-          .setThumbnail(interaction.user.displayAvatarURL())
-          .setImage(bonus.image_url)
-          .setFooter(await getLoomixFooter(interaction.guildId))
-          .setTimestamp();
-
-        await announceChannel.send({ embeds: [announceEmbed] });
-      }
-    }
-
-    console.log(`✅ Super bonus révélé: ${bonus.name} (ID: ${bonusId}) pour ${interaction.user.username}`);
   }
 
   /**

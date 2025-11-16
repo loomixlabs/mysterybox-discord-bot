@@ -1759,6 +1759,208 @@ class DatabaseWrapper {
 
     return this.query('SELECT * FROM colors ORDER BY category, name');
   }
+
+  // ==================== SUPER BONUS INSTALLATION ====================
+
+  /**
+   * Installer les 11 super bonus fixes pour une guild
+   * Utilisé lors de l'invitation du bot sur un nouveau serveur
+   * ⚠️ Utilise ON CONFLICT DO NOTHING pour éviter les doublons
+   */
+  async installSuperBonusesForGuild(guildId) {
+    guildId = this._getGuildId(guildId);
+
+    console.log(`🎁 Installation des super bonus pour guild ${guildId}...`);
+
+    // Définition des 11 super bonus fixes
+    const bonuses = [
+      {
+        bonus_id: 'chance_devil',
+        name: 'Chance du Diable',
+        description: '+20% de chance sur toutes les mystery boxes pendant 7 jours !',
+        icon: '🎰',
+        bonus_type: 'boost',
+        effect_type: 'probability',
+        effect_config: { boost_percentage: 20, applies_to: 'all' },
+        duration_type: 'temporary',
+        duration_value: 604800, // 7 jours
+        color: '#e74c3c',
+        rarity: 'epic'
+      },
+      {
+        bonus_id: 'divine_vision',
+        name: 'Vision Divine',
+        description: 'Révèle le contenu d\'une mystery box AVANT de cliquer (1 utilisation)',
+        icon: '👁️',
+        bonus_type: 'boost',
+        effect_type: 'reveal',
+        effect_config: { reveal_count: 1, can_skip: true },
+        duration_type: 'charges',
+        duration_value: 1,
+        color: '#f1c40f',
+        rarity: 'legendary'
+      },
+      {
+        bonus_id: 'legendary_magnet',
+        name: 'Aimant à Légendaires',
+        description: 'Si un collectible tombe, +50% de chance qu\'il soit légendaire (3 jours)',
+        icon: '🧲',
+        bonus_type: 'boost',
+        effect_type: 'rarity_boost',
+        effect_config: { boost_percentage: 50, target_rarity: 'legendary' },
+        duration_type: 'temporary',
+        duration_value: 259200, // 3 jours
+        color: '#9b59b6',
+        rarity: 'legendary'
+      },
+      {
+        bonus_id: 'celebrity_aura',
+        name: 'Aura de Célébrité',
+        description: 'Nom en GOLD et réaction ⭐ automatique sur tous tes messages (48h)',
+        icon: '👑',
+        bonus_type: 'social',
+        effect_type: 'cosmetic',
+        effect_config: { name_color: 'gold', auto_reaction: '⭐' },
+        duration_type: 'temporary',
+        duration_value: 172800, // 48h
+        color: '#f39c12',
+        rarity: 'rare'
+      },
+      {
+        bonus_id: 'trap_shield',
+        name: 'Bouclier Anti-Piège',
+        description: 'Annule automatiquement le prochain piège que tu tombes dessus',
+        icon: '🛡️',
+        bonus_type: 'protection',
+        effect_type: 'protection',
+        effect_config: { blocks_traps: 1, auto_consume: true },
+        duration_type: 'charges',
+        duration_value: 1,
+        color: '#3498db',
+        rarity: 'epic'
+      },
+      {
+        bonus_id: 'collector_insurance',
+        name: 'Assurance Collector',
+        description: 'Si tu perds un collectible (piège), récupération automatique GRATUITE (1 utilisation)',
+        icon: '💎',
+        bonus_type: 'protection',
+        effect_type: 'protection',
+        effect_config: { protects_from: 'lose_collectible', auto_recover: true },
+        duration_type: 'permanent',
+        duration_value: null,
+        color: '#1abc9c',
+        rarity: 'legendary'
+      },
+      {
+        bonus_id: 'cooldown_accelerator',
+        name: 'Accélérateur de Cooldown',
+        description: 'Enlève TOUS tes cooldowns actifs immédiatement',
+        icon: '⚡',
+        bonus_type: 'time',
+        effect_type: 'cooldown',
+        effect_config: { removes_all_cooldowns: true, instant: true },
+        duration_type: 'charges',
+        duration_value: 1,
+        color: '#e67e22',
+        rarity: 'rare'
+      },
+      {
+        bonus_id: 'jackpot_x2',
+        name: 'Jackpot x2',
+        description: 'Les 5 prochaines mystery boxes donnent DOUBLE récompense si collectible !',
+        icon: '💵',
+        bonus_type: 'economy',
+        effect_type: 'multiplier',
+        effect_config: { multiplier: 2, applies_to: 'collectible' },
+        duration_type: 'charges',
+        duration_value: 5,
+        color: '#27ae60',
+        rarity: 'epic'
+      },
+      {
+        bonus_id: 'trap_detector',
+        name: 'Détecteur de Pièges',
+        description: 'Les mystery boxes pièges sont marquées 💀 (visible que pour toi) pendant 48h',
+        icon: '🔍',
+        bonus_type: 'economy',
+        effect_type: 'detector',
+        effect_config: { detects: 'trap', marker: '💀', visible_only_to_user: true },
+        duration_type: 'temporary',
+        duration_value: 172800, // 48h
+        color: '#95a5a6',
+        rarity: 'rare'
+      },
+      {
+        bonus_id: 'back_to_future',
+        name: 'Retour dans le Futur',
+        description: 'Relance UNE mystery box déjà ouverte (garde le meilleur résultat des 2)',
+        icon: '⏪',
+        bonus_type: 'time',
+        effect_type: 'reroll',
+        effect_config: { reroll_count: 1, keeps_best: true, time_limit_minutes: 10 },
+        duration_type: 'charges',
+        duration_value: 1,
+        color: '#34495e',
+        rarity: 'legendary'
+      },
+      {
+        bonus_id: 'godparent',
+        name: 'Parrain/Marraine',
+        description: 'Offre UNE mystery box à quelqu\'un. S\'il trouve un collectible, tu gagnes 2x points ! (5 jours)',
+        icon: '🤝',
+        bonus_type: 'social',
+        effect_type: 'transfer',
+        effect_config: { can_gift_boxes: 1, bonus_if_collectible: 2, affects_both: true },
+        duration_type: 'temporary',
+        duration_value: 432000, // 5 jours
+        color: '#16a085',
+        rarity: 'epic'
+      }
+    ];
+
+    let installed = 0;
+    let skipped = 0;
+
+    for (const bonus of bonuses) {
+      try {
+        const result = await this.query(`
+          INSERT INTO super_bonuses (
+            guild_id, bonus_id, name, description, icon, bonus_type,
+            effect_type, effect_config, duration_type, duration_value, color, rarity
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (guild_id, bonus_id) DO NOTHING
+          RETURNING id
+        `, [
+          guildId,
+          bonus.bonus_id,
+          bonus.name,
+          bonus.description,
+          bonus.icon,
+          bonus.bonus_type,
+          bonus.effect_type,
+          JSON.stringify(bonus.effect_config),
+          bonus.duration_type,
+          bonus.duration_value,
+          bonus.color,
+          bonus.rarity
+        ]);
+
+        if (result && result.length > 0) {
+          installed++;
+          console.log(`   ✅ ${bonus.icon} ${bonus.name} installé (ID: ${result[0].id})`);
+        } else {
+          skipped++;
+          console.log(`   ⏭️  ${bonus.icon} ${bonus.name} déjà existant`);
+        }
+      } catch (error) {
+        console.error(`   ❌ Erreur installation ${bonus.name}:`, error.message);
+      }
+    }
+
+    console.log(`🎁 Installation terminée: ${installed} installés, ${skipped} déjà existants (total: ${bonuses.length})`);
+    return { installed, skipped, total: bonuses.length };
+  }
 }
 
 // Export singleton

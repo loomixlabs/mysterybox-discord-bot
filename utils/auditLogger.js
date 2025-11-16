@@ -279,6 +279,85 @@ async function logAnnouncementToggleChanged(guildId, adminId, toggleName, enable
   });
 }
 
+// SUPER BONUS
+/**
+ * Super Bonus - Attribution
+ * @param {string} guildId - ID du serveur
+ * @param {string} userId - Discord ID du joueur qui reçoit le bonus
+ * @param {string} bonusName - Nom du super bonus
+ * @param {object} details - Détails supplémentaires
+ */
+async function logBonusGranted(guildId, userId, bonusName, details = {}) {
+  return logAdminAction(guildId, 'system', 'bonus_granted', {
+    user_id: userId,
+    bonus_name: bonusName,
+    obtained_from: details.obtained_from || 'unknown',
+    mystery_box_id: details.mystery_box_id || null,
+    bonus_id: details.bonus_id || null,
+    rarity: details.rarity || null,
+    duration_type: details.duration_type || null,
+    duration_value: details.duration_value || null,
+    ...details
+  });
+}
+
+/**
+ * Super Bonus - Utilisation
+ * @param {string} guildId - ID du serveur
+ * @param {string} userId - Discord ID du joueur qui utilise le bonus
+ * @param {string} bonusName - Nom du super bonus
+ * @param {object} details - Détails de l'utilisation
+ */
+async function logBonusUsed(guildId, userId, bonusName, details = {}) {
+  return logAdminAction(guildId, userId, 'bonus_used', {
+    bonus_name: bonusName,
+    bonus_id: details.bonus_id || null,
+    action: details.action || 'activated',
+    result: details.result || null,
+    remaining_charges: details.remaining_charges || null,
+    effect_applied: details.effect_applied || null,
+    ...details
+  });
+}
+
+/**
+ * Super Bonus - Expiration
+ * @param {string} guildId - ID du serveur
+ * @param {string} userId - Discord ID du joueur dont le bonus expire
+ * @param {string} bonusName - Nom du super bonus
+ * @param {object} details - Détails de l'expiration
+ */
+async function logBonusExpired(guildId, userId, bonusName, details = {}) {
+  return logAdminAction(guildId, 'system', 'bonus_expired', {
+    user_id: userId,
+    bonus_name: bonusName,
+    bonus_id: details.bonus_id || null,
+    reason: details.reason || 'time_expired',
+    total_uses: details.total_uses || 0,
+    expires_at: details.expires_at || null,
+    ...details
+  });
+}
+
+/**
+ * Super Bonus - Effet appliqué
+ * @param {string} guildId - ID du serveur
+ * @param {string} userId - Discord ID du joueur affecté
+ * @param {string} bonusName - Nom du super bonus
+ * @param {object} details - Détails de l'effet
+ */
+async function logBonusEffectApplied(guildId, userId, bonusName, details = {}) {
+  return logAdminAction(guildId, userId, 'bonus_effect_applied', {
+    bonus_name: bonusName,
+    bonus_id: details.bonus_id || null,
+    effect_type: details.effect_type || null,
+    effect: details.effect || null,
+    impact: details.impact || null,
+    target: details.target || null,
+    ...details
+  });
+}
+
 module.exports = {
   logAdminAction,
 
@@ -329,5 +408,11 @@ module.exports = {
 
   // Annonces
   logAnnouncementTemplateUpdated,
-  logAnnouncementToggleChanged
+  logAnnouncementToggleChanged,
+
+  // Super Bonus
+  logBonusGranted,
+  logBonusUsed,
+  logBonusExpired,
+  logBonusEffectApplied
 };

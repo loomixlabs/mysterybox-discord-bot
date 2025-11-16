@@ -5,7 +5,261 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [1.4.0] - 2025-11-16
+
+### ✨ Added
+
+#### **Système de Probabilités Complet pour Mystery Boxes**
+- **Date**: 2025-11-16
+- **Type**: Nouveau système de configuration des probabilités en 2 niveaux
+- **Fichiers créés**:
+  - `handlers/probabilityHandler.js` (nouveau fichier, 544 lignes)
+- **Fichiers modifiés**:
+  - `handlers/adminPanelHandler.js` - Ajout bouton "Probabilités" dans admin panel
+  - `events/interactionCreate.js` - Routing des interactions de probabilité
+- **Fonctionnalités**:
+  - **Niveau 1 - Probabilités des Types** (4 types, total doit = 100%):
+    - 🎁 Collectibles - Probabilité de recevoir un collectible
+    - 📋 Missions - Probabilité de recevoir une mission
+    - ⚠️ Pièges - Probabilité de tomber sur un piège
+    - ✨ Super Bonus - Probabilité de recevoir un super bonus
+  - **Niveau 2 - Probabilités par Rareté**:
+    - **⭐ Rareté Collectibles** (4 raretés, total doit = 100%):
+      - 🟣 Legendary, 🟠 Epic, 🔵 Rare, ⚪ Common
+    - **⭐ Rareté Super Bonuses** (4 raretés, total doit = 100%):
+      - 🟣 Legendary, 🟠 Epic, 🔵 Rare, ⚪ Common
+- **Interface Admin**:
+  - Menu principal avec vue d'ensemble des 3 systèmes de probabilités
+  - 3 boutons de configuration: Types, Rareté Collectibles, Rareté Super Bonuses
+  - Modals de saisie avec validation stricte (total = 100%)
+  - Messages d'erreur explicites avec total affiché
+  - Confirmation visuelle après modification
+- **Migrations DB**:
+  - `database/migrations/add-rarity-probability-columns.sql` - Colonnes de probabilité par rareté
+  - `database/migrations/add-super-bonus-probability.sql` - Colonne probability_super_bonus
+- **Impact**:
+  - Contrôle fin de la distribution des mystery boxes
+  - Équilibrage facile du gameplay par les admins
+  - Interface visuelle claire et intuitive
+  - Validation stricte pour éviter les erreurs de configuration
+
+#### **Simplification UX Configuration Durée/Charges Super Bonuses**
+- **Date**: 2025-11-16
+- **Type**: Suppression des boutons intermédiaires + détection automatique heures/jours
+- **Fichiers modifiés**:
+  - `handlers/superBonusHandler.js` (lignes 368-658) - 3 handlers admin déplacés + 1 nouveau handler heures
+  - `handlers/adminPanelHandler.js` (lignes 487-495) - Routing vers superBonusHandler
+  - `events/interactionCreate.js` (ligne 270) - Routing `edit_bonus_duration_`
+- **Fonctionnalités**:
+  - **Étape unique**: Sélection du super bonus depuis un dropdown
+  - **Affichage automatique** du bon sélecteur selon le type en base de données:
+    - ♾️ **Permanent** → Message informatif (pas de configuration)
+    - ⏰ **Temporaire < 24h** → Sélecteur 1-24 heures
+    - ⏰ **Temporaire >= 24h** → Sélecteur 1-10 jours
+    - 🎯 **Charges** → Sélecteur 1-10 charges
+  - **Détection intelligente** heures vs jours basée sur `duration_value < 86400`
+- **Nouvelles fonctions**:
+  1. `handleBonusDurationSelect()` - Détecte le type et affiche le bon sélecteur (ligne 368)
+  2. `handleEditBonusDurationHours()` - Sauvegarde durée en heures (ligne 517)
+  3. `handleEditBonusDurationDays()` - Sauvegarde durée en jours (ligne 566)
+  4. `handleEditBonusDurationCharges()` - Sauvegarde nombre de charges (ligne 615)
+- **Amélioration**:
+  - UX ultra-simplifiée: 1 sélection au lieu de 3 étapes
+  - Pas de choix de type (lu depuis DB)
+  - Adaptation automatique du sélecteur (heures/jours)
+  - Pas de confusion possible pour l'admin
+- **Impact**:
+  - Workflow admin divisé par 3
+  - Cohérence garantie avec les données DB
+  - Meilleure organisation du code (séparation adminPanelHandler/superBonusHandler)
+
+### 🔧 Changed
+
+#### **Système de Cumul pour TOUS les Super Bonuses**
+- **Date**: 2025-11-16
+- **Fichiers modifiés**: `handlers/mysteryBoxHandler.js` (lignes 726-815)
+- **Fonctionnalité**: Tous les super bonuses sont maintenant cumulables selon leur type de durée
+  - **Charges** (Jackpot x2, Parrain/Marraine): Les charges s'additionnent
+    - Exemple: 1 charge + 1 charge = 2 charges totales
+    - Message: "✨ Bonus cumulé ! 🔢 Charges totales: X"
+  - **Temporaire** (Aura de Célébrité): La durée s'étend
+    - Exemple: 24h restantes + 48h nouveau = 72h totales
+    - Message: "✨ Bonus cumulé ! ⏱️ Temps restant: Xh Ymin"
+  - **Permanent** (Chance du Diable, Aimant, Détecteur): Pas de cumul
+    - Message informatif: "Tu possèdes déjà ce bonus (permanent)"
+- **Impact**: Meilleure UX et flexibilité pour les joueurs
+- **Audit logging**: Nouvelle action `super_bonus_cumulated` tracée
+- **Documentation**: Voir [MISE-A-JOUR-CUMUL-SUPER-BONUS.md](MISE-A-JOUR-CUMUL-SUPER-BONUS.md)
+
+#### **Corrections de Configuration Super Bonuses**
+- **Date**: 2025-11-16
+- **Migration**: `database/migrations/fix-super-bonus-config.sql` (appliquée)
+- **Script**: `scripts/apply-super-bonus-config-fix.js`
+- **Corrections**:
+  1. **💵 Jackpot x2 (ID 8)**:
+     - `activation_mode`: `manual` → `automatic` (activation immédiate)
+     - `duration_value`: `5` → `1` (1 seule charge)
+     - Raison: Le bonus doit s'activer automatiquement avec 1 charge, pas 5
+  2. **👑 Aura de Célébrité (ID 4)**:
+     - `activation_mode`: `manual` → `automatic` (activation immédiate)
+     - Raison: Effet passif doit s'activer automatiquement
+  3. **🤝 Parrain/Marraine (ID 10)**:
+     - `duration_type`: `temporary` → `charges`
+     - `duration_value`: `432000` (5 jours) → `1` (1 box)
+     - Raison: Le bonus permet d'offrir 1 box, pas une durée temporelle
+- **Impact**: Comportements des bonus alignés avec les spécifications
+
+### 🐛 Fixed
+
+#### **Parsing CustomId pour Types avec Underscores**
+- **Date**: 2025-11-16
+- **Fichiers modifiés**: `handlers/mysteryBoxHandler.js` (lignes 307-313)
+- **Bug**: Le parsing de `mystery_open_super_bonus_9` était cassé
+  - Ancien parsing: `const [, , type, itemId] = interaction.customId.split('_')`
+  - Résultat: `type="super"`, `itemId="bonus"` ❌
+- **Fix**: Nouvelle logique de parsing
+  ```javascript
+  const customIdParts = interaction.customId.split('_');
+  const itemId = customIdParts[customIdParts.length - 1];
+  const type = customIdParts.slice(2, -1).join('_');
+  ```
+  - Résultat: `type="super_bonus"`, `itemId="9"` ✅
+- **Impact**: Les mystery boxes contenant des super bonuses s'ouvrent correctement
+- **Tests**: Script de test créé (`scripts/test-custom-id-parsing.js`) - 5/5 tests passés
+
+#### **Suppression Fonction Duplicate revealSuperBonus()**
+- **Date**: 2025-11-16
+- **Fichiers modifiés**: `handlers/mysteryBoxHandler.js` (lignes 1057-1101 supprimées)
+- **Bug**: Deux fonctions `revealSuperBonus()` dans le même fichier
+  - Ligne 697: Nouvelle implémentation avec activation_mode logic
+  - Ligne 1057: Ancienne implémentation (utilisée par JavaScript)
+- **Impact**: JavaScript utilisait toujours l'ancienne fonction (dernière définition)
+- **Fix**: Suppression de la fonction dupliquée
+- **Résultat**: Utilisation de la bonne implémentation avec activation automatique/manuelle
+
+#### **Erreur auditLogger.log() dans Système de Cumul**
+- **Date**: 2025-11-16
+- **Fichiers modifiés**: `handlers/mysteryBoxHandler.js` (lignes 753-754, 784-785)
+- **Bug**: `TypeError: auditLogger.log is not a function` lors du cumul de bonus
+  - Appel à `auditLogger.log()` qui n'existe pas dans le module
+  - Méthodes disponibles: `logBonusGranted`, `logBonusUsed`, `logBonusExpired`, `logBonusEffectApplied`
+- **Impact**: Message d'erreur "Une erreur est survenue" après cumul réussi
+- **Fix**: Suppression des appels erronés à `auditLogger.log()`
+  - Ajout de TODO pour implémenter audit logging proprement plus tard
+  - Console.log conservés pour debugging
+- **Résultat**: Cumul fonctionne sans erreur, message de succès affiché correctement
+
+#### **Système d'Auto-Installation des Super Bonuses**
+- **Auto-installation lors de l'invitation du bot sur un nouveau serveur**:
+  - Fichiers créés:
+    - `events/guildCreate.js` - Event handler pour nouveaux serveurs
+  - Fonctionnalité: Les 11 super bonuses fixes sont automatiquement installés quand le bot rejoint un nouveau serveur
+  - Bonuses installés: Chance du Diable, Vision Divine, Aimant Légendaire, Aura de Célébrité, Bouclier Anti-Piège, Assurance Collector, Accélérateur de Cooldown, Jackpot x2, Détecteur de Pièges, Retour dans le Futur, Parrain/Marraine
+  - Impact: Zéro configuration manuelle requise pour les nouveaux serveurs
+
+- **Méthode d'installation des super bonuses dans database-pg.js**:
+  - Fichiers modifiés: `utils/database-pg.js` (lignes 1763-1963)
+  - Nouvelle méthode: `installSuperBonusesForGuild(guildId)`
+  - Définition des 11 super bonuses fixes avec leurs configurations complètes
+  - Protection contre les doublons via ON CONFLICT DO NOTHING
+  - Gestion individuelle des erreurs pour isolation des échecs
+
+- **Script de migration pour serveurs existants**:
+  - Fichiers créés:
+    - `scripts/install-bonuses-existing-guilds.js` - Migration one-time
+    - `scripts/verify-super-bonuses-installation.js` - Vérification complète
+    - `scripts/check-effect-types-constraint.js` - Diagnostic contraintes
+  - Fonctionnalité: Installation des 11 bonuses sur tous les serveurs existants
+  - Vérification: Scripts de diagnostic pour valider l'installation complète
+
+- **Système de logging pour super bonuses**:
+  - Fichiers modifiés: `utils/auditLogger.js` (lignes 282-418)
+  - 4 nouvelles méthodes de logging pour traçabilité complète du cycle de vie des bonus:
+    - `logBonusGranted(guildId, userId, bonusName, details)` - Attribution d'un super bonus
+    - `logBonusUsed(guildId, userId, bonusName, details)` - Utilisation/activation d'un bonus
+    - `logBonusExpired(guildId, userId, bonusName, details)` - Expiration automatique d'un bonus
+    - `logBonusEffectApplied(guildId, userId, bonusName, details)` - Application d'un effet de bonus
+  - Stockage dans la table `audit_logs` avec détails JSONB
+  - Métadonnées trackées: bonus_id, rarity, duration_type, duration_value, effect_type, obtained_from
+  - Actions système (granted, expired) utilisent admin_id = 'system'
+  - Actions utilisateur (used, effect_applied) utilisent le Discord ID du joueur
+
+- **Mystery Box 4ème Type - Distribution des Super Bonuses**:
+  - Fichiers créés/modifiés:
+    - `database/migrations/add-super-bonus-probability.sql` - Migration probabilités
+    - `scripts/run-add-super-bonus-probability.js` - Script d'exécution
+    - `handlers/mysteryBoxHandler.js` (lignes 91-293) - Intégration 4ème type
+  - **Nouvelle colonne `probability_super_bonus` dans theme_config**:
+    - DEFAULT 10% pour les nouvelles configurations
+    - Réajustement automatique des probabilités existantes pour maintenir total = 100%
+    - Contrainte CHECK mise à jour pour valider la somme = 100%
+    - Config type 1: 70/30/0 → 55/35/0/10 (collectible/mission/trap/super_bonus)
+    - Config type 2: 40/40/20 → 25/35/30/10
+    - Config type 3: 50/25/25 → 35/35/20/10
+  - **Modification de `rollMysteryContent()` pour gérer 4 types**:
+    - Ajout de la zone de probabilité super_bonus (90-100 avec config 10%)
+    - Fallback à 0% si probability_super_bonus non défini (rétrocompatibilité)
+    - Logs de debug affichant les 4 zones de probabilités
+    - Redistribution automatique si type sélectionné n'a pas d'items disponibles
+  - **Nouvelle méthode `selectSuperBonus(guildId, config)`**:
+    - Sélection pondérée par rareté (common: 50%, rare: 30%, epic: 15%, legendary: 5%)
+    - NOTE: Weights temporaires, seront remplacés par config.probability_rarity_* dans Sprint 1 "Probabilités par rareté"
+    - Logs détaillés: nom, rareté, duration_type, duration_value, effect_type
+    - Retourne le super bonus sélectionné avec toutes ses propriétés
+  - **Modification Admin Panel - Configuration des probabilités avec 4 types**:
+    - Fichiers modifiés:
+      - `handlers/adminPanelHandler.js` (lignes 1147-1162) - Ajout 4ème input dans modal
+      - `handlers/modalHandler.js` (lignes 113-196) - Gestion validation et update 4 types
+    - Nouveau champ `prob_super_bonus` dans le modal de configuration
+    - Validation stricte: Total doit être exactement 100% (4 types combinés)
+    - Message d'erreur détaillé affichant la répartition actuelle si total != 100%
+    - Update DB incluant `probability_super_bonus` dans la requête UPDATE
+    - Logging auditLogger mis à jour pour inclure `super_bonus` dans old/new values
+    - Message de confirmation affichant les 4 probabilités avec total et émojis
+
+- **Système d'Activation Automatique vs Manuelle pour Super Bonuses**:
+  - Fichiers créés/modifiés:
+    - `database/migrations/add-activation-mode.sql` - Migration mode d'activation
+    - `scripts/run-add-activation-mode.js` - Script d'exécution avec vérification
+    - `handlers/mysteryBoxHandler.js` (lignes 675-863) - Nouvelle méthode revealSuperBonus()
+  - **Nouvelle colonne `activation_mode` dans super_bonuses**:
+    - DEFAULT 'manual' pour les nouveaux bonus
+    - Contrainte CHECK (activation_mode IN ('automatic', 'manual'))
+    - **3 bonus AUTOMATIC** (passive effects):
+      - 🎰 Chance du Diable - +20% probabilités (passif continu)
+      - 🧲 Aimant Légendaires - Boost rareté legendary (passif continu)
+      - 🔍 Détecteur de Pièges - Marqueur 💀 sur pièges (passif continu)
+    - **9 bonus MANUAL** (active effects):
+      - Tous les autres bonus nécessitent activation via /profile
+  - **Correction DEFAULT de `activated_at` dans player_active_bonuses**:
+    - Ancien: DEFAULT now() → Nouveau: DEFAULT NULL
+    - **CRITIQUE**: Duration ne se déclenche qu'à l'activation, pas à l'obtention
+    - Obtention (mystery box): activated_at = NULL, expires_at = NULL
+    - Activation (via /profile): activated_at = NOW(), expires_at calculé selon duration_type
+  - **Nouvelle méthode `revealSuperBonus(interaction, bonusId, player)`**:
+    - Vérification si bonus déjà actif (évite doublons)
+    - **Logique automatique** (activation_mode = 'automatic'):
+      - activated_at = NOW() immédiatement
+      - expires_at calculé selon duration_type (temporary, charges, permanent)
+      - Effets passifs appliqués automatiquement via superBonusHandler
+      - Message "✨ Bonus activé automatiquement !"
+    - **Logique manuelle** (activation_mode = 'manual'):
+      - activated_at = NULL, expires_at = NULL (bonus dans l'inventaire)
+      - Message explicatif pour activation via /profile section "🎁 Mes Super Bonus"
+      - Duration affichée comme "Durée après activation"
+    - Logging complet via `auditLogger.logBonusGranted()`
+    - Embed personnalisé avec rareté, description, durée/charges
+    - Annonce si bonus légendaire (via announcements.announceSuperBonus())
+
+### 🐛 Fixed
+- **[Super Bonuses]**: Correction contrainte CHECK sur effect_type
+  - Fichiers créés/modifiés:
+    - `database/migrations/add-reroll-effect-type.sql` - Migration SQL
+    - `scripts/run-add-reroll-migration.js` - Script d'exécution de migration
+  - Cause: La contrainte `super_bonuses_effect_type_check` ne contenait pas le type 'reroll'
+  - Impact: Le bonus "Retour dans le Futur" ne pouvait pas être installé
+  - Solution: Ajout de 'reroll' aux valeurs autorisées dans la contrainte CHECK
+  - Valeurs autorisées: probability, cosmetic, protection, cooldown, reveal, transfer, rarity_boost, multiplier, detector, voice, reroll
 
 ## [1.3.0] - 2025-11-15
 

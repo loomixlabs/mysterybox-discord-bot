@@ -5,6 +5,8 @@ const themeExpirationHandler = require('./themeExpirationHandler');
 const campaignAdminHandler = require('./campaignAdminHandler');
 const giveUniqueHandler = require('./giveUniqueHandler');
 const trapAdminHandler = require('./trapAdminHandler');
+const probabilityHandler = require('./probabilityHandler');
+const superBonusHandler = require('./superBonusHandler');
 const { canAccessAdminPanel } = require('../utils/permissions');
 
 /**
@@ -77,10 +79,16 @@ class AdminPanelHandler {
       await this.showMissionsMenu(interaction);
     } else if (customId === 'admin_super_bonuses') {
       await this.showSuperBonusesMenu(interaction);
-    } else if (customId === 'admin_bonus_give') {
-      await this.showGiveBonusSelectUser(interaction);
-    } else if (customId === 'admin_bonus_view_active') {
-      await this.showActiveBonusesView(interaction);
+    } else if (customId === 'admin_bonus_edit_rarity') {
+      await this.showEditBonusRarityMenu(interaction);
+    } else if (customId === 'admin_bonus_edit_duration') {
+      await this.showEditBonusDurationMenu(interaction);
+    } else if (customId.startsWith('duration_type_permanent:')) {
+      await this.handleDurationTypePermanent(interaction);
+    } else if (customId.startsWith('duration_type_temporary:')) {
+      await this.handleDurationTypeTemporary(interaction);
+    } else if (customId.startsWith('duration_type_charges:')) {
+      await this.handleDurationTypeCharges(interaction);
     } else if (customId === 'admin_channels') {
       await this.showChannelsMenu(interaction);
     } else if (customId === 'admin_announcements') {
@@ -93,6 +101,11 @@ class AdminPanelHandler {
       await this.showAnnouncementsThemesMenu(interaction);
     } else if (customId === 'announcements_traps') {
       await this.showAnnouncementsTrapsMenu(interaction);
+    }
+
+    // Gestion des probabilités (délégation vers probabilityHandler)
+    else if (customId === 'admin_probabilities' || customId.startsWith('probability_')) {
+      return probabilityHandler.handleInteraction(interaction);
     }
 
     // Gestion des campagnes (délégation vers campaignAdminHandler)
@@ -126,9 +139,7 @@ class AdminPanelHandler {
     }
 
     // Configuration du thème
-    else if (customId === 'theme_probabilities') {
-      await this.showProbabilitiesModal(interaction);
-    } else if (customId === 'theme_image') {
+    if (customId === 'theme_image') {
       await this.handleImageUpload(interaction, 'Mystery Box - Image');
     } else if (customId === 'theme_title') {
       await this.showTitleModal(interaction);
@@ -442,7 +453,7 @@ class AdminPanelHandler {
     }
 
     // Retour au menu principal
-    else if (customId === 'admin_back') {
+    else if (customId === 'admin_back' || customId === 'admin_panel_home') {
       await this.handleRefresh(interaction);
     }
   }
@@ -469,6 +480,20 @@ class AdminPanelHandler {
       return trapAdminHandler.handleInteraction(interaction);
     }
 
+    // Super Bonus - Déléguer à superBonusHandler (qui fera son propre defer)
+    if (customId === 'select_duration_for_bonus') {
+      return superBonusHandler.handleBonusDurationSelect(interaction);
+    }
+    if (customId.startsWith('edit_bonus_duration_hours:')) {
+      return superBonusHandler.handleEditBonusDurationHours(interaction);
+    }
+    if (customId.startsWith('edit_bonus_duration_days:')) {
+      return superBonusHandler.handleEditBonusDurationDays(interaction);
+    }
+    if (customId.startsWith('edit_bonus_duration_charges:')) {
+      return superBonusHandler.handleEditBonusDurationCharges(interaction);
+    }
+
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT (sauf pour les délégations ci-dessus)
     await interaction.deferUpdate();
 
@@ -487,7 +512,23 @@ class AdminPanelHandler {
       await this.handleThemeDeleteConfirmation(interaction);
     } else if (customId === 'select_collectible') {
       await this.handleCollectibleSelection(interaction);
-    } else if (customId === 'select_rarity' || customId.startsWith('select_rarity_')) {
+    }
+    // Sélections pour l'édition de rareté des super bonuses (AVANT select_rarity_ pour éviter conflit)
+    else if (customId === 'select_bonus_for_rarity_edit') {
+      await this.handleBonusRaritySelect(interaction);
+    } else if (customId.startsWith('select_rarity_for_bonus:')) {
+      await this.saveBonusRarity(interaction);
+    }
+    // Ancien système (rétrocompatibilité - à supprimer plus tard)
+    else if (customId.startsWith('select_duration_days:')) {
+      await this.handleSelectDurationDays(interaction);
+    } else if (customId.startsWith('select_duration_hours:')) {
+      await this.handleSelectDurationHours(interaction);
+    } else if (customId.startsWith('select_duration_charges:')) {
+      await this.handleSelectDurationCharges(interaction);
+    }
+    // Sélections pour les collectibles (rareté)
+    else if (customId === 'select_rarity' || customId.startsWith('select_rarity_')) {
       await this.handleRaritySelection(interaction);
     } else if (customId === 'select_manage_collectible') {
       await this.handleManageCollectibleSelection(interaction);
@@ -599,7 +640,8 @@ class AdminPanelHandler {
         name: '🎲 Probabilités actuelles',
         value: `🎁 Collectibles: **${config.probability_collectible}%**\n` +
                `📋 Missions: **${config.probability_mission}%**\n` +
-               `⚠️ Pièges: **${config.probability_trap}%**`,
+               `⚠️ Pièges: **${config.probability_trap}%**\n` +
+               `✨ Super Bonus: **${config.probability_super_bonus || 0}%**`,
         inline: true
       });
     }
@@ -1046,7 +1088,7 @@ class AdminPanelHandler {
       embed.addFields(
         {
           name: '🎲 Probabilités',
-          value: `Collectibles: ${config.probability_collectible}%\nMissions: ${config.probability_mission}%\nPièges: ${config.probability_trap}%`,
+          value: `Collectibles: ${config.probability_collectible}%\nMissions: ${config.probability_mission}%\nPièges: ${config.probability_trap}%\nSuper Bonus: ${config.probability_super_bonus || 0}%`,
           inline: false
         },
         {
@@ -1058,10 +1100,6 @@ class AdminPanelHandler {
     }
 
     const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('theme_probabilities')
-        .setLabel('🎲 Modifier les probabilités')
-        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('theme_image')
         .setLabel('🖼️ Modifier l\'image')
@@ -1101,56 +1139,6 @@ class AdminPanelHandler {
       embeds: [embed],
       components: [row1, row2, row3, row4]
     });
-  }
-
-  /**
-   * Modal pour modifier les probabilités
-   */
-  async showProbabilitiesModal(interaction) {
-    const theme = await db.getActiveTheme(interaction.guildId);
-    const config = await db.getThemeConfig(interaction.guildId, theme.id);
-
-    const modal = new ModalBuilder()
-      .setCustomId('modal_probabilities')
-      .setTitle('🎲 Modifier les Probabilités');
-
-    const collectibleInput = new TextInputBuilder()
-      .setCustomId('prob_collectible')
-      .setLabel('Probabilité Collectibles (%)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 40')
-      .setValue(config?.probability_collectible?.toString() || '40')
-      .setRequired(true)
-      .setMinLength(1)
-      .setMaxLength(3);
-
-    const missionInput = new TextInputBuilder()
-      .setCustomId('prob_mission')
-      .setLabel('Probabilité Missions (%)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 40')
-      .setValue(config?.probability_mission?.toString() || '40')
-      .setRequired(true)
-      .setMinLength(1)
-      .setMaxLength(3);
-
-    const trapInput = new TextInputBuilder()
-      .setCustomId('prob_trap')
-      .setLabel('Probabilité Pièges (%)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 20')
-      .setValue(config?.probability_trap?.toString() || '20')
-      .setRequired(true)
-      .setMinLength(1)
-      .setMaxLength(3);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(collectibleInput),
-      new ActionRowBuilder().addComponents(missionInput),
-      new ActionRowBuilder().addComponents(trapInput)
-    );
-
-    return interaction.showModal(modal);
   }
 
   /**
@@ -2934,6 +2922,11 @@ class AdminPanelHandler {
       new ButtonBuilder()
         .setCustomId('admin_campaigns_manage')
         .setLabel('📊 Gérer les Campagnes')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!theme), // Désactivé si pas de thème
+      new ButtonBuilder()
+        .setCustomId('admin_probabilities')
+        .setLabel('🎲 Probabilités')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!theme) // Désactivé si pas de thème
     );
@@ -4827,16 +4820,13 @@ class AdminPanelHandler {
 
       const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('admin_bonus_give')
-          .setLabel('🎁 Donner un Bonus')
-          .setStyle(ButtonStyle.Success),
+          .setCustomId('admin_bonus_edit_rarity')
+          .setLabel('✏️ Éditer Raretés')
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId('admin_bonus_view_active')
-          .setLabel('👥 Voir Bonus Actifs')
-          .setStyle(ButtonStyle.Primary)
-      );
-
-      const row2 = new ActionRowBuilder().addComponents(
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('⏱️ Régler Durée/Charges')
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId('admin_back')
           .setLabel('🔙 Retour aux Paramètres')
@@ -4845,7 +4835,7 @@ class AdminPanelHandler {
 
       return interaction.update({
         embeds: [embed],
-        components: [row1, row2]
+        components: [row1]
       });
 
     } catch (error) {
@@ -5060,6 +5050,845 @@ class AdminPanelHandler {
         embeds: [],
         components: []
       });
+    }
+  }
+
+  /**
+   * Afficher le menu d'édition de rareté des bonus
+   */
+  async showEditBonusRarityMenu(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const guildId = interaction.guildId;
+      const allBonuses = await db.getAllSuperBonuses(guildId);
+
+      // Créer le select menu avec tous les bonus
+      const options = allBonuses.map(bonus => {
+        const rarityEmoji = {
+          legendary: '🌟',
+          epic: '💜',
+          rare: '💙',
+          common: '⚪'
+        }[bonus.rarity] || '⚪';
+
+        return {
+          label: `${bonus.name}`,
+          description: `${rarityEmoji} ${bonus.rarity.toUpperCase()}`,
+          value: bonus.id.toString(),
+          emoji: bonus.icon
+        };
+      });
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('select_bonus_for_rarity_edit')
+        .setPlaceholder('Choisis un super bonus à éditer')
+        .addOptions(options);
+
+      const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle('✏️ ÉDITER LA RARETÉ DES SUPER BONUS')
+        .setDescription(
+          'Sélectionne un super bonus pour modifier sa rareté.\n\n' +
+          '**Raretés disponibles:**\n' +
+          '🌟 **Legendary** - Très rare, effets puissants\n' +
+          '💜 **Epic** - Rare, effets significatifs\n' +
+          '💙 **Rare** - Peu commun\n' +
+          '⚪ **Common** - Commun\n\n' +
+          '⚠️ La modification impacte la fréquence d\'apparition dans les mystery boxes.'
+        )
+        .setColor('#FFD700')
+        .setFooter({
+          text: `Total: ${allBonuses.length} super bonus`
+        });
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row1, row2]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur showEditBonusRarityMenu:', error);
+      return interaction.editReply({
+        content: `❌ Erreur lors de l'affichage du menu: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Afficher le sélecteur de rareté pour un bonus
+   */
+  async handleBonusRaritySelect(interaction) {
+    // Note: deferUpdate() est déjà fait dans handleSelectMenu()
+
+    try {
+      const bonusId = parseInt(interaction.values[0]);
+      const bonus = await db.queryOne(
+        'SELECT * FROM super_bonuses WHERE id = $1',
+        [bonusId]
+      );
+
+      if (!bonus) {
+        return interaction.editReply({
+          content: '❌ Super bonus introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      // Select menu pour choisir la rareté
+      const rarityOptions = [
+        {
+          label: 'Legendary',
+          description: 'Très rare - Effets puissants',
+          value: 'legendary',
+          emoji: '🌟',
+          default: bonus.rarity === 'legendary'
+        },
+        {
+          label: 'Epic',
+          description: 'Rare - Effets significatifs',
+          value: 'epic',
+          emoji: '💜',
+          default: bonus.rarity === 'epic'
+        },
+        {
+          label: 'Rare',
+          description: 'Peu commun',
+          value: 'rare',
+          emoji: '💙',
+          default: bonus.rarity === 'rare'
+        },
+        {
+          label: 'Common',
+          description: 'Commun',
+          value: 'common',
+          emoji: '⚪',
+          default: bonus.rarity === 'common'
+        }
+      ];
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId(`select_rarity_for_bonus:${bonusId}`)
+        .setPlaceholder('Choisis la nouvelle rareté')
+        .addOptions(rarityOptions);
+
+      const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_rarity')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const currentRarityEmoji = {
+        legendary: '🌟',
+        epic: '💜',
+        rare: '💙',
+        common: '⚪'
+      }[bonus.rarity] || '⚪';
+
+      const embed = new EmbedBuilder()
+        .setTitle(`✏️ ÉDITER LA RARETÉ - ${bonus.icon} ${bonus.name}`)
+        .setDescription(
+          `**Rareté actuelle:** ${currentRarityEmoji} ${bonus.rarity.toUpperCase()}\n\n` +
+          `Sélectionne la nouvelle rareté pour ce bonus.`
+        )
+        .setColor(bonus.color || '#FFD700')
+        .addFields({
+          name: '📋 Informations',
+          value:
+            `**Type:** ${bonus.effect_type}\n` +
+            `**Durée:** ${bonus.duration_type}${bonus.duration_value ? ` (${bonus.duration_value})` : ''}\n` +
+            `**Activation:** ${bonus.activation_mode === 'automatic' ? 'Automatique' : 'Manuelle'}`
+        });
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row1, row2]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleBonusRaritySelect:', error);
+      return interaction.editReply({
+        content: `❌ Erreur: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Sauvegarder la nouvelle rareté d'un bonus
+   */
+  async saveBonusRarity(interaction) {
+    // Note: deferUpdate() est déjà fait dans handleSelectMenu()
+
+    try {
+      const [, bonusId] = interaction.customId.split(':');
+      const newRarity = interaction.values[0];
+
+      // Récupérer le bonus avant modification
+      const bonus = await db.queryOne(
+        'SELECT * FROM super_bonuses WHERE id = $1',
+        [parseInt(bonusId)]
+      );
+
+      if (!bonus) {
+        return interaction.editReply({
+          content: '❌ Super bonus introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      const oldRarity = bonus.rarity;
+
+      // Mettre à jour la rareté
+      await db.query(
+        'UPDATE super_bonuses SET rarity = $1 WHERE id = $2',
+        [newRarity, parseInt(bonusId)]
+      );
+
+      const rarityEmojis = {
+        legendary: '🌟',
+        epic: '💜',
+        rare: '💙',
+        common: '⚪'
+      };
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ RARETÉ MODIFIÉE')
+        .setDescription(
+          `La rareté du bonus **${bonus.icon} ${bonus.name}** a été modifiée avec succès.`
+        )
+        .setColor('#2ecc71')
+        .addFields({
+          name: '📊 Changement',
+          value: `${rarityEmojis[oldRarity]} ${oldRarity.toUpperCase()} → ${rarityEmojis[newRarity]} ${newRarity.toUpperCase()}`
+        });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_rarity')
+          .setLabel('✏️ Éditer un autre bonus')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour au menu')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      // Log dans audit
+      console.log(`✅ Rareté du super bonus #${bonusId} modifiée: ${oldRarity} → ${newRarity} par ${interaction.user.tag}`);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur saveBonusRarity:', error);
+      return interaction.editReply({
+        content: `❌ Erreur lors de la sauvegarde: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Afficher le menu d'édition de durée des super bonus
+   */
+  async showEditBonusDurationMenu(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const guildId = interaction.guildId;
+      const allBonuses = await db.getAllSuperBonuses(guildId);
+
+      // Créer le select menu avec tous les bonus
+      const options = allBonuses.map(bonus => {
+        let durationText = '';
+        if (bonus.duration_type === 'temporary') {
+          const days = Math.floor(bonus.duration_value / 86400);
+          const hours = Math.floor((bonus.duration_value % 86400) / 3600);
+          durationText = days > 0 ? `${days}j` : `${hours}h`;
+        } else if (bonus.duration_type === 'charges') {
+          durationText = `${bonus.duration_value} charges`;
+        } else {
+          durationText = 'permanent';
+        }
+
+        return {
+          label: `${bonus.name}`,
+          description: `⏱️ ${durationText}`,
+          value: bonus.id.toString(),
+          emoji: bonus.icon
+        };
+      });
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('select_duration_for_bonus')
+        .setPlaceholder('Choisis un super bonus à éditer')
+        .addOptions(options);
+
+      const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle('⏱️ RÉGLER DURÉE/CHARGES DES SUPER BONUS')
+        .setDescription(
+          'Sélectionne un super bonus pour modifier sa durée ou ses charges.\n\n' +
+          '**Types de durée:**\n' +
+          '♾️ **permanent** - Effet permanent\n' +
+          '⏰ **temporary** - Durée limitée en temps\n' +
+          '🎯 **charges** - Nombre d\'utilisations limité\n\n' +
+          '⚠️ La modification impacte tous les nouveaux bonus donnés.'
+        )
+        .setColor('#FFD700')
+        .setFooter({
+          text: `Total: ${allBonuses.length} super bonus`
+        });
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row1, row2]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur showEditBonusDurationMenu:', error);
+      return interaction.editReply({
+        content: `❌ Erreur lors de l'affichage du menu: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Afficher directement le sélecteur de valeur selon le type de durée en DB
+   * Note: Defer ICI car appelé depuis handleSelectMenu AVANT le defer général (ligne 477)
+   */
+  async handleBonusDurationSelect(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const bonusId = parseInt(interaction.values[0]);
+      const bonus = await db.queryOne(
+        'SELECT * FROM super_bonuses WHERE id = $1',
+        [bonusId]
+      );
+
+      if (!bonus) {
+        return interaction.editReply({
+          content: '❌ Super bonus introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      // Afficher directement le sélecteur selon le type
+      if (bonus.duration_type === 'permanent') {
+        // Pour les bonus permanents, juste afficher un message
+        const embed = new EmbedBuilder()
+          .setTitle(`♾️ ${bonus.name}`)
+          .setDescription('Ce bonus est **permanent** - il n\'a pas de durée limitée.')
+          .setColor('#2ecc71');
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('admin_bonus_edit_duration')
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.editReply({ embeds: [embed], components: [row] });
+
+      } else if (bonus.duration_type === 'temporary') {
+        // Afficher sélecteur de jours (1-10)
+        const currentDays = Math.floor(bonus.duration_value / 86400);
+        const dayOptions = Array.from({ length: 10 }, (_, i) => ({
+          label: `${i + 1} jour${i > 0 ? 's' : ''}`,
+          value: (i + 1).toString(),
+          emoji: '📅'
+        }));
+
+        const selectDays = new StringSelectMenuBuilder()
+          .setCustomId(`edit_bonus_duration_days:${bonusId}`)
+          .setPlaceholder('Sélectionne la durée en jours')
+          .addOptions(dayOptions);
+
+        const row1 = new ActionRowBuilder().addComponents(selectDays);
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('admin_bonus_edit_duration')
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`⏰ ${bonus.name}`)
+          .setDescription(
+            `**Configuration actuelle:** ${currentDays} jour${currentDays > 1 ? 's' : ''}\n\n` +
+            '**Choisis la nouvelle durée** (1-10 jours):'
+          )
+          .setColor('#00D9FF');
+
+        return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+
+      } else if (bonus.duration_type === 'charges') {
+        // Afficher sélecteur de charges (1-10)
+        const chargeOptions = Array.from({ length: 10 }, (_, i) => ({
+          label: `${i + 1} charge${i > 0 ? 's' : ''}`,
+          value: (i + 1).toString(),
+          emoji: '🎯'
+        }));
+
+        const selectCharges = new StringSelectMenuBuilder()
+          .setCustomId(`edit_bonus_duration_charges:${bonusId}`)
+          .setPlaceholder('Sélectionne le nombre de charges')
+          .addOptions(chargeOptions);
+
+        const row1 = new ActionRowBuilder().addComponents(selectCharges);
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('admin_bonus_edit_duration')
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🎯 ${bonus.name}`)
+          .setDescription(
+            `**Configuration actuelle:** ${bonus.duration_value} charge${bonus.duration_value > 1 ? 's' : ''}\n\n` +
+            '**Choisis le nouveau nombre de charges** (1-10):'
+          )
+          .setColor('#00D9FF');
+
+        return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+      }
+
+    } catch (error) {
+      console.error('❌ Erreur handleBonusDurationSelect:', error);
+      return interaction.editReply({
+        content: `❌ Erreur: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Sauvegarder la durée en jours (temporary)
+   */
+  async handleEditBonusDurationDays(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const [, bonusId] = interaction.customId.split(':');
+      const days = parseInt(interaction.values[0]);
+      const totalSeconds = days * 86400;
+
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Sauvegarder
+      await db.query(
+        'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
+        [totalSeconds, parseInt(bonusId)]
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ DURÉE MODIFIÉE')
+        .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** expirera après **${days} jour${days > 1 ? 's' : ''}**.`)
+        .setColor('#2ecc71')
+        .addFields({ name: '⏰ Durée', value: `${days} jour${days > 1 ? 's' : ''}` });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('⏱️ Éditer un autre')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      console.log(`✅ Super bonus #${bonusId} → Durée ${days}j par ${interaction.user.tag}`);
+      return interaction.editReply({ embeds: [embed], components: [row] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleEditBonusDurationDays:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Sauvegarder le nombre de charges
+   */
+  async handleEditBonusDurationCharges(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const [, bonusId] = interaction.customId.split(':');
+      const charges = parseInt(interaction.values[0]);
+
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Sauvegarder
+      await db.query(
+        'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
+        [charges, parseInt(bonusId)]
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ CHARGES MODIFIÉES')
+        .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** aura **${charges} charge${charges > 1 ? 's' : ''}**.`)
+        .setColor('#2ecc71')
+        .addFields({ name: '🎯 Charges', value: `${charges} utilisation${charges > 1 ? 's' : ''}` });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('⏱️ Éditer un autre')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      console.log(`✅ Super bonus #${bonusId} → ${charges} charge(s) par ${interaction.user.tag}`);
+      return interaction.editReply({ embeds: [embed], components: [row] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleEditBonusDurationCharges:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Gérer le clic sur "Permanent"
+   */
+  async handleDurationTypePermanent(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const bonusId = parseInt(interaction.customId.split(':')[1]);
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [bonusId]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Sauvegarder
+      await db.query(
+        'UPDATE super_bonuses SET duration_type = $1, duration_value = $2 WHERE id = $3',
+        ['permanent', 0, bonusId]
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ DURÉE MODIFIÉE')
+        .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** est maintenant **permanent**.`)
+        .setColor('#2ecc71')
+        .addFields({ name: '♾️ Effet', value: 'Le bonus restera actif indéfiniment' });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('⏱️ Éditer un autre')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      console.log(`✅ Super bonus #${bonusId} → Permanent par ${interaction.user.tag}`);
+      return interaction.editReply({ embeds: [embed], components: [row] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleDurationTypePermanent:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Gérer le clic sur "Temporaire" - Afficher select jours
+   */
+  async handleDurationTypeTemporary(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const bonusId = parseInt(interaction.customId.split(':')[1]);
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [bonusId]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Options jours (1-10)
+      const dayOptions = Array.from({ length: 10 }, (_, i) => ({
+        label: `${i + 1} jour${i > 0 ? 's' : ''}`,
+        value: (i + 1).toString(),
+        emoji: '📅'
+      }));
+
+      const selectDays = new StringSelectMenuBuilder()
+        .setCustomId(`select_duration_days:${bonusId}`)
+        .setPlaceholder('Sélectionne le nombre de jours')
+        .addOptions(dayOptions);
+
+      const row1 = new ActionRowBuilder().addComponents(selectDays);
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`select_duration_for_bonus`)
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle(`⏰ DURÉE TEMPORAIRE - ${bonus.icon} ${bonus.name}`)
+        .setDescription(
+          '**Étape 1/2:** Choisis le nombre de jours\n\n' +
+          'Le bonus expirera automatiquement après la durée sélectionnée.\n\n' +
+          '💡 Tu pourras ensuite choisir les heures (0-23h).'
+        )
+        .setColor('#00D9FF');
+
+      return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleDurationTypeTemporary:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Gérer la sélection des jours - Afficher select heures
+   */
+  async handleSelectDurationDays(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const [, bonusId] = interaction.customId.split(':');
+      const days = parseInt(interaction.values[0]);
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Options heures (0-23)
+      const hourOptions = Array.from({ length: 24 }, (_, i) => ({
+        label: `${i} heure${i > 1 ? 's' : ''}`,
+        value: i.toString(),
+        emoji: '🕐'
+      }));
+
+      const selectHours = new StringSelectMenuBuilder()
+        .setCustomId(`select_duration_hours:${bonusId}:${days}`)
+        .setPlaceholder('Sélectionne le nombre d\'heures')
+        .addOptions(hourOptions);
+
+      const row1 = new ActionRowBuilder().addComponents(selectHours);
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`duration_type_temporary:${bonusId}`)
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle(`⏰ DURÉE TEMPORAIRE - ${bonus.icon} ${bonus.name}`)
+        .setDescription(
+          `**Étape 2/2:** Choisis le nombre d'heures\n\n` +
+          `📅 Durée sélectionnée: **${days} jour${days > 1 ? 's' : ''}** + heures\n\n` +
+          '💡 Le bonus expirera après cette durée.'
+        )
+        .setColor('#00D9FF');
+
+      return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleSelectDurationDays:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Gérer la sélection des heures - Sauvegarder
+   */
+  async handleSelectDurationHours(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const [, bonusId, days] = interaction.customId.split(':');
+      const hours = parseInt(interaction.values[0]);
+      const totalSeconds = (parseInt(days) * 86400) + (hours * 3600);
+
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Sauvegarder
+      await db.query(
+        'UPDATE super_bonuses SET duration_type = $1, duration_value = $2 WHERE id = $3',
+        ['temporary', totalSeconds, parseInt(bonusId)]
+      );
+
+      const durationText = `${days} jour${days > 1 ? 's' : ''}${hours > 0 ? ` et ${hours} heure${hours > 1 ? 's' : ''}` : ''}`;
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ DURÉE MODIFIÉE')
+        .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** expirera après **${durationText}**.`)
+        .setColor('#2ecc71')
+        .addFields({ name: '⏰ Durée', value: durationText });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('⏱️ Éditer un autre')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      console.log(`✅ Super bonus #${bonusId} → Temporaire (${durationText}) par ${interaction.user.tag}`);
+      return interaction.editReply({ embeds: [embed], components: [row] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleSelectDurationHours:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Gérer le clic sur "Charges" - Afficher select charges
+   */
+  async handleDurationTypeCharges(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const bonusId = parseInt(interaction.customId.split(':')[1]);
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [bonusId]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Options charges (1-10)
+      const chargeOptions = Array.from({ length: 10 }, (_, i) => ({
+        label: `${i + 1} charge${i > 0 ? 's' : ''}`,
+        value: (i + 1).toString(),
+        emoji: '🎯'
+      }));
+
+      const selectCharges = new StringSelectMenuBuilder()
+        .setCustomId(`select_duration_charges:${bonusId}`)
+        .setPlaceholder('Sélectionne le nombre de charges')
+        .addOptions(chargeOptions);
+
+      const row1 = new ActionRowBuilder().addComponents(selectCharges);
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`select_duration_for_bonus`)
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle(`🎯 CHARGES - ${bonus.icon} ${bonus.name}`)
+        .setDescription(
+          '**Choisis le nombre d\'utilisations**\n\n' +
+          'Le bonus expirera après avoir été utilisé ce nombre de fois.\n\n' +
+          '💡 Par exemple, "3 charges" = le bonus s\'active 3 fois puis expire.'
+        )
+        .setColor('#00D9FF');
+
+      return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleDurationTypeCharges:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+    }
+  }
+
+  /**
+   * Gérer la sélection des charges - Sauvegarder
+   */
+  async handleSelectDurationCharges(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const bonusId = parseInt(interaction.customId.split(':')[1]);
+      const charges = parseInt(interaction.values[0]);
+
+      const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [bonusId]);
+
+      if (!bonus) {
+        return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+      }
+
+      // Sauvegarder
+      await db.query(
+        'UPDATE super_bonuses SET duration_type = $1, duration_value = $2 WHERE id = $3',
+        ['charges', charges, bonusId]
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ DURÉE MODIFIÉE')
+        .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** s'activera **${charges} fois** avant d'expirer.`)
+        .setColor('#2ecc71')
+        .addFields({ name: '🎯 Charges', value: `${charges} utilisation${charges > 1 ? 's' : ''}` });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('⏱️ Éditer un autre')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_super_bonuses')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      console.log(`✅ Super bonus #${bonusId} → Charges (${charges}) par ${interaction.user.tag}`);
+      return interaction.editReply({ embeds: [embed], components: [row] });
+
+    } catch (error) {
+      console.error('❌ Erreur handleSelectDurationCharges:', error);
+      return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
     }
   }
 

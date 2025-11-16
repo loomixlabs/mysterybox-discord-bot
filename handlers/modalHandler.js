@@ -3,6 +3,7 @@ const adminPanelHandler = require('./adminPanelHandler');
 const campaignAdminHandler = require('./campaignAdminHandler');
 const giveUniqueHandler = require('./giveUniqueHandler');
 const trapAdminHandler = require('./trapAdminHandler');
+const probabilityHandler = require('./probabilityHandler');
 const audit = require('../utils/auditLogger');
 const { EmbedBuilder } = require('discord.js');
 const { canAccessAdminPanel } = require('../utils/permissions');
@@ -28,9 +29,13 @@ class ModalHandler {
     }
 
     // Router selon le customId (chaque méthode gèrera son propre deferReply)
-    if (customId === 'modal_probabilities') {
-      await this.handleProbabilities(interaction);
-    } else if (customId === 'modal_image') {
+
+    // Gestion des probabilités (délégation vers probabilityHandler)
+    if (customId.startsWith('probability_modal_')) {
+      return probabilityHandler.handleInteraction(interaction);
+    }
+    // Modals de configuration du thème
+    if (customId === 'modal_image') {
       await this.handleImage(interaction);
     } else if (customId === 'modal_title') {
       await this.handleTitle(interaction);
@@ -104,91 +109,6 @@ class ModalHandler {
       const ServerConfigHandler = require('./serverConfigHandler');
       const handler = new ServerConfigHandler();
       return handler.handleModalSubmit(interaction);
-    }
-  }
-
-  /**
-   * Traiter les probabilités
-   */
-  async handleProbabilities(interaction) {
-    await interaction.deferReply({ flags: 64 });
-
-    try {
-      const probCollectible = parseInt(interaction.fields.getTextInputValue('prob_collectible'));
-      const probMission = parseInt(interaction.fields.getTextInputValue('prob_mission'));
-      const probTrap = parseInt(interaction.fields.getTextInputValue('prob_trap'));
-
-      // Validation
-      if (isNaN(probCollectible) || isNaN(probMission) || isNaN(probTrap)) {
-        return interaction.editReply({
-          content: '❌ Toutes les valeurs doivent être des nombres entiers.',
-          flags: 64
-        });
-      }
-
-      if (probCollectible < 0 || probMission < 0 || probTrap < 0 ||
-          probCollectible > 100 || probMission > 100 || probTrap > 100) {
-        return interaction.editReply({
-          content: '❌ Les probabilités doivent être entre 0 et 100.',
-          flags: 64
-        });
-      }
-
-      const total = probCollectible + probMission + probTrap;
-
-      if (total !== 100) {
-        return interaction.editReply({
-          content: `❌ Le total des probabilités doit être égal à 100% (actuellement: ${total}%)`,
-          flags: 64
-        });
-      }
-
-      // Mettre à jour
-      const theme = await db.getActiveTheme(interaction.guildId);
-
-      // Récupérer les anciennes valeurs avant mise à jour
-      const oldConfig = await db.queryOne(
-        `SELECT probability_collectible, probability_mission, probability_trap
-         FROM theme_config
-         WHERE guild_id = $1 AND theme_id = $2`,
-        [interaction.guildId, theme.id]
-      );
-
-      await db.query(
-        `UPDATE theme_config
-         SET probability_collectible = $1,
-             probability_mission = $2,
-             probability_trap = $3
-         WHERE guild_id = $4 AND theme_id = $5`,
-        [probCollectible, probMission, probTrap, interaction.guildId, theme.id]
-      );
-
-      // Logger l'action
-      await audit.logProbabilitiesUpdated(
-        interaction.guildId,
-        interaction.user.id,
-        { collectible: probCollectible, mission: probMission, trap: probTrap },
-        oldConfig ? {
-          collectible: oldConfig.probability_collectible,
-          mission: oldConfig.probability_mission,
-          trap: oldConfig.probability_trap
-        } : null
-      );
-
-      return interaction.editReply({
-        content: `✅ **Probabilités mises à jour !**\n\n` +
-          `🎁 Collectibles: **${probCollectible}%**\n` +
-          `📋 Missions: **${probMission}%**\n` +
-          `⚠️ Pièges: **${probTrap}%**`,
-        flags: 64
-      });
-
-    } catch (error) {
-      console.error('❌ Erreur lors de la mise à jour des probabilités:', error);
-      return interaction.editReply({
-        content: `❌ Une erreur est survenue: ${error.message}`,
-        flags: 64
-      });
     }
   }
 

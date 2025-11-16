@@ -1,4 +1,10 @@
-const { EmbedBuilder } = require('discord.js');
+const {
+  EmbedBuilder,
+  ButtonBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonStyle
+} = require('discord.js');
 const db = require('../utils/database-pg');
 
 /**
@@ -357,6 +363,306 @@ function formatDuration(seconds) {
   return parts.join(' ') || '< 1min';
 }
 
+// ==========================================
+// HANDLERS INTERFACE ADMIN - CONFIGURATION
+// ==========================================
+
+/**
+ * Afficher directement le sélecteur de valeur selon le type de durée en DB
+ * Note: Defer ICI car appelé depuis handleSelectMenu AVANT le defer général
+ */
+async function handleBonusDurationSelect(interaction) {
+  await interaction.deferUpdate();
+
+  try {
+    const bonusId = parseInt(interaction.values[0]);
+    const bonus = await db.queryOne(
+      'SELECT * FROM super_bonuses WHERE id = $1',
+      [bonusId]
+    );
+
+    if (!bonus) {
+      return interaction.editReply({
+        content: '❌ Super bonus introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Afficher directement le sélecteur selon le type
+    if (bonus.duration_type === 'permanent') {
+      // Pour les bonus permanents, juste afficher un message
+      const embed = new EmbedBuilder()
+        .setTitle(`♾️ ${bonus.name}`)
+        .setDescription('Ce bonus est **permanent** - il n\'a pas de durée limitée.')
+        .setColor('#2ecc71');
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ embeds: [embed], components: [row] });
+
+    } else if (bonus.duration_type === 'temporary') {
+      // Détecter automatiquement si c'est en heures ou jours
+      const isHourBased = bonus.duration_value < 86400; // Moins de 24h = afficher en heures
+
+      if (isHourBased) {
+        // Afficher sélecteur d'heures (1-24)
+        const currentHours = Math.floor(bonus.duration_value / 3600);
+        const hourOptions = Array.from({ length: 24 }, (_, i) => ({
+          label: `${i + 1} heure${i > 0 ? 's' : ''}`,
+          value: (i + 1).toString(),
+          emoji: '⏰'
+        }));
+
+        const selectHours = new StringSelectMenuBuilder()
+          .setCustomId(`edit_bonus_duration_hours:${bonusId}`)
+          .setPlaceholder('Sélectionne la durée en heures')
+          .addOptions(hourOptions);
+
+        const row1 = new ActionRowBuilder().addComponents(selectHours);
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('admin_bonus_edit_duration')
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`⏰ ${bonus.name}`)
+          .setDescription(
+            `**Configuration actuelle:** ${currentHours} heure${currentHours > 1 ? 's' : ''}\n\n` +
+            '**Choisis la nouvelle durée** (1-24 heures):'
+          )
+          .setColor('#00D9FF');
+
+        return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+
+      } else {
+        // Afficher sélecteur de jours (1-10)
+        const currentDays = Math.floor(bonus.duration_value / 86400);
+        const dayOptions = Array.from({ length: 10 }, (_, i) => ({
+          label: `${i + 1} jour${i > 0 ? 's' : ''}`,
+          value: (i + 1).toString(),
+          emoji: '📅'
+        }));
+
+        const selectDays = new StringSelectMenuBuilder()
+          .setCustomId(`edit_bonus_duration_days:${bonusId}`)
+          .setPlaceholder('Sélectionne la durée en jours')
+          .addOptions(dayOptions);
+
+        const row1 = new ActionRowBuilder().addComponents(selectDays);
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('admin_bonus_edit_duration')
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`⏰ ${bonus.name}`)
+          .setDescription(
+            `**Configuration actuelle:** ${currentDays} jour${currentDays > 1 ? 's' : ''}\n\n` +
+            '**Choisis la nouvelle durée** (1-10 jours):'
+          )
+          .setColor('#00D9FF');
+
+        return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+      }
+
+    } else if (bonus.duration_type === 'charges') {
+      // Afficher sélecteur de charges (1-10)
+      const chargeOptions = Array.from({ length: 10 }, (_, i) => ({
+        label: `${i + 1} charge${i > 0 ? 's' : ''}`,
+        value: (i + 1).toString(),
+        emoji: '🎯'
+      }));
+
+      const selectCharges = new StringSelectMenuBuilder()
+        .setCustomId(`edit_bonus_duration_charges:${bonusId}`)
+        .setPlaceholder('Sélectionne le nombre de charges')
+        .addOptions(chargeOptions);
+
+      const row1 = new ActionRowBuilder().addComponents(selectCharges);
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_bonus_edit_duration')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle(`🎯 ${bonus.name}`)
+        .setDescription(
+          `**Configuration actuelle:** ${bonus.duration_value} charge${bonus.duration_value > 1 ? 's' : ''}\n\n` +
+          '**Choisis le nouveau nombre de charges** (1-10):'
+        )
+        .setColor('#00D9FF');
+
+      return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+    }
+
+  } catch (error) {
+    console.error('❌ Erreur handleBonusDurationSelect:', error);
+    return interaction.editReply({
+      content: `❌ Erreur: ${error.message}`,
+      embeds: [],
+      components: []
+    });
+  }
+}
+
+/**
+ * Sauvegarder la durée en heures (temporary - bonus < 24h)
+ */
+async function handleEditBonusDurationHours(interaction) {
+  await interaction.deferUpdate();
+
+  try {
+    const [, bonusId] = interaction.customId.split(':');
+    const hours = parseInt(interaction.values[0]);
+    const totalSeconds = hours * 3600;
+
+    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+    if (!bonus) {
+      return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+    }
+
+    // Sauvegarder
+    await db.query(
+      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
+      [totalSeconds, parseInt(bonusId)]
+    );
+
+    const embed = new EmbedBuilder()
+      .setTitle('✅ DURÉE MODIFIÉE')
+      .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** expirera après **${hours} heure${hours > 1 ? 's' : ''}**.`)
+      .setColor('#2ecc71')
+      .addFields({ name: '⏰ Durée', value: `${hours} heure${hours > 1 ? 's' : ''}` });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_bonus_edit_duration')
+        .setLabel('⏱️ Éditer un autre')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('admin_super_bonuses')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    console.log(`✅ Super bonus #${bonusId} → Durée ${hours}h par ${interaction.user.tag}`);
+    return interaction.editReply({ embeds: [embed], components: [row] });
+
+  } catch (error) {
+    console.error('❌ Erreur handleEditBonusDurationHours:', error);
+    return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+  }
+}
+
+/**
+ * Sauvegarder la durée en jours (temporary)
+ */
+async function handleEditBonusDurationDays(interaction) {
+  await interaction.deferUpdate();
+
+  try {
+    const [, bonusId] = interaction.customId.split(':');
+    const days = parseInt(interaction.values[0]);
+    const totalSeconds = days * 86400;
+
+    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+    if (!bonus) {
+      return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+    }
+
+    // Sauvegarder
+    await db.query(
+      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
+      [totalSeconds, parseInt(bonusId)]
+    );
+
+    const embed = new EmbedBuilder()
+      .setTitle('✅ DURÉE MODIFIÉE')
+      .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** expirera après **${days} jour${days > 1 ? 's' : ''}**.`)
+      .setColor('#2ecc71')
+      .addFields({ name: '⏰ Durée', value: `${days} jour${days > 1 ? 's' : ''}` });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_bonus_edit_duration')
+        .setLabel('⏱️ Éditer un autre')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('admin_super_bonuses')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    console.log(`✅ Super bonus #${bonusId} → Durée ${days}j par ${interaction.user.tag}`);
+    return interaction.editReply({ embeds: [embed], components: [row] });
+
+  } catch (error) {
+    console.error('❌ Erreur handleEditBonusDurationDays:', error);
+    return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+  }
+}
+
+/**
+ * Sauvegarder le nombre de charges
+ */
+async function handleEditBonusDurationCharges(interaction) {
+  await interaction.deferUpdate();
+
+  try {
+    const [, bonusId] = interaction.customId.split(':');
+    const charges = parseInt(interaction.values[0]);
+
+    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+
+    if (!bonus) {
+      return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
+    }
+
+    // Sauvegarder
+    await db.query(
+      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
+      [charges, parseInt(bonusId)]
+    );
+
+    const embed = new EmbedBuilder()
+      .setTitle('✅ CHARGES MODIFIÉES')
+      .setDescription(`Le bonus **${bonus.icon} ${bonus.name}** aura **${charges} charge${charges > 1 ? 's' : ''}**.`)
+      .setColor('#2ecc71')
+      .addFields({ name: '🎯 Charges', value: `${charges} utilisation${charges > 1 ? 's' : ''}` });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_bonus_edit_duration')
+        .setLabel('⏱️ Éditer un autre')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('admin_super_bonuses')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    console.log(`✅ Super bonus #${bonusId} → ${charges} charge(s) par ${interaction.user.tag}`);
+    return interaction.editReply({ embeds: [embed], components: [row] });
+
+  } catch (error) {
+    console.error('❌ Erreur handleEditBonusDurationCharges:', error);
+    return interaction.editReply({ content: `❌ Erreur: ${error.message}`, embeds: [], components: [] });
+  }
+}
+
 module.exports = {
   cleanupExpiredBonuses,
   getPlayerActiveBonuses,
@@ -370,5 +676,10 @@ module.exports = {
   consumeTrapShield,
   createActiveBonusesEmbed,
   createBonusReceivedEmbed,
-  formatDuration
+  formatDuration,
+  // Admin handlers
+  handleBonusDurationSelect,
+  handleEditBonusDurationHours,
+  handleEditBonusDurationDays,
+  handleEditBonusDurationCharges
 };

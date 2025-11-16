@@ -282,6 +282,18 @@ class AnnouncementSystem {
       points: malusPoints // Alias pour compatibilité
     });
   }
+
+  /**
+   * Annoncer un super bonus légendaire obtenu
+   */
+  async announceSuperBonus(client, guildId, userName, bonusName, bonusIcon, bonusImage) {
+    return this.sendAnnouncement(client, guildId, 'legendary_super_bonus', {
+      userName,
+      bonusName,
+      bonusIcon,
+      bonusImage
+    });
+  }
 }
 
 module.exports = new AnnouncementSystem();
