@@ -55,8 +55,8 @@ module.exports = {
       const customId = interaction.customId;
 
       try {
-        // Boutons de profil (profile_*)
-        if (customId.startsWith('profile_')) {
+        // Boutons de profil (profile_* et activate_bonus:*)
+        if (customId.startsWith('profile_') || customId.startsWith('activate_bonus:')) {
           await profileHandler.handleProfileInteraction(interaction);
         }
 
@@ -69,6 +69,14 @@ module.exports = {
         // Boutons de boîte mystère (mystery_open_type_id)
         else if (customId.startsWith('mystery_open_')) {
           await mysteryBoxHandler.handleMysteryBoxOpen(interaction);
+        }
+
+        // 👁️ Vision Divine - Boutons Accept/Decline
+        else if (customId.startsWith('vision_divine_accept:')) {
+          await mysteryBoxHandler.handleVisionDivineAccept(interaction);
+        }
+        else if (customId.startsWith('vision_divine_decline:')) {
+          await mysteryBoxHandler.handleVisionDivineDecline(interaction);
         }
 
         // Boutons Give Unique (admin) - DOIT ÊTRE AVANT give_ normal

@@ -12,6 +12,11 @@ const db = require('../utils/database-pg');
  * Gère l'application des effets des super bonus sur le système de mystery box
  */
 
+// Set pour tracker les révélations Vision Divine déjà effectuées
+// Format: "messageId:userId"
+// Permet d'éviter le multi-trigger si un joueur décline puis re-clique
+const visionDivineUsed = new Set();
+
 /**
  * Nettoyer les bonus expirés (à appeler périodiquement)
  */
@@ -27,9 +32,9 @@ async function cleanupExpiredBonuses() {
 /**
  * Récupérer les bonus actifs d'un joueur avec leurs configurations parsées
  */
-async function getPlayerActiveBonuses(userId) {
+async function getPlayerActiveBonuses(guildId, userId) {
   try {
-    const bonuses = await db.getActiveBonusesByPlayer(userId);
+    const bonuses = await db.getActiveBonusesByPlayer(guildId, userId);
 
     // Parser les configurations JSON
     return bonuses.map(bonus => {
@@ -51,12 +56,13 @@ async function getPlayerActiveBonuses(userId) {
 
 /**
  * Appliquer les modifications de probabilités dues aux bonus actifs
+ * @param {string} guildId - ID du serveur Discord
  * @param {string} userId - ID Discord du joueur
  * @param {object} baseProbabilities - Probabilités de base {collectible, mission, trap}
  * @returns {object} Probabilités modifiées + informations sur les bonus appliqués
  */
-async function applyProbabilityBonuses(userId, baseProbabilities) {
-  const activeBonuses = await getPlayerActiveBonuses(userId);
+async function applyProbabilityBonuses(guildId, userId, baseProbabilities) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
 
   let modifiedProbs = { ...baseProbabilities };
   const appliedBonuses = [];
@@ -112,8 +118,8 @@ async function applyProbabilityBonuses(userId, baseProbabilities) {
 /**
  * Vérifier si le joueur a un bonus de révélation actif (Vision Divine)
  */
-async function hasRevealBonus(userId) {
-  const activeBonuses = await getPlayerActiveBonuses(userId);
+async function hasRevealBonus(guildId, userId) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   return activeBonuses.find(bonus =>
     bonus.effect_type === 'reveal' &&
     (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
@@ -123,18 +129,19 @@ async function hasRevealBonus(userId) {
 /**
  * Consommer une charge de révélation
  */
-async function consumeRevealCharge(userId) {
-  const revealBonus = await hasRevealBonus(userId);
+async function consumeRevealCharge(guildId, userId) {
+  const revealBonus = await hasRevealBonus(guildId, userId);
   if (!revealBonus) return null;
 
   if (revealBonus.duration_type === 'charges') {
-    await db.decrementBonusCharge(revealBonus.id);
-    await db.logBonusUsage(
-      userId,
-      revealBonus.bonus_id,
-      { action: 'revealed_mystery_box' },
-      'manual'
-    );
+    await db.decrementBonusCharge(guildId, revealBonus.id);
+    // TODO: Implémenter db.logBonusUsage() dans database-pg.js
+    // await db.logBonusUsage(
+    //   userId,
+    //   revealBonus.bonus_id,
+    //   { action: 'revealed_mystery_box' },
+    //   'manual'
+    // );
   }
 
   return revealBonus;
@@ -143,16 +150,16 @@ async function consumeRevealCharge(userId) {
 /**
  * Vérifier si le joueur a un bonus de détection de pièges actif
  */
-async function hasTrapDetector(userId) {
-  const activeBonuses = await getPlayerActiveBonuses(userId);
+async function hasTrapDetector(guildId, userId) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   return activeBonuses.find(bonus => bonus.effect_type === 'detector');
 }
 
 /**
  * Vérifier si le joueur a un multiplicateur de récompense actif
  */
-async function getRewardMultiplier(userId) {
-  const activeBonuses = await getPlayerActiveBonuses(userId);
+async function getRewardMultiplier(guildId, userId) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   const multiplierBonus = activeBonuses.find(bonus =>
     bonus.effect_type === 'multiplier' &&
     (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
@@ -171,20 +178,21 @@ async function getRewardMultiplier(userId) {
 /**
  * Consommer une charge de multiplicateur
  */
-async function consumeMultiplierCharge(userId) {
-  const multiplierData = await getRewardMultiplier(userId);
+async function consumeMultiplierCharge(guildId, userId) {
+  const multiplierData = await getRewardMultiplier(guildId, userId);
   if (!multiplierData) return null;
 
   const { bonus } = multiplierData;
 
   if (bonus.duration_type === 'charges') {
     await db.decrementBonusCharge(bonus.id);
-    await db.logBonusUsage(
-      userId,
-      bonus.bonus_id,
-      { action: 'reward_multiplied', multiplier: multiplierData.multiplier },
-      'automatic'
-    );
+    // TODO: Implémenter db.logBonusUsage() dans database-pg.js
+    // await db.logBonusUsage(
+    //   userId,
+    //   bonus.bonus_id,
+    //   { action: 'reward_multiplied', multiplier: multiplierData.multiplier },
+    //   'automatic'
+    // );
   }
 
   return multiplierData;
@@ -193,8 +201,8 @@ async function consumeMultiplierCharge(userId) {
 /**
  * Vérifier si le joueur a un bouclier anti-piège actif
  */
-async function hasTrapShield(userId) {
-  const activeBonuses = await getPlayerActiveBonuses(userId);
+async function hasTrapShield(guildId, userId) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   return activeBonuses.find(bonus =>
     bonus.effect_type === 'protection' &&
     (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
@@ -204,17 +212,18 @@ async function hasTrapShield(userId) {
 /**
  * Consommer le bouclier anti-piège
  */
-async function consumeTrapShield(userId, trapName) {
-  const shield = await hasTrapShield(userId);
+async function consumeTrapShield(guildId, userId, trapName) {
+  const shield = await hasTrapShield(guildId, userId);
   if (!shield) return null;
 
   await db.consumeBonus(shield.id);
-  await db.logBonusUsage(
-    userId,
-    shield.bonus_id,
-    { action: 'trap_blocked', trap_name: trapName },
-    'automatic'
-  );
+  // TODO: Implémenter db.logBonusUsage() dans database-pg.js
+  // await db.logBonusUsage(
+  //   userId,
+  //   shield.bonus_id,
+  //   { action: 'trap_blocked', trap_name: trapName },
+  //   'automatic'
+  // );
 
   return shield;
 }
@@ -301,12 +310,18 @@ function createBonusReceivedEmbed(bonusData, userMention) {
   // Durée / Charges
   let durationText = '';
   if (bonus.duration_type === 'temporary') {
-    const days = Math.floor(bonus.duration_value / 86400);
-    const hours = Math.floor((bonus.duration_value % 86400) / 3600);
-    if (days > 0) {
-      durationText = `⏱️ Durée: ${days} jour${days > 1 ? 's' : ''}`;
-    } else {
+    // CAS SPÉCIAL: Aimant à Légendaires → toujours afficher en heures
+    if (bonus.bonus_id === 'legendary_magnet') {
+      const hours = Math.floor(bonus.duration_value / 3600);
       durationText = `⏱️ Durée: ${hours} heure${hours > 1 ? 's' : ''}`;
+    } else {
+      const days = Math.floor(bonus.duration_value / 86400);
+      const hours = Math.floor((bonus.duration_value % 86400) / 3600);
+      if (days > 0) {
+        durationText = `⏱️ Durée: ${days} jour${days > 1 ? 's' : ''}`;
+      } else {
+        durationText = `⏱️ Durée: ${hours} heure${hours > 1 ? 's' : ''}`;
+      }
     }
   } else if (bonus.duration_type === 'charges') {
     durationText = `🔢 Utilisations: ${bonus.duration_value}`;
@@ -407,6 +422,40 @@ async function handleBonusDurationSelect(interaction) {
       return interaction.editReply({ embeds: [embed], components: [row] });
 
     } else if (bonus.duration_type === 'temporary') {
+      // CAS SPÉCIAL: Aimant à Légendaires → toujours sélecteur 1-10h
+      if (bonus.bonus_id === 'legendary_magnet') {
+        const currentHours = Math.floor(bonus.duration_value / 3600);
+        const hourOptions = Array.from({ length: 10 }, (_, i) => ({
+          label: `${i + 1} heure${i > 0 ? 's' : ''}`,
+          value: (i + 1).toString(),
+          emoji: '⏰'
+        }));
+
+        const selectHours = new StringSelectMenuBuilder()
+          .setCustomId(`edit_bonus_duration_hours:${bonusId}`)
+          .setPlaceholder('Sélectionne la durée en heures (1-10h)')
+          .addOptions(hourOptions);
+
+        const row1 = new ActionRowBuilder().addComponents(selectHours);
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('admin_bonus_edit_duration')
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`⏰ ${bonus.name}`)
+          .setDescription(
+            `**Configuration actuelle:** ${currentHours} heure${currentHours > 1 ? 's' : ''}\n\n` +
+            '**Choisis la nouvelle durée** (1-10 heures):\n' +
+            '💡 _Ce bonus est configuré pour des durées courtes en heures._'
+          )
+          .setColor('#9b59b6');
+
+        return interaction.editReply({ embeds: [embed], components: [row1, row2] });
+      }
+
       // Détecter automatiquement si c'est en heures ou jours
       const isHourBased = bonus.duration_value < 86400; // Moins de 24h = afficher en heures
 
@@ -524,11 +573,12 @@ async function handleEditBonusDurationHours(interaction) {
   await interaction.deferUpdate();
 
   try {
+    const guildId = interaction.guildId;
     const [, bonusId] = interaction.customId.split(':');
     const hours = parseInt(interaction.values[0]);
     const totalSeconds = hours * 3600;
 
-    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2', [parseInt(bonusId), guildId]);
 
     if (!bonus) {
       return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
@@ -536,8 +586,8 @@ async function handleEditBonusDurationHours(interaction) {
 
     // Sauvegarder
     await db.query(
-      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
-      [totalSeconds, parseInt(bonusId)]
+      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2 AND guild_id = $3',
+      [totalSeconds, parseInt(bonusId), guildId]
     );
 
     const embed = new EmbedBuilder()
@@ -573,11 +623,12 @@ async function handleEditBonusDurationDays(interaction) {
   await interaction.deferUpdate();
 
   try {
+    const guildId = interaction.guildId;
     const [, bonusId] = interaction.customId.split(':');
     const days = parseInt(interaction.values[0]);
     const totalSeconds = days * 86400;
 
-    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2', [parseInt(bonusId), guildId]);
 
     if (!bonus) {
       return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
@@ -585,8 +636,8 @@ async function handleEditBonusDurationDays(interaction) {
 
     // Sauvegarder
     await db.query(
-      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
-      [totalSeconds, parseInt(bonusId)]
+      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2 AND guild_id = $3',
+      [totalSeconds, parseInt(bonusId), guildId]
     );
 
     const embed = new EmbedBuilder()
@@ -622,10 +673,11 @@ async function handleEditBonusDurationCharges(interaction) {
   await interaction.deferUpdate();
 
   try {
+    const guildId = interaction.guildId;
     const [, bonusId] = interaction.customId.split(':');
     const charges = parseInt(interaction.values[0]);
 
-    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1', [parseInt(bonusId)]);
+    const bonus = await db.queryOne('SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2', [parseInt(bonusId), guildId]);
 
     if (!bonus) {
       return interaction.editReply({ content: '❌ Super bonus introuvable.', embeds: [], components: [] });
@@ -633,8 +685,8 @@ async function handleEditBonusDurationCharges(interaction) {
 
     // Sauvegarder
     await db.query(
-      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2',
-      [charges, parseInt(bonusId)]
+      'UPDATE super_bonuses SET duration_value = $1 WHERE id = $2 AND guild_id = $3',
+      [charges, parseInt(bonusId), guildId]
     );
 
     const embed = new EmbedBuilder()
@@ -663,6 +715,296 @@ async function handleEditBonusDurationCharges(interaction) {
   }
 }
 
+/**
+ * ========================================
+ * VISION DIVINE - Révélation Mystery Box
+ * ========================================
+ */
+
+/**
+ * Créer l'embed stylé de révélation Vision Divine
+ * @param {Object} content - Contenu tiré: { type, id, item }
+ * @param {Object} branding - Branding du serveur
+ * @returns {EmbedBuilder} Embed de révélation
+ */
+function createVisionDivineEmbed(content, branding) {
+  const { type, item } = content;
+
+  // Mapping des types vers emojis et couleurs
+  const typeConfig = {
+    collectible: {
+      emoji: '🎨',
+      name: 'Collectible',
+      color: '#f39c12'
+    },
+    mission: {
+      emoji: '📋',
+      name: 'Mission',
+      color: '#3498db'
+    },
+    trap: {
+      emoji: '💀',
+      name: 'Piège',
+      color: '#e74c3c'
+    },
+    super_bonus: {
+      emoji: '✨',
+      name: 'Super Bonus',
+      color: '#9b59b6'
+    }
+  };
+
+  // Mapping des raretés vers emojis
+  const rarityEmojis = {
+    common: '⚪',
+    rare: '🔵',
+    epic: '🟣',
+    legendary: '🟡'
+  };
+
+  const config = typeConfig[type] || typeConfig.collectible;
+  const rarityEmoji = rarityEmojis[item.rarity?.toLowerCase()] || '⚪';
+
+  const embed = new EmbedBuilder()
+    .setColor('#FFD700') // Or divin
+    .setTitle(`👁️ VISION DIVINE`)
+    .setDescription(
+      `✨ **Grâce à la Vision Divine, le voile se lève...**\n\n` +
+      `Le contenu de cette boîte mystère t'est révélé avant de l'ouvrir !\n\n` +
+      `**Contenu:** ${config.emoji} **${config.name}**`
+    )
+    .setThumbnail('https://media.giphy.com/media/26BRuo6sLetdllPAQ/giphy.gif') // GIF oeil mystique
+    .addFields(
+      {
+        name: `${config.emoji} ${item.name || 'Mystère'}`,
+        value: item.description || item.reveal_message || 'Un pouvoir mystérieux...',
+        inline: false
+      },
+      {
+        name: '✨ Rareté',
+        value: `${rarityEmoji} **${item.rarity ? item.rarity.charAt(0).toUpperCase() + item.rarity.slice(1) : 'Commune'}**`,
+        inline: true
+      }
+    )
+    .setFooter({
+      text: '👁️ Vision Divine - 1 charge consommée',
+      iconURL: branding.logo_url
+    })
+    .setTimestamp();
+
+  // Ajouter des champs spécifiques selon le type
+  if (type === 'super_bonus' && item.duration_value) {
+    let durationText;
+    // CAS SPÉCIAL: Aimant à Légendaires → toujours afficher en heures
+    if (item.bonus_id === 'legendary_magnet') {
+      durationText = `${Math.floor(item.duration_value / 3600)}h`;
+    } else {
+      durationText = item.duration_value < 86400
+        ? `${Math.floor(item.duration_value / 3600)}h`
+        : `${Math.floor(item.duration_value / 86400)} jour(s)`;
+    }
+
+    embed.addFields({
+      name: '⏱️ Durée/Charges',
+      value: item.duration_type === 'charges'
+        ? `${item.duration_value} utilisation(s)`
+        : durationText,
+      inline: true
+    });
+  }
+
+  if (type === 'collectible' && item.required_items) {
+    embed.addFields({
+      name: '🎯 Collection',
+      value: `Requis: ${item.required_items} items`,
+      inline: true
+    });
+  }
+
+  return embed;
+}
+
+/**
+ * Vérifier si le joueur a Vision Divine actif et créer la réponse de révélation
+ * @param {string} userId - Discord user ID
+ * @param {string} guildId - Discord guild ID
+ * @param {Object} content - Contenu tiré de rollMysteryContent: { type, id, item }
+ * @param {string} messageId - Message ID de la mystery box
+ * @returns {Promise<Object|null>} { embed, components } si Vision Divine active, null sinon
+ */
+async function checkAndRevealVisionDivine(userId, guildId, content, messageId) {
+  try {
+    // Créer la clé de tracking pour cette révélation
+    const trackingKey = `${messageId}:${userId}`;
+
+    // Vérifier si cette boîte a déjà été révélée à ce joueur
+    if (visionDivineUsed.has(trackingKey)) {
+      console.log(`⏭️  [VISION DIVINE] Joueur ${userId} a déjà révélé la boîte ${messageId} - Pas de nouveau déclenchement`);
+      return null;
+    }
+
+    // Vérifier si le joueur a Vision Divine actif
+    const hasVisionDivine = await hasRevealBonus(guildId, userId);
+
+    if (!hasVisionDivine) {
+      console.log(`🔍 [VISION DIVINE] Joueur ${userId} n'a pas Vision Divine active`);
+      return null;
+    }
+
+    console.log(`👁️ [VISION DIVINE] ACTIVÉ pour ${userId}! Révélation du contenu...`);
+
+    // Récupérer le branding
+    const branding = await db.getGuildBranding(guildId);
+
+    // Créer l'embed de révélation
+    const embed = createVisionDivineEmbed(content, branding);
+
+    // Créer les boutons Accept/Decline
+    const acceptButton = new ButtonBuilder()
+      .setCustomId(`vision_divine_accept:${messageId}:${content.type}:${content.id}`)
+      .setLabel('✅ Accepter et Ouvrir')
+      .setStyle(ButtonStyle.Success);
+
+    const declineButton = new ButtonBuilder()
+      .setCustomId(`vision_divine_decline:${messageId}`)
+      .setLabel('❌ Passer')
+      .setStyle(ButtonStyle.Danger);
+
+    const row = new ActionRowBuilder().addComponents(acceptButton, declineButton);
+
+    // Marquer cette révélation comme effectuée AVANT de consommer la charge
+    visionDivineUsed.add(trackingKey);
+    console.log(`🔐 [VISION DIVINE] Révélation trackée: ${trackingKey}`);
+
+    // Consommer 1 charge de Vision Divine
+    await consumeRevealCharge(guildId, userId);
+    console.log(`✅ [VISION DIVINE] 1 charge consommée pour ${userId}`);
+
+    return {
+      embeds: [embed],
+      components: [row]
+    };
+
+  } catch (error) {
+    console.error('❌ Erreur checkAndRevealVisionDivine:', error);
+    return null;
+  }
+}
+
+/**
+ * Nettoyer le tracking Vision Divine pour une boîte acceptée/traitée
+ * @param {string} messageId - Message ID de la mystery box
+ * @param {string} userId - User ID du joueur
+ */
+function clearVisionDivineTracking(messageId, userId) {
+  const trackingKey = `${messageId}:${userId}`;
+  const wasTracked = visionDivineUsed.has(trackingKey);
+  if (wasTracked) {
+    visionDivineUsed.delete(trackingKey);
+    console.log(`🧹 [VISION DIVINE] Tracking nettoyé: ${trackingKey}`);
+  }
+  return wasTracked;
+}
+
+/**
+ * Appliquer un boost de rareté pour les collectibles (Aimant à Légendaires)
+ * @param {string} guildId - Guild ID
+ * @param {string} userId - User ID
+ * @param {object} basePercentages - { legendary, epic, rare, common }
+ * @returns {Promise<object>} { percentages, boost, hasBoost }
+ */
+async function applyCollectibleRarityBoost(guildId, userId, basePercentages) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
+
+  let modifiedPercentages = { ...basePercentages };
+  let rarityBoost = null;
+
+  // Chercher Aimant à Légendaires actif
+  for (const bonus of activeBonuses) {
+    if (bonus.effect_type === 'rarity_boost' && bonus.is_active) {
+      const config = bonus.effect_config || {};
+
+      if (config.target_rarity && config.boost_percentage) {
+        const target = config.target_rarity; // 'legendary'
+        const boost = config.boost_percentage; // 50
+
+        console.log(`🧲 [AIMANT] Boost de rareté détecté pour ${userId}: +${boost}% ${target}`);
+        console.log(`   Avant: ${target} = ${modifiedPercentages[target]}%`);
+
+        // Addition absolue
+        modifiedPercentages[target] += boost;
+
+        console.log(`   Après boost: ${target} = ${modifiedPercentages[target]}%`);
+
+        rarityBoost = {
+          bonus: bonus,
+          target: target,
+          boost: boost,
+          original: basePercentages[target],
+          boosted: modifiedPercentages[target]
+        };
+        break;
+      }
+    }
+  }
+
+  // Normaliser pour respecter 100%
+  const total = modifiedPercentages.legendary + modifiedPercentages.epic +
+                modifiedPercentages.rare + modifiedPercentages.common;
+
+  if (total > 100) {
+    console.log(`🧲 [AIMANT] Total avant normalisation: ${total}% → Normalisation à 100%`);
+    const factor = 100 / total;
+    modifiedPercentages.legendary = Math.round(modifiedPercentages.legendary * factor);
+    modifiedPercentages.epic = Math.round(modifiedPercentages.epic * factor);
+    modifiedPercentages.rare = Math.round(modifiedPercentages.rare * factor);
+    modifiedPercentages.common = Math.round(modifiedPercentages.common * factor);
+
+    console.log(`   Après normalisation: legendary=${modifiedPercentages.legendary}%, epic=${modifiedPercentages.epic}%, rare=${modifiedPercentages.rare}%, common=${modifiedPercentages.common}%`);
+
+    if (rarityBoost) {
+      rarityBoost.normalized = modifiedPercentages[rarityBoost.target];
+    }
+  }
+
+  return {
+    percentages: modifiedPercentages,
+    boost: rarityBoost,
+    hasBoost: !!rarityBoost
+  };
+}
+
+/**
+ * Vérifier si le joueur a un bonus multiplicateur actif (Jackpot x2)
+ * @param {string} guildId - Guild ID
+ * @param {string} userId - User ID
+ * @param {string} contentType - Type de contenu ('collectible')
+ * @returns {Promise<object|null>} Bonus multiplicateur ou null
+ */
+async function hasMultiplierBonus(guildId, userId, contentType) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
+
+  return activeBonuses.find(bonus =>
+    bonus.effect_type === 'multiplier' &&
+    bonus.is_active &&
+    bonus.remaining_charges > 0 &&
+    (!bonus.expires_at || new Date(bonus.expires_at) > new Date()) &&
+    (bonus.effect_config?.applies_to === contentType)
+  );
+}
+
+/**
+ * Consommer une charge d'un bonus actif (fonction générique)
+ * @param {string} guildId - Guild ID
+ * @param {string} userId - User ID (pour les logs futurs)
+ * @param {number} activeBonusId - ID du bonus actif dans player_active_bonuses
+ */
+async function consumeBonusCharge(guildId, userId, activeBonusId) {
+  await db.decrementBonusCharge(guildId, activeBonusId);
+  console.log(`📉 [BONUS] Charge consommée - activeBonusId: ${activeBonusId}, userId: ${userId}`);
+  // TODO: Implémenter db.logBonusUsage() pour tracer l'utilisation
+}
+
 module.exports = {
   cleanupExpiredBonuses,
   getPlayerActiveBonuses,
@@ -677,6 +1019,14 @@ module.exports = {
   createActiveBonusesEmbed,
   createBonusReceivedEmbed,
   formatDuration,
+  // Vision Divine
+  checkAndRevealVisionDivine,
+  createVisionDivineEmbed,
+  clearVisionDivineTracking,
+  // Aimant à Légendaires & Jackpot x2
+  applyCollectibleRarityBoost,
+  hasMultiplierBonus,
+  consumeBonusCharge,
   // Admin handlers
   handleBonusDurationSelect,
   handleEditBonusDurationHours,

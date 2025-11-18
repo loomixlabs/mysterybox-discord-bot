@@ -595,7 +595,7 @@ class MissionHandler {
 
       // Ajouter le collectible si pas de doublon
       if (!alreadyHas) {
-        await db.addCollectible(interaction.guildId, player.id, randomCollectible.id);
+        await db.addCollectible(interaction.guildId, player.id, randomCollectible.id, 'mission');
         const playerProgress = await db.incrementProgress(interaction.guildId, player.id, mission.theme_id);
 
         // Message de récompense
@@ -750,7 +750,7 @@ class MissionHandler {
         const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, randomCollectible.id);
 
         if (!alreadyHas) {
-          await db.addCollectible(interaction.guildId, player.id, randomCollectible.id);
+          await db.addCollectible(interaction.guildId, player.id, randomCollectible.id, 'mission');
           await db.incrementProgress(interaction.guildId, player.id, progressData.theme_id);
         }
 

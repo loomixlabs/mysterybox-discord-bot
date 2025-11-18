@@ -95,6 +95,11 @@ async function showOverview(interaction, player, theme, progress) {
         .setEmoji('🎒')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
+        .setCustomId('profile_bonuses')
+        .setLabel('Mes Bonus')
+        .setEmoji('💫')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId('profile_history')
         .setLabel('Historique')
         .setEmoji('📜')
@@ -302,6 +307,11 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
         .setStyle(ButtonStyle.Primary)
         .setDisabled(true), // Vue actuelle
       new ButtonBuilder()
+        .setCustomId('profile_bonuses')
+        .setLabel('Mes Bonus')
+        .setEmoji('💫')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId('profile_history')
         .setLabel('Historique')
         .setEmoji('📜')
@@ -439,6 +449,11 @@ async function showHistory(interaction, player, theme) {
         .setEmoji('🎒')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
+        .setCustomId('profile_bonuses')
+        .setLabel('Mes Bonus')
+        .setEmoji('💫')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId('profile_history')
         .setLabel('Historique')
         .setEmoji('📜')
@@ -566,6 +581,11 @@ async function showAchievements(interaction, player, theme, progress) {
         .setEmoji('🎒')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
+        .setCustomId('profile_bonuses')
+        .setLabel('Mes Bonus')
+        .setEmoji('💫')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId('profile_history')
         .setLabel('Historique')
         .setEmoji('📜')
@@ -598,9 +618,195 @@ async function showAchievements(interaction, player, theme, progress) {
   };
 }
 
+/**
+ * 💫 VIEW 5: BONUSES - Gestion des super bonus
+ */
+async function showBonuses(interaction, player, theme) {
+  const guildId = interaction.guildId;
+  const superBonusHandler = require('../handlers/superBonusHandler');
+
+  // Récupérer le branding
+  const branding = await db.getGuildBranding(guildId);
+
+  // Récupérer les bonus actifs du joueur
+  const activeBonuses = await superBonusHandler.getPlayerActiveBonuses(guildId, interaction.user.id);
+
+  // Séparer les bonus par type
+  const automaticBonuses = activeBonuses.filter(b => {
+    // Les bonus automatiques sont ceux qui sont déjà activés (activated_at != null)
+    return b.activated_at !== null;
+  });
+
+  const manualBonuses = activeBonuses.filter(b => {
+    // Les bonus manuels sont ceux qui attendent activation (activated_at == null)
+    return b.activated_at === null;
+  });
+
+  const color = branding.primary_color;
+  const embed = new EmbedBuilder()
+    .setTitle(`💫 Mes Super Bonus - ${player.username}`)
+    .setColor(color)
+    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
+    .setDescription(
+      `🎁 Gère tes super bonus obtenus via les Mystery Boxes!\n\n` +
+      `**✨ Actifs**: ${automaticBonuses.length} bonus\n` +
+      `**🎯 En attente**: ${manualBonuses.length} bonus à activer`
+    );
+
+  // Section: Bonus actifs (automatiques + manuels activés)
+  if (automaticBonuses.length > 0) {
+    const activeBonusText = automaticBonuses.map(bonus => {
+      const icon = bonus.icon || '✨';
+      let statusText = '';
+
+      // Afficher le statut selon le type de durée
+      if (bonus.duration_type === 'permanent') {
+        statusText = '♾️ Permanent';
+      } else if (bonus.duration_type === 'charges' && bonus.remaining_charges !== null) {
+        statusText = `🔢 ${bonus.remaining_charges} charge(s) restante(s)`;
+      } else if (bonus.duration_type === 'temporary' && bonus.expires_at) {
+        const now = new Date();
+        const expiresAt = new Date(bonus.expires_at);
+        const timeLeft = expiresAt - now;
+
+        if (timeLeft > 0) {
+          const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+          const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+          statusText = `⏱️ ${hours}h ${minutes}min restantes`;
+        } else {
+          statusText = '⏱️ Expiré';
+        }
+      }
+
+      return `${icon} **${bonus.name}**\n${bonus.description}\n${statusText}`;
+    }).join('\n\n');
+
+    embed.addFields({
+      name: '✨ Bonus Actifs',
+      value: activeBonusText,
+      inline: false
+    });
+  } else {
+    embed.addFields({
+      name: '✨ Bonus Actifs',
+      value: 'Aucun bonus actif pour le moment',
+      inline: false
+    });
+  }
+
+  // Section: Bonus en attente d'activation (manuels non activés)
+  if (manualBonuses.length > 0) {
+    const manualBonusText = manualBonuses.map(bonus => {
+      const icon = bonus.icon || '🎯';
+      let durationInfo = '';
+
+      if (bonus.duration_type === 'permanent') {
+        durationInfo = '♾️ Permanent';
+      } else if (bonus.duration_type === 'charges') {
+        // Utiliser remaining_charges (valeur réelle) au lieu de duration_value (valeur par défaut)
+        const charges = bonus.remaining_charges !== null ? bonus.remaining_charges : bonus.duration_value;
+        durationInfo = `🔢 ${charges} charge(s)`;
+      } else if (bonus.duration_type === 'temporary') {
+        const hours = Math.floor(bonus.duration_value / 3600);
+        const minutes = Math.floor((bonus.duration_value % 3600) / 60);
+        durationInfo = `⏱️ Durée: ${hours}h ${minutes}min`;
+      }
+
+      return `${icon} **${bonus.name}**\n${bonus.description}\n${durationInfo}`;
+    }).join('\n\n');
+
+    embed.addFields({
+      name: '🎯 Bonus à Activer',
+      value: manualBonusText + '\n\n💡 *Utilise les boutons ci-dessous pour activer tes bonus manuels*',
+      inline: false
+    });
+  } else {
+    embed.addFields({
+      name: '🎯 Bonus à Activer',
+      value: 'Aucun bonus en attente d\'activation',
+      inline: false
+    });
+  }
+
+  embed.setFooter(await getLoomixFooter(guildId));
+  embed.setTimestamp();
+
+  // Boutons de navigation
+  const navigationRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('profile_overview')
+        .setLabel('Vue d\'ensemble')
+        .setEmoji('🏠')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('profile_inventory')
+        .setLabel('Inventaire')
+        .setEmoji('🎒')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('profile_bonuses')
+        .setLabel('Mes Bonus')
+        .setEmoji('💫')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(true), // Vue actuelle
+      new ButtonBuilder()
+        .setCustomId('profile_history')
+        .setLabel('Historique')
+        .setEmoji('📜')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('profile_achievements')
+        .setLabel('Succès')
+        .setEmoji('🏅')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+  // Boutons d'activation pour les bonus manuels (max 5 boutons par row)
+  const components = [navigationRow];
+
+  if (manualBonuses.length > 0) {
+    // Créer des rows de 5 boutons max
+    for (let i = 0; i < manualBonuses.length; i += 5) {
+      const bonusChunk = manualBonuses.slice(i, i + 5);
+      const activationRow = new ActionRowBuilder();
+
+      bonusChunk.forEach(bonus => {
+        activationRow.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`activate_bonus:${bonus.id}`)
+            .setLabel(`Activer ${bonus.name}`)
+            .setEmoji(bonus.icon || '⚡')
+            .setStyle(ButtonStyle.Success)
+        );
+      });
+
+      components.push(activationRow);
+    }
+  }
+
+  // Bouton refresh
+  const actionRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('profile_refresh')
+        .setLabel('Actualiser')
+        .setEmoji('🔄')
+        .setStyle(ButtonStyle.Success)
+    );
+
+  components.push(actionRow);
+
+  return {
+    embeds: [embed],
+    components
+  };
+}
+
 module.exports = {
   showOverview,
   showInventory,
   showHistory,
-  showAchievements
+  showAchievements,
+  showBonuses
 };

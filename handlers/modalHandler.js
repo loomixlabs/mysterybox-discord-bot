@@ -723,7 +723,7 @@ class ModalHandler {
         required_items: 0, // Calculé automatiquement en fonction des collectibles ajoutés
         final_role_name: roleName,
         final_role_color: '#FFD700',
-        final_role_id: role.id
+        final_role_discord_id: role.id  // ✅ FIX: Utiliser le bon nom de colonne
       };
 
       const newTheme = await db.createTheme(interaction.guildId, themeData);

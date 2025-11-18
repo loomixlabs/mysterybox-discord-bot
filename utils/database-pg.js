@@ -989,12 +989,13 @@ class DatabaseWrapper {
   async getActiveBonusesByPlayer(guildId, userId) {
     guildId = this._getGuildId(guildId);
     return this.queryAll(
-      `SELECT pab.*, sb.bonus_id, sb.name, sb.description, sb.icon, sb.effect_type, sb.effect_config, sb.duration_type, sb.color
+      `SELECT pab.id, pab.bonus_id, pab.remaining_charges, pab.activated_at, pab.expires_at, pab.is_active,
+              sb.name, sb.description, sb.icon, sb.effect_type, sb.effect_config, sb.duration_type, sb.duration_value, sb.color, sb.bonus_type
        FROM player_active_bonuses pab
        JOIN super_bonuses sb ON pab.bonus_id = sb.id
        WHERE pab.guild_id = $1 AND pab.user_id = $2 AND pab.is_active = TRUE
        AND (pab.expires_at IS NULL OR pab.expires_at > NOW())
-       ORDER BY pab.activated_at DESC`,
+       ORDER BY pab.activated_at DESC NULLS LAST`,
       [guildId, userId]
     );
   }
@@ -1868,7 +1869,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'jackpot_x2',
         name: 'Jackpot x2',
-        description: 'Les 5 prochaines mystery boxes donnent DOUBLE récompense si collectible !',
+        description: 'La prochaine mystery box donnera DOUBLE récompense si collectible !',
         icon: '💵',
         bonus_type: 'economy',
         effect_type: 'multiplier',

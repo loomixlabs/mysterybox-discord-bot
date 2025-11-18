@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/database-pg');
-const { showOverview, showInventory, showHistory, showAchievements } = require('../views/profileView');
+const { showOverview, showInventory, showHistory, showAchievements, showBonuses } = require('../views/profileView');
 const {
   getRarityEmoji,
   createProgressBar,
@@ -19,6 +19,7 @@ const profileColorHandler = require('./profileColorHandler');
  * CustomIds gérés:
  * - profile_overview          → Vue d'ensemble
  * - profile_inventory         → Inventaire
+ * - profile_bonuses           → Mes Bonus
  * - profile_history           → Historique
  * - profile_achievements      → Succès
  * - profile_refresh           → Actualiser la vue actuelle
@@ -28,6 +29,7 @@ const profileColorHandler = require('./profileColorHandler');
  * - profile_inventory_prev    → Page précédente
  * - profile_inventory_next    → Page suivante
  * - profile_inventory_last    → Dernière page
+ * - activate_bonus:id         → Activer un super bonus manuel
  */
 
 // Store pour persister l'état entre les interactions
@@ -111,6 +113,8 @@ async function handleProfileInteraction(interaction) {
       await handleOverview(interaction, player, theme, progress, state);
     } else if (customId === 'profile_inventory') {
       await handleInventory(interaction, player, theme, progress, state);
+    } else if (customId === 'profile_bonuses') {
+      await handleBonuses(interaction, player, theme, state);
     } else if (customId === 'profile_history') {
       await handleHistory(interaction, player, theme, state);
     } else if (customId === 'profile_achievements') {
@@ -119,6 +123,8 @@ async function handleProfileInteraction(interaction) {
       await handleRefresh(interaction, player, theme, progress, state);
     } else if (customId === 'profile_share') {
       await handleShare(interaction, player, theme, progress);
+    } else if (customId.startsWith('activate_bonus:')) {
+      await handleActivateBonus(interaction, player, theme, state);
     } else if (customId === 'profile_inventory_filter') {
       await handleInventoryFilter(interaction, player, theme, progress, state);
     } else if (customId === 'profile_inventory_first') {
@@ -189,6 +195,116 @@ async function handleInventory(interaction, player, theme, progress, state) {
 }
 
 /**
+ * 💫 Handler: Mes Bonus
+ */
+async function handleBonuses(interaction, player, theme, state) {
+  state.currentView = 'bonuses';
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showBonuses(interaction, player, theme);
+  await interaction.editReply(content);
+}
+
+/**
+ * ⚡ Handler: Activer un bonus manuel
+ */
+async function handleActivateBonus(interaction, player, theme, state) {
+  const [, bonusId] = interaction.customId.split(':');
+  const guildId = interaction.guildId;
+
+  try {
+    // Récupérer le bonus à activer
+    const activeBonusRecord = await db.query(
+      `SELECT pab.*, sb.name, sb.description, sb.icon, sb.duration_type, sb.duration_value
+       FROM player_active_bonuses pab
+       JOIN super_bonuses sb ON pab.bonus_id = sb.id
+       WHERE pab.id = $1 AND pab.user_id = $2 AND pab.guild_id = $3`,
+      [bonusId, interaction.user.id, guildId]
+    );
+
+    if (activeBonusRecord.length === 0) {
+      return interaction.editReply({
+        content: '❌ Ce bonus n\'existe pas ou ne t\'appartient pas.',
+        components: []
+      });
+    }
+
+    const bonus = activeBonusRecord[0];
+
+    // Vérifier si déjà activé
+    if (bonus.activated_at !== null) {
+      return interaction.editReply({
+        content: `❌ Le bonus **${bonus.name}** est déjà actif !`,
+        components: []
+      });
+    }
+
+    // Activer le bonus
+    const now = new Date();
+    let expiresAt = null;
+    let remainingCharges = bonus.remaining_charges; // Conserver la valeur existante
+
+    if (bonus.duration_type === 'temporary' && bonus.duration_value) {
+      expiresAt = new Date(now.getTime() + bonus.duration_value * 1000);
+    }
+
+    // Initialiser remaining_charges si NULL pour les bonus de type 'charges'
+    if (bonus.duration_type === 'charges' && remainingCharges === null && bonus.duration_value) {
+      remainingCharges = bonus.duration_value;
+    }
+
+    await db.query(
+      `UPDATE player_active_bonuses
+       SET activated_at = $1, expires_at = $2, remaining_charges = $3
+       WHERE id = $4`,
+      [now, expiresAt, remainingCharges, bonusId]
+    );
+
+    console.log(`✅ [BONUS ACTIVATION] ${interaction.user.tag} a activé le bonus "${bonus.name}" (ID: ${bonusId})`);
+
+    // Préparer message de confirmation
+    const icon = bonus.icon || '⚡';
+    let durationText = '';
+
+    if (bonus.duration_type === 'permanent') {
+      durationText = '♾️ **Permanent** - Actif sans limite de temps';
+    } else if (bonus.duration_type === 'charges') {
+      durationText = `🔢 **${bonus.remaining_charges} charge(s)** disponibles`;
+    } else if (bonus.duration_type === 'temporary') {
+      const hours = Math.floor(bonus.duration_value / 3600);
+      const minutes = Math.floor((bonus.duration_value % 3600) / 60);
+      durationText = `⏱️ **Actif pendant ${hours}h ${minutes}min**`;
+    }
+
+    await interaction.editReply({
+      content:
+        `✨ **Bonus Activé !**\n\n` +
+        `${icon} **${bonus.name}**\n` +
+        `${bonus.description}\n\n` +
+        `${durationText}\n\n` +
+        `💡 *Le bonus est maintenant actif et ses effets s'appliquent automatiquement !*`,
+      components: []
+    });
+
+    // Rafraîchir la vue des bonus après 2 secondes
+    setTimeout(async () => {
+      try {
+        await handleBonuses(interaction, player, theme, state);
+      } catch (error) {
+        // Ignorer les erreurs (interaction peut être expirée)
+      }
+    }, 2000);
+
+  } catch (error) {
+    console.error('🔴 Erreur handleActivateBonus:', error);
+    return interaction.editReply({
+      content: `❌ Erreur lors de l'activation du bonus: ${error.message}`,
+      components: []
+    });
+  }
+}
+
+/**
  * 📜 Handler: Historique
  */
 async function handleHistory(interaction, player, theme, state) {
@@ -221,6 +337,8 @@ async function handleRefresh(interaction, player, theme, progress, state) {
     await handleOverview(interaction, player, theme, progress, state);
   } else if (currentView === 'inventory') {
     await handleInventory(interaction, player, theme, progress, state);
+  } else if (currentView === 'bonuses') {
+    await handleBonuses(interaction, player, theme, state);
   } else if (currentView === 'history') {
     await handleHistory(interaction, player, theme, state);
   } else if (currentView === 'achievements') {

@@ -172,11 +172,12 @@ class MysteryBoxHandler {
    * Sélectionner un collectible de manière pondérée selon la rareté
    * @param {array} collectibles - Liste des collectibles disponibles
    * @param {object} config - Configuration du thème (contient les pourcentages par rareté)
+   * @param {object} customPercentages - Pourcentages personnalisés (optionnel, pour boost Aimant à Légendaires)
    * @returns {object} Collectible sélectionné
    */
-  selectCollectibleWeighted(collectibles, config) {
-    // Récupérer les pourcentages depuis la config (défauts: legendary=5, epic=10, rare=20, common=40)
-    const percentages = {
+  selectCollectibleWeighted(collectibles, config, customPercentages = null) {
+    // Utiliser les percentages personnalisés (boostés) ou la config par défaut
+    const percentages = customPercentages || {
       legendary: config.collectible_rarity_legendary || 5,
       epic: config.collectible_rarity_epic || 10,
       rare: config.collectible_rarity_rare || 20,
@@ -233,9 +234,10 @@ class MysteryBoxHandler {
    * @param {object} config - Configuration du thème
    * @param {string} mode - Mode forcé (optionnel): 'mystery_box', 'mission', 'trap', 'super_bonus', 'collectible'
    * @param {number} itemId - ID de l'item spécifique (optionnel)
+   * @param {string} userId - ID Discord du joueur (pour appliquer les bonus)
    * @returns {object} {type, id, item}
    */
-  async rollMysteryContent(guildId, themeId, config, mode = null, itemId = null) {
+  async rollMysteryContent(guildId, themeId, config, mode = null, itemId = null, userId = null) {
     let type, items, item;
 
     console.log(`🔍 [MYSTERY BOX] rollMysteryContent appelé avec mode="${mode}", itemId="${itemId}"`);
@@ -377,8 +379,31 @@ class MysteryBoxHandler {
 
     // Sélectionner un item du type
     if (type === 'collectible') {
+      // 🧲 Appliquer Aimant à Légendaires si le joueur l'a actif
+      let customPercentages = null;
+      let rarityBoostInfo = null;
+
+      if (userId) {
+        const boostResult = await superBonusHandler.applyCollectibleRarityBoost(
+          guildId,
+          userId,
+          {
+            legendary: config.collectible_rarity_legendary || 5,
+            epic: config.collectible_rarity_epic || 10,
+            rare: config.collectible_rarity_rare || 20,
+            common: config.collectible_rarity_common || 40
+          }
+        );
+
+        if (boostResult.hasBoost) {
+          customPercentages = boostResult.percentages;
+          rarityBoostInfo = boostResult.boost;
+          console.log(`🧲 [AIMANT] Boost appliqué pour ${userId}: ${rarityBoostInfo.target} ${rarityBoostInfo.original}% → ${rarityBoostInfo.normalized}%`);
+        }
+      }
+
       // Sélection pondérée par rareté pour les collectibles
-      item = this.selectCollectibleWeighted(items, config);
+      item = this.selectCollectibleWeighted(items, config, customPercentages);
       console.log(`🎯 Collectible sélectionné (pondéré): ${item.name} (${item.rarity})`);
     } else {
       // Sélection uniforme pour missions et pièges (pas de rareté)
@@ -441,6 +466,28 @@ class MysteryBoxHandler {
     const theme = await db.getActiveTheme(interaction.guildId);
     const config = await db.getThemeConfig(interaction.guildId, theme.id);
 
+    // Rollér le contenu pour cette boîte
+    const content = await this.rollMysteryContent(interaction.guildId, theme.id, config, type, itemId, interaction.user.id);
+
+    // 👁️ VISION DIVINE - Vérifier si le joueur a le bonus actif
+    const visionDivineResult = await superBonusHandler.checkAndRevealVisionDivine(
+      interaction.user.id,
+      interaction.guildId,
+      content,
+      interaction.message.id
+    );
+
+    if (visionDivineResult) {
+      console.log(`👁️ [VISION DIVINE] Révélation envoyée au joueur ${interaction.user.tag}`);
+      // Révélation avec choix accept/decline - NE PAS continuer le flow normal
+      return interaction.followUp({
+        ...visionDivineResult,
+        flags: 64 // Ephemeral
+      });
+    }
+
+    // Pas de Vision Divine, continuer le flow normal avec le contenu rollé
+
     // Message personnalisé ou par défaut
     const winnerMessage = config?.mystery_box_winner_message ||
       '🎉 **{player}** a ouvert la boîte mystère !';
@@ -485,33 +532,33 @@ class MysteryBoxHandler {
       console.warn('⚠️ Impossible d\'ajouter des réactions:', error.message);
     }
 
-    // Révéler le contenu selon le type
-    console.log(`🔍 [MYSTERY BOX] Switch statement - type="${type}", itemId="${itemId}"`);
+    // Révéler le contenu selon le type (utilise le content déjà rollé)
+    console.log(`🔍 [MYSTERY BOX] Switch statement - content.type="${content.type}", content.id="${content.id}"`);
 
-    switch (type) {
+    switch (content.type) {
       case 'collectible':
         console.log('🎁 [MYSTERY BOX] Case collectible atteint');
-        await this.revealCollectible(interaction, parseInt(itemId), player);
+        await this.revealCollectible(interaction, parseInt(content.id), player);
         break;
 
       case 'mission':
         console.log('📋 [MYSTERY BOX] Case mission atteint');
-        await this.revealMission(interaction, parseInt(itemId), player);
+        await this.revealMission(interaction, parseInt(content.id), player);
         break;
 
       case 'trap':
         console.log('⚠️ [MYSTERY BOX] Case trap atteint');
-        await this.revealTrap(interaction, parseInt(itemId), player);
+        await this.revealTrap(interaction, parseInt(content.id), player);
         break;
 
       case 'super_bonus':
         console.log('✨ [MYSTERY BOX] Case super_bonus atteint - Appel revealSuperBonus()');
-        await this.revealSuperBonus(interaction, parseInt(itemId), player);
+        await this.revealSuperBonus(interaction, parseInt(content.id), player);
         console.log('✨ [MYSTERY BOX] revealSuperBonus() terminé');
         break;
 
       default:
-        console.error(`❌ [MYSTERY BOX] Type inconnu: "${type}"`);
+        console.error(`❌ [MYSTERY BOX] Type inconnu: "${content.type}"`);
     }
 
     // Le gagnant a déjà été enregistré au début de la fonction (ligne 244)
@@ -534,56 +581,187 @@ class MysteryBoxHandler {
       });
     }
 
-    // Vérifier si le joueur l'a déjà
+    // 💰 JACKPOT X2 - Vérifier si le joueur a le bonus actif AVANT le check doublon
+    const jackpotBonus = await superBonusHandler.hasMultiplierBonus(
+      interaction.guildId,
+      interaction.user.id,
+      'collectible'
+    );
+
+    let bonusCollectible = null;
+
+    if (jackpotBonus) {
+      console.log(`💰 [JACKPOT X2] Bonus actif pour ${interaction.user.tag} - Charge restante: ${jackpotBonus.remaining_charges}`);
+
+      // Récupérer TOUS les collectibles du thème actif avec required_items
+      const allCollectibles = await db.query(
+        `SELECT c.*, t.required_items
+         FROM collectibles c
+         JOIN themes t ON c.theme_id = t.id
+         WHERE c.guild_id = $1 AND c.theme_id = $2`,
+        [interaction.guildId, collectible.theme_id]
+      );
+
+      // Filtrer pour obtenir un collectible DIFFÉRENT du principal (doublons acceptés)
+      const availableCollectibles = allCollectibles.filter(c => c.id !== collectibleId);
+
+      if (availableCollectibles.length > 0) {
+        // Tirer un collectible au hasard (uniforme, pas de rareté pondérée)
+        bonusCollectible = availableCollectibles[Math.floor(Math.random() * availableCollectibles.length)];
+
+        console.log(`💰 [JACKPOT X2] Collectible bonus tiré: ${bonusCollectible.name} (${bonusCollectible.rarity})`);
+      } else {
+        console.log(`💰 [JACKPOT X2] Impossible de tirer un collectible différent (un seul collectible existe dans le thème)`);
+      }
+    }
+
+    // Vérifier si le bonus est un doublon
+    let bonusIsDuplicate = false;
+    if (bonusCollectible) {
+      bonusIsDuplicate = await db.hasCollectible(interaction.guildId, player.id, bonusCollectible.id);
+      if (bonusIsDuplicate) {
+        console.log(`⚠️ [JACKPOT X2] Bonus collectible est un doublon: ${bonusCollectible.name}`);
+      }
+    }
+
+    // Vérifier si le joueur a déjà le collectible PRINCIPAL
     const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, collectibleId);
 
+    // Variables pour progression
+    let progress = null;
+
     if (alreadyHas) {
-      // Doublon
+      console.log(`⚠️ [DOUBLON] Le joueur a déjà ${collectible.name}, mais Jackpot x2 ${bonusCollectible ? 'actif' : 'inactif'}`);
+
+      // Si Jackpot x2 actif, ajouter quand même le collectible bonus et consommer la charge
+      if (bonusCollectible) {
+        await db.addCollectible(interaction.guildId, player.id, bonusCollectible.id, 'mystery_box');
+        progress = await db.incrementProgress(interaction.guildId, player.id, bonusCollectible.theme_id);
+
+        // Consommer une charge du bonus
+        await superBonusHandler.consumeBonusCharge(
+          interaction.guildId,
+          interaction.user.id,
+          jackpotBonus.id
+        );
+
+        console.log(`💰 [JACKPOT X2] Charge consommée - Restant: ${jackpotBonus.remaining_charges - 1}`);
+        console.log(`💰 [JACKPOT X2] Progression bonus: ${progress.collected_count}/${bonusCollectible.required_items}`);
+      }
+
+      // Message doublon avec mention du bonus si applicable
+      const rarityEmojis = {
+        legendary: '🌟',
+        epic: '💎',
+        rare: '💙',
+        common: '⚪'
+      };
+
+      const rarityColors = {
+        legendary: '#FFD700',
+        epic: '#9B59B6',
+        rare: '#3498DB',
+        common: '#95A5A6'
+      };
+
+      let description = `Tu as déjà **${collectible.name}** dans ta collection !`;
+
+      if (bonusCollectible) {
+        description += `\n\n💰 **Mais grâce au Jackpot x2, tu as reçu un collectible bonus !**`;
+      }
+
       const embed = new EmbedBuilder()
-        .setTitle('⚠️ Doublon !')
-        .setDescription(`Tu as déjà **${collectible.name}** dans ta collection !`)
-        .setColor(branding.secondary_color)
+        .setTitle(bonusCollectible ? '🎉 Félicitations !' : '⚠️ Doublon !')
+        .setDescription(description)
+        .setColor(bonusCollectible ? rarityColors[bonusCollectible.rarity] : branding.secondary_color)
         .setThumbnail(collectible.image_url)
         .setFooter(await getLoomixFooter(interaction.guildId));
+
+      if (bonusCollectible) {
+        embed.addFields({
+          name: `💰 ${rarityEmojis[bonusCollectible.rarity]} ${bonusCollectible.name} *(BONUS${bonusIsDuplicate ? ' - ⚠️ DOUBLON' : ''})*`,
+          value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n┗━ Progression: **${progress?.collected_count || '?'}/${bonusCollectible.required_items}**\n┗━ Charges restantes: **${jackpotBonus.remaining_charges - 1}**`,
+          inline: false
+        });
+        embed.setImage(bonusCollectible.image_url);
+      }
 
       return interaction.followUp({ embeds: [embed], flags: 64 });
     }
 
-    // Vérifier si le joueur a un multiplicateur de récompense actif
-    const multiplierData = await superBonusHandler.getRewardMultiplier(interaction.user.id);
-    let bonusApplied = false;
+    // Pas de doublon: ajouter le collectible principal
+    await db.addCollectible(interaction.guildId, player.id, collectibleId, 'mystery_box');
+    progress = await db.incrementProgress(interaction.guildId, player.id, collectible.theme_id);
 
-    // Ajouter le collectible
-    await db.addCollectible(interaction.guildId, player.id, collectibleId);
-    const progress = await db.incrementProgress(interaction.guildId, player.id, collectible.theme_id);
+    // Si Jackpot x2 actif, ajouter aussi le collectible bonus
+    if (bonusCollectible) {
+      await db.addCollectible(interaction.guildId, player.id, bonusCollectible.id, 'mystery_box');
 
-    // Appliquer le multiplicateur si actif (à implémenter: doubler les points)
-    if (multiplierData && multiplierData.appliesTo === 'collectible' || multiplierData?.appliesTo === 'all') {
-      await superBonusHandler.consumeMultiplierCharge(interaction.user.id);
-      bonusApplied = true;
-      // TODO: Implémenter le système de points et doubler la récompense ici
+      // Consommer une charge du bonus
+      await superBonusHandler.consumeBonusCharge(
+        interaction.guildId,
+        interaction.user.id,
+        jackpotBonus.id
+      );
+
+      console.log(`💰 [JACKPOT X2] Charge consommée - Restant: ${jackpotBonus.remaining_charges - 1}`);
     }
 
     // Message de révélation
     let description = collectible.reveal_message ||
       `Félicitations ! Tu as trouvé **${collectible.name}** !`;
 
-    if (bonusApplied) {
-      description += `\n\n💵 **Bonus actif:** ${multiplierData.bonus.icon} ${multiplierData.bonus.name}\n` +
-        `Récompense multipliée par ${multiplierData.multiplier}x !`;
+    if (bonusCollectible) {
+      description += `\n\n💰 **JACKPOT X2 ACTIVÉ !**\n` +
+        `Tu as également reçu **${bonusCollectible.name}** (${bonusCollectible.rarity}) en bonus !`;
+
+      if (bonusIsDuplicate) {
+        description += ` ⚠️ **DOUBLON**`;
+      }
     }
 
+    // Créer un embed moderne
+    const rarityEmojis = {
+      legendary: '🌟',
+      epic: '💎',
+      rare: '💙',
+      common: '⚪'
+    };
+
+    const rarityColors = {
+      legendary: '#FFD700', // Or
+      epic: '#9B59B6',      // Violet
+      rare: '#3498DB',      // Bleu
+      common: '#95A5A6'     // Gris
+    };
+
     const embed = new EmbedBuilder()
-      .setTitle('🎉 Collectible Obtenu !')
+      .setTitle(`${bonusCollectible ? '💰 JACKPOT X2 ACTIVÉ !' : '🎉 Collectible Obtenu !'}`)
       .setDescription(description)
-      .setColor(collectible.role_color || branding.secondary_color)
-      .setThumbnail(collectible.image_url)
-      .addFields({
-        name: 'Progression',
-        value: `${progress.collected_count}/${collectible.required_items}`,
-        inline: true
-      })
-      .setFooter(getLoomixFooterWithCustomText(`Rareté: ${collectible.rarity}`));
+      .setColor(collectible.role_color || rarityColors[collectible.rarity] || branding.secondary_color)
+      .setThumbnail(collectible.image_url);
+
+    // Collectible principal
+    embed.addFields({
+      name: `${rarityEmojis[collectible.rarity]} ${collectible.name}`,
+      value: `┗━ Rareté: **${collectible.rarity.toUpperCase()}**\n┗━ Progression: **${progress.collected_count}/${collectible.required_items}**`,
+      inline: false
+    });
+
+    // Collectible bonus si Jackpot x2 activé
+    if (bonusCollectible) {
+      embed.addFields({
+        name: `💰 ${rarityEmojis[bonusCollectible.rarity]} ${bonusCollectible.name} *(BONUS${bonusIsDuplicate ? ' - ⚠️ DOUBLON' : ''})*`,
+        value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n┗━ Charges restantes: **${jackpotBonus.remaining_charges - 1}**`,
+        inline: false
+      });
+
+      // Image du collectible bonus
+      embed.setImage(bonusCollectible.image_url);
+    }
+
+    embed.setFooter(getLoomixFooterWithCustomText(`${bonusCollectible ? '2 collectibles obtenus !' : `Rareté: ${collectible.rarity}`}`))
+      .setTimestamp();
 
     await interaction.followUp({ embeds: [embed], flags: 64 });
 
@@ -717,11 +895,11 @@ class MysteryBoxHandler {
     }
 
     // Vérifier si le joueur a un bouclier anti-piège
-    const trapShield = await superBonusHandler.hasTrapShield(interaction.user.id);
+    const trapShield = await superBonusHandler.hasTrapShield(interaction.guildId, interaction.user.id);
 
     if (trapShield) {
       // Consommer le bouclier
-      await superBonusHandler.consumeTrapShield(interaction.user.id, trap.name);
+      await superBonusHandler.consumeTrapShield(interaction.guildId, interaction.user.id, trap.name);
 
       // Embed de blocage du piège
       const embed = new EmbedBuilder()
@@ -1253,6 +1431,191 @@ class MysteryBoxHandler {
       });
     } catch (e) {
       // Ignore si MPs fermés
+    }
+  }
+
+  /**
+   * 👁️ VISION DIVINE - Accepter le contenu révélé
+   */
+  async handleVisionDivineAccept(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      // Parse customId: vision_divine_accept:MESSAGE_ID:TYPE:ID
+      const [, messageId, type, itemId] = interaction.customId.split(':');
+
+      console.log(`👁️ [VISION DIVINE ACCEPT] User ${interaction.user.tag} accepte le contenu: ${messageId} → ${type} #${itemId}`);
+
+      // Vérifier que c'est bien le gagnant de cette boîte
+      const giveLog = await db.query(
+        `SELECT * FROM give_logs WHERE message_id = $1`,
+        [messageId]
+      );
+
+      if (giveLog.length === 0 || giveLog[0].winner_id !== interaction.user.id) {
+        return interaction.editReply({
+          content: '❌ Erreur: Cette boîte ne vous appartient pas ou a déjà été traitée.',
+          embeds: [],
+          components: [],
+          flags: 64
+        });
+      }
+
+      // Nettoyer le tracking Vision Divine pour cette boîte
+      superBonusHandler.clearVisionDivineTracking(messageId, interaction.user.id);
+
+      // Récupérer player
+      const player = await db.upsertPlayer(interaction.guildId, interaction.user.id, interaction.user.username);
+
+      // Récupérer config et branding
+      const theme = await db.getActiveTheme(interaction.guildId);
+      const config = await db.getThemeConfig(interaction.guildId, theme.id);
+      const branding = await db.getGuildBranding(interaction.guildId);
+
+      // Créer message de félicitations
+      const winnerMessage = config?.mystery_box_winner_message ||
+        '🎉 **{player}** a ouvert la boîte mystère !';
+      const celebrationGif = config?.mystery_box_celebration_gif ||
+        'https://media.giphy.com/media/g9582DNuQppxC/giphy.gif';
+      const celebrationEmojis = config?.mystery_box_celebration_emojis
+        ? config.mystery_box_celebration_emojis.split(',').map(e => e.trim())
+        : ['🎉', '🎊', '✨', '🌟'];
+      const confettiLine = celebrationEmojis.slice(0, 3).join(' ').repeat(2);
+
+      const winnerEmbed = new EmbedBuilder()
+        .setTitle(`${celebrationEmojis[0]} FÉLICITATIONS ! ${celebrationEmojis[0]}`)
+        .setDescription(`${confettiLine}\n\n${winnerMessage.replace('{player}', `<@${interaction.user.id}>`)}\n\n${confettiLine}`)
+        .setColor(branding.secondary_color)
+        .setThumbnail(interaction.user.displayAvatarURL())
+        .setImage(celebrationGif)
+        .setFooter(await getLoomixFooter(interaction.guildId))
+        .setTimestamp();
+
+      // Éditer le message de révélation
+      await interaction.editReply({
+        embeds: [winnerEmbed],
+        components: []
+      });
+
+      // Mettre à jour le message ORIGINAL de la mystery box dans le canal
+      try {
+        const originalMessage = await interaction.channel.messages.fetch(messageId);
+
+        // Créer l'embed "Boîte ouverte"
+        const openedEmbed = new EmbedBuilder()
+          .setTitle('📦 Boîte Mystère Ouverte !')
+          .setDescription(`Cette boîte a été ouverte par <@${interaction.user.id}> ! 🎉`)
+          .setColor(branding.primary_color)
+          .setFooter(await getLoomixFooter(interaction.guildId))
+          .setTimestamp();
+
+        // Éditer le message original pour retirer le bouton
+        await originalMessage.edit({
+          embeds: [openedEmbed],
+          components: []
+        });
+
+        console.log(`🔄 [VISION DIVINE] Message original ${messageId} mis à jour (bouton retiré)`);
+      } catch (error) {
+        console.error(`⚠️ [VISION DIVINE] Impossible de mettre à jour le message original ${messageId}:`, error.message);
+      }
+
+      // Révéler le contenu selon le type
+      console.log(`🔍 [VISION DIVINE] Révélation contenu: type="${type}", itemId="${itemId}"`);
+
+      switch (type) {
+        case 'collectible':
+          await this.revealCollectible(interaction, parseInt(itemId), player);
+          break;
+
+        case 'mission':
+          await this.revealMission(interaction, parseInt(itemId), player);
+          break;
+
+        case 'trap':
+          await this.revealTrap(interaction, parseInt(itemId), player);
+          break;
+
+        case 'super_bonus':
+          await this.revealSuperBonus(interaction, parseInt(itemId), player);
+          break;
+
+        default:
+          console.error(`❌ [VISION DIVINE] Type inconnu: "${type}"`);
+      }
+
+      console.log(`✅ [VISION DIVINE ACCEPT] Complété pour ${interaction.user.tag}`);
+
+    } catch (error) {
+      console.error('❌ Erreur handleVisionDivineAccept:', error);
+      return interaction.editReply({
+        content: `❌ Erreur lors de l'ouverture: ${error.message}`,
+        embeds: [],
+        components: [],
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * 👁️ VISION DIVINE - Décliner le contenu révélé
+   */
+  async handleVisionDivineDecline(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      // Parse customId: vision_divine_decline:MESSAGE_ID
+      const [, messageId] = interaction.customId.split(':');
+
+      console.log(`👁️ [VISION DIVINE DECLINE] User ${interaction.user.tag} décline le contenu du message ${messageId}`);
+
+      // Récupérer le give_log
+      const giveLog = await db.query(
+        `SELECT * FROM give_logs WHERE message_id = $1`,
+        [messageId]
+      );
+
+      console.log(`🔍 [VISION DIVINE DECLINE] Give log trouvé:`, giveLog.length > 0 ? {
+        id: giveLog[0].id,
+        winner_id: giveLog[0].winner_id,
+        winner_username: giveLog[0].winner_username
+      } : 'AUCUN');
+
+      if (giveLog.length === 0) {
+        console.error(`❌ [VISION DIVINE DECLINE] Aucun give_log trouvé pour message ${messageId}`);
+        return interaction.editReply({
+          content: '❌ Erreur: Cette boîte n\'existe pas dans les logs.',
+          embeds: [],
+          components: [],
+          flags: 64
+        });
+      }
+
+      // Libérer la boîte (remettre winner_id à NULL)
+      // On ne vérifie PAS le winner_id car Vision Divine permet de voir avant de décider
+      await db.query(
+        `UPDATE give_logs SET winner_id = NULL, winner_username = NULL WHERE message_id = $1`,
+        [messageId]
+      );
+
+      console.log(`✅ [VISION DIVINE DECLINE] Boîte ${messageId} libérée et disponible pour d'autres joueurs`);
+
+      // Message de confirmation
+      await interaction.editReply({
+        content: '✅ Tu as choisi de passer cette boîte. Elle est à nouveau disponible pour les autres joueurs !\n\n💡 *Note: 1 charge de Vision Divine a été consommée.*',
+        embeds: [],
+        components: [],
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleVisionDivineDecline:', error);
+      return interaction.editReply({
+        content: `❌ Erreur: ${error.message}`,
+        embeds: [],
+        components: [],
+        flags: 64
+      });
     }
   }
 }

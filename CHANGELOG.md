@@ -5,6 +5,154 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+## [1.4.1] - 2025-11-18
+
+### 🔥 Fixed
+
+#### **🔴 CRITIQUE - Isolation Multi-Serveur pour Super Bonuses**
+- **Date**: 2025-11-18
+- **Type**: PATCH - Bug critique de sécurité multi-serveur
+- **Fichiers modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) (lignes 576-591, 626-641, 676-690)
+- **Problème**:
+  - Les modifications de durée/charges des super bonuses s'appliquaient sur **TOUS les serveurs** au lieu du serveur courant
+  - 3 requêtes UPDATE manquaient la condition `WHERE guild_id = $X`
+- **Fonctions corrigées**:
+  1. `handleEditBonusDurationHours()` - ligne 576
+  2. `handleEditBonusDurationDays()` - ligne 626
+  3. `handleEditBonusDurationCharges()` - ligne 676
+- **Corrections appliquées**:
+  - Ajout de `const guildId = interaction.guildId;` en début de fonction
+  - SELECT: `WHERE id = $1` → `WHERE id = $1 AND guild_id = $2`
+  - UPDATE: `WHERE id = $2` → `WHERE id = $2 AND guild_id = $3`
+- **Impact**: Les modifications de super bonuses sont maintenant correctement isolées par serveur
+
+### ✨ Added
+
+#### **Sprint 1 - Implémentation et Validation des 3 Premiers Super Bonuses**
+
+##### 👁️ **Vision Divine - Système de Révélation Complet**
+- **Date**: 2025-11-16 → 2025-11-18
+- **Type**: Nouveau système de révélation de mystery boxes
+- **Fichiers créés/modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) (lignes 718-890):
+    - `checkAndRevealVisionDivine()` - Vérifie si le bonus est actif et révèle le contenu
+    - `createVisionDivineEmbed()` - Crée l'embed stylé de révélation
+    - `clearVisionDivineTracking()` - Nettoie le tracking après utilisation
+    - `visionDivineUsed` Set - Tracking anti-multi-trigger par (messageId, userId)
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 469-490):
+    - Intégration avant l'ouverture de la boîte
+    - Rollage du contenu en avance pour révélation
+    - Boutons Accept/Decline pour choix du joueur
+- **Fonctionnalités**:
+  - **Révélation anticipée**: Affiche le contenu AVANT l'ouverture de la mystery box
+  - **Embed doré**: Design unique avec gif mystique et breakdown détaillé
+  - **Informations révélées**:
+    - Type de contenu (Collectible, Mission, Piège, Super Bonus)
+    - Nom et description de l'item
+    - Rareté avec emoji coloré
+    - Durée/Charges pour les super bonus
+  - **Choix joueur**: Boutons "✅ Accepter et Ouvrir" / "❌ Passer"
+  - **Anti-multi-trigger**: Système de tracking (messageId:userId) pour éviter double consommation
+  - **Consommation automatique**: 1 charge consommée à la révélation (pas au choix)
+- **Impact**: Bonus stratégique pour optimiser les ouvertures de mystery boxes
+
+##### 💰 **Jackpot x2 - Multiplicateur de Collectibles**
+- **Date**: 2025-11-16 → 2025-11-18
+- **Type**: Nouveau système de double récompense
+- **Fichiers créés/modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) (lignes 958-982):
+    - `hasMultiplierBonus()` - Vérifie si le joueur a Jackpot x2 actif
+    - `consumeBonusCharge()` - Consomme une charge de bonus (générique)
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 584-723):
+    - Tirage d'un collectible bonus DIFFÉRENT du principal
+    - Gestion des doublons pour collectible principal ET bonus
+    - Affichage visuel avec progression pour les 2 collectibles
+    - Consommation de 1 charge après attribution
+  - [utils/database-pg.js](utils/database-pg.js) (ligne 1872):
+    - Description corrigée: "La prochaine mystery box donnera DOUBLE récompense si collectible !"
+- **Fonctionnalités**:
+  - **Double collectible**: Si mystery box contient un collectible → 2 collectibles au lieu d'1
+  - **Collectible différent**: Le bonus est tiré aléatoirement (uniforme, pas de rareté pondérée)
+  - **Gestion doublons**:
+    - Collectible principal doublon + bonus non-doublon → Seul le bonus est ajouté
+    - Les 2 sont des doublons → Message informatif avec détails des 2
+  - **Affichage visuel**: Embed avec les 2 collectibles, progression, charges restantes
+  - **1 charge = 1 utilisation**: Corrigé de "5 utilisations" à "1 utilisation"
+- **Impact**: Bonus économique pour accélérer la complétion des collections
+
+##### 🧲 **Aimant à Légendaires - Boost de Rareté**
+- **Date**: 2025-11-16 → 2025-11-18
+- **Type**: Nouveau système de boost de probabilités
+- **Fichiers créés/modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) (lignes 893-955):
+    - `applyCollectibleRarityBoost()` - Applique +50% sur rareté légendaire
+    - Normalisation automatique pour respecter 100%
+    - Logs détaillés des probabilités avant/après boost
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 382-406):
+    - Intégration dans `rollMysteryContent()` avec `userId` optionnel
+    - `selectCollectibleWeighted()` modifié pour accepter `customPercentages`
+    - Application du boost avant la sélection du collectible
+- **Fonctionnalités**:
+  - **Boost légendaire**: +50% de probabilité d'obtenir un collectible légendaire
+  - **Exemples**:
+    - Base: 5% legendary → Avec bonus: 55% legendary (avant normalisation)
+    - Après normalisation à 100%: ~37% legendary
+  - **Pas de consommation**: Bonus permanent (duration_type = 'permanent')
+  - **Logs détaillés**: Console affiche probabilités avant/après/normalisées
+  - **Configuration en heures**: Sélecteur 1-10h pour contrôle fin (voir section Changed)
+- **Impact**: Bonus stratégique pour cibler les collectibles rares
+
+##### 🧪 **Tests End-to-End Sprint 1**
+- **Date**: 2025-11-16 → 2025-11-18
+- **Scripts E2E créés**:
+  - `scripts/test-aimant-legendaires-v2.js` - Validation complète Aimant à Légendaires
+    - Utilise EXACTEMENT la même logique que mysteryBoxHandler.js
+    - Simulation 1000 ouvertures avec boost actif
+    - Vérifie augmentation significant de legendary (attendu: 37% au lieu de 5%)
+    - Tests avec joueur réel ayant le bonus actif
+  - `scripts/test-aimant-scenarios.js` - Scénarios multiples Aimant
+  - `scripts/test-vision-divine-cumul.js` - Tests cumul Vision Divine
+  - `scripts/test-vision-divine-fixes.js` - Validation fixes Vision Divine
+- **Documentation créée**:
+  - [TESTS-SUPER-BONUS-E2E.md](TESTS-SUPER-BONUS-E2E.md) - Guide de tests E2E complet
+    - 6 tests détaillés avec procédures pas-à-pas
+    - Scripts SQL de vérification
+    - Checklist finale de validation
+  - [GUIDE-TESTS-AIMANT-JACKPOT.md](GUIDE-TESTS-AIMANT-JACKPOT.md) - Guide tests Aimant & Jackpot
+  - [SPEC-AIMANT-JACKPOT-IMPLEMENTATION.md](SPEC-AIMANT-JACKPOT-IMPLEMENTATION.md) - Spécifications techniques
+  - [RECAP-AIMANT-JACKPOT-IMPLEMENTATION.md](RECAP-AIMANT-JACKPOT-IMPLEMENTATION.md) - Récapitulatif implémentation
+- **Validation**:
+  - ✅ Vision Divine: Révélation + choix + tracking + consommation
+  - ✅ Jackpot x2: Double collectible + doublons + affichage
+  - ✅ Aimant à Légendaires: Boost +50% + normalisation + logs
+  - ✅ Isolation multi-serveur: guild_id dans toutes les requêtes
+  - ✅ Tests E2E: Scripts automatisés + tests manuels Discord
+
+### 🔧 Changed
+
+#### **Configuration Durée "Aimant à Légendaires" en Heures (1-10h)**
+- **Date**: 2025-11-18
+- **Type**: MINOR - Amélioration de l'UX pour le super bonus "Aimant à Légendaires"
+- **Fichiers modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) (lignes 313-330, 419-451, 793-811):
+    - `handleBonusDurationSelect()` - Ajout condition spéciale pour legendary_magnet → sélecteur 1-10h uniquement
+    - `createBonusReceivedEmbed()` - Toujours afficher en heures pour legendary_magnet
+    - `buildVisionEmbedRow()` - Toujours afficher en heures pour legendary_magnet (Vision Divine)
+  - Base de données (via script) - Description mise à jour pour retirer mention de durée
+- **Fonctionnalités**:
+  - **Admin Panel**: Sélecteur de durée affiche maintenant 1-10 heures (au lieu de 1-10 jours auto-détecté)
+  - **Affichage**: La durée s'affiche toujours en heures dans les embeds
+  - **Description**: Retrait de "(3 jours)" de la description du bonus (durée affichée dynamiquement)
+- **Scripts créés**:
+  - `scripts/check-legendary-magnet.js` - Vérification configuration actuelle du bonus
+  - `scripts/update-legendary-magnet-description.js` - Retrait "(3 jours)" de la description
+  - `scripts/find-duration-display.js` - Recherche tous les endroits où la durée est affichée
+- **Justification**: Les durées en jours (24h+) étaient trop longues pour ce bonus. Configuration en heures permet un contrôle plus fin (1-10h).
+- **Impact**: Autres super bonuses gardent leur comportement actuel (auto-détection heures/jours).
+
 ## [1.4.0] - 2025-11-16
 
 ### ✨ Added
