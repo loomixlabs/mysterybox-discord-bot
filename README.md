@@ -2,7 +2,7 @@
 
 **Bot Discord multi-serveur avec système de collectibles, missions et pièges thématiques**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/loomixlabs/mysterybox-discord-bot)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](https://github.com/loomixlabs/mysterybox-discord-bot)
 [![Discord.js](https://img.shields.io/badge/discord.js-v14.16-blue.svg)](https://discord.js.org/)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-16-blue.svg)](https://www.postgresql.org/)
 [![Node.js](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
@@ -54,17 +54,24 @@
   - Statistiques détaillées
   - Collection complète avec preview
   - Historique des acquisitions
-  - Super bonus actifs
+  - **Interface "Mes Bonus" redesignée** avec séparateurs visuels clairs
+  - Distinction bonus automatiques vs manuels
+  - Boutons d'activation pour bonus manuels
 
 - **Leaderboard en Temps Réel**
   - Classement par nombre de collectibles
   - Tri par rareté
   - Mise à jour automatique
 
-- **Système de Super Bonus**
-  - Bonus temporaires avec durée configurable
-  - Multiplicateurs de points
-  - Affichage des bonus actifs
+- **Système de Super Bonus** (11 bonus uniques)
+  - **👁️ Vision Divine** - Révèle le contenu d'une mystery box avant ouverture
+  - **💰 Jackpot x2** - Double les collectibles lors de l'ouverture
+  - **🧲 Aimant à Légendaires** - +50% de chance d'obtenir des légendaires
+  - Bonus automatiques (activation instantanée) vs manuels (activation au choix)
+  - Système de charges et de durées configurables
+  - Interface `/profile → Mes Bonus` pour gérer tous les bonus
+  - Activation/désactivation par les admins
+  - Système de cumul pour bonus multiples
 
 ### 🎯 Système de Campagnes
 
@@ -87,9 +94,12 @@
 - **Panel Admin Complet** (`/admin-panel`)
   - Gestion des collectibles (création, modification, suppression)
   - Gestion des pièges
+  - **Gestion des Super Bonus** (activation/désactivation, modification durées/charges/raretés)
   - Configuration des annonces personnalisées
   - Gestion des campagnes
+  - **Archivage automatique** des messages de félicitation Mystery Box
   - Templates d'annonces avec variables dynamiques
+  - Interface moderne avec rafraîchissement automatique
 
 - **Setup Wizard** (`/setup`)
   - Configuration initiale guidée du serveur
@@ -894,4 +904,4 @@ Ce projet est sous licence **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus
 
 **Made with ❤️ by LoomixLabs**
 
-Version 1.1.0 - Dernière mise à jour: 13 novembre 2025
+Version 1.5.0 - Dernière mise à jour: 19 novembre 2025

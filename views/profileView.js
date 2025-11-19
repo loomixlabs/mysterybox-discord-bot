@@ -647,11 +647,7 @@ async function showBonuses(interaction, player, theme) {
     .setTitle(`💫 Mes Super Bonus - ${player.username}`)
     .setColor(color)
     .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setDescription(
-      `🎁 Gère tes super bonus obtenus via les Mystery Boxes!\n\n` +
-      `**✨ Actifs**: ${automaticBonuses.length} bonus\n` +
-      `**🎯 En attente**: ${manualBonuses.length} bonus à activer`
-    );
+    .setDescription(`🎁 Gère tes super bonus obtenus via les Mystery Boxes!`);
 
   // Section: Bonus actifs (automatiques + manuels activés)
   if (automaticBonuses.length > 0) {
@@ -682,14 +678,14 @@ async function showBonuses(interaction, player, theme) {
     }).join('\n\n');
 
     embed.addFields({
-      name: '✨ Bonus Actifs',
-      value: activeBonusText,
+      name: '\u200B', // Espace invisible pour commencer une nouvelle section
+      value: `━━━━━━━━━━━━━━━━━━━━━━━━━━\n**✨ BONUS ACTIFS (${automaticBonuses.length})**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${activeBonusText}`,
       inline: false
     });
   } else {
     embed.addFields({
-      name: '✨ Bonus Actifs',
-      value: 'Aucun bonus actif pour le moment',
+      name: '\u200B',
+      value: `━━━━━━━━━━━━━━━━━━━━━━━━━━\n**✨ BONUS ACTIFS (0)**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nAucun bonus actif pour le moment`,
       inline: false
     });
   }
@@ -716,14 +712,14 @@ async function showBonuses(interaction, player, theme) {
     }).join('\n\n');
 
     embed.addFields({
-      name: '🎯 Bonus à Activer',
-      value: manualBonusText + '\n\n💡 *Utilise les boutons ci-dessous pour activer tes bonus manuels*',
+      name: '\u200B',
+      value: `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n**🎯 BONUS À ACTIVER (${manualBonuses.length})**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${manualBonusText}\n\n💡 *Utilise les boutons ci-dessous pour activer tes bonus manuels*`,
       inline: false
     });
   } else {
     embed.addFields({
-      name: '🎯 Bonus à Activer',
-      value: 'Aucun bonus en attente d\'activation',
+      name: '\u200B',
+      value: `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n**🎯 BONUS À ACTIVER (0)**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nAucun bonus en attente d'activation`,
       inline: false
     });
   }

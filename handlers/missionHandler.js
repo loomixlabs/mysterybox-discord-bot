@@ -669,11 +669,22 @@ class MissionHandler {
     await db.completeCollection(interaction.guildId, player.id, theme.id);
 
     // Attribuer le rôle final
-    const finalRole = interaction.guild.roles.cache.find(r => r.name === theme.final_role_name);
+    if (theme.final_role_discord_id) {
+      try {
+        const finalRole = interaction.guild.roles.cache.get(theme.final_role_discord_id);
 
-    if (finalRole) {
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      await member.roles.add(finalRole);
+        if (finalRole) {
+          const member = await interaction.guild.members.fetch(interaction.user.id);
+          await member.roles.add(finalRole);
+          console.log(`✅ Rôle "${finalRole.name}" attribué à ${interaction.user.tag}`);
+        } else {
+          console.error(`❌ Rôle ${theme.final_role_discord_id} introuvable dans le serveur`);
+        }
+      } catch (error) {
+        console.error('❌ Erreur lors de l\'attribution du rôle:', error);
+      }
+    } else {
+      console.log('⚠️  Aucun rôle configuré pour ce thème');
     }
 
     // Annonce publique

@@ -336,10 +336,21 @@ class GiveHandler {
       await db.completeCollection(interaction.guildId, player.id, collectible.theme_id);
 
       // Attribuer le rôle final
-      const finalRole = guild.roles.cache.find(r => r.name === collectible.final_role_name);
-      if (finalRole) {
-        await member.roles.add(finalRole);
-        console.log(`✅ Rôle final ${finalRole.name} attribué à ${member.user.username}`);
+      if (collectible.final_role_discord_id) {
+        try {
+          const finalRole = guild.roles.cache.get(collectible.final_role_discord_id);
+
+          if (finalRole) {
+            await member.roles.add(finalRole);
+            console.log(`✅ Rôle "${finalRole.name}" attribué à ${member.user.username}`);
+          } else {
+            console.error(`❌ Rôle ${collectible.final_role_discord_id} introuvable dans le serveur`);
+          }
+        } catch (error) {
+          console.error('❌ Erreur lors de l\'attribution du rôle:', error);
+        }
+      } else {
+        console.log('⚠️  Aucun rôle configuré pour ce thème');
       }
 
       // Récupérer les messages personnalisés

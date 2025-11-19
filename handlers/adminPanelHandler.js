@@ -77,9 +77,36 @@ class AdminPanelHandler {
       await this.showCollectiblesMenu(interaction);
     } else if (customId === 'admin_missions') {
       await this.showMissionsMenu(interaction);
-    } else if (customId === 'admin_super_bonuses') {
-      await this.showSuperBonusesMenu(interaction);
-    } else if (customId === 'admin_bonus_edit_rarity') {
+    }
+    // Gestion des Super Bonus (délégation vers superBonusHandler)
+    else if (
+      customId === 'admin_super_bonuses' ||
+      customId === 'super_bonus_select' ||
+      customId === 'super_bonus_enable_all' ||
+      customId === 'super_bonus_disable_all' ||
+      customId.startsWith('bonus_toggle_')
+    ) {
+      const superBonusHandler = require('./superBonusHandler');
+
+      // Router vers la fonction appropriée
+      if (customId === 'admin_super_bonuses') {
+        return superBonusHandler.showSuperBonusesAdminPanel(interaction);
+      } else if (customId === 'super_bonus_enable_all') {
+        return superBonusHandler.enableAllSuperBonuses(interaction);
+      } else if (customId === 'super_bonus_disable_all') {
+        return superBonusHandler.disableAllSuperBonuses(interaction);
+      } else if (customId.startsWith('bonus_toggle_')) {
+        const bonusId = parseInt(customId.split('_')[2]);
+        return superBonusHandler.toggleSuperBonus(interaction, bonusId);
+      } else if (customId === 'super_bonus_select') {
+        // Le select menu retourne le bonusId dans interaction.values[0]
+        const selectedValue = interaction.values[0]; // Format: "bonus_toggle_123"
+        const bonusId = parseInt(selectedValue.split('_')[2]);
+        return superBonusHandler.toggleSuperBonus(interaction, bonusId);
+      }
+    }
+    // Anciens menus d'édition de bonus (garder pour compatibilité)
+    else if (customId === 'admin_bonus_edit_rarity') {
       await this.showEditBonusRarityMenu(interaction);
     } else if (customId === 'admin_bonus_edit_duration') {
       await this.showEditBonusDurationMenu(interaction);
@@ -157,6 +184,8 @@ class AdminPanelHandler {
       await this.showCelebrationTutorial(interaction);
     } else if (customId === 'theme_winner_message_open_modal') {
       await this.showWinnerMessageModal(interaction);
+    } else if (customId === 'mystery_box_toggle_auto_delete') {
+      await this.toggleAutoDeleteCelebration(interaction);
     } else if (customId === 'theme_config_refresh') {
       await this.showThemeConfigMenu(interaction);
     } else if (customId === 'theme_config_back') {
@@ -481,6 +510,12 @@ class AdminPanelHandler {
     }
 
     // Super Bonus - Déléguer à superBonusHandler (qui fera son propre defer)
+    if (customId === 'super_bonus_select') {
+      // Le select menu retourne le bonusId dans interaction.values[0]
+      const selectedValue = interaction.values[0]; // Format: "bonus_toggle_123"
+      const bonusId = parseInt(selectedValue.split('_')[2]);
+      return superBonusHandler.toggleSuperBonus(interaction, bonusId);
+    }
     if (customId === 'select_duration_for_bonus') {
       return superBonusHandler.handleBonusDurationSelect(interaction);
     }
@@ -1040,88 +1075,86 @@ class AdminPanelHandler {
     const theme = await db.getActiveTheme(interaction.guildId);
     const config = await db.getThemeConfig(interaction.guildId, theme.id);
 
-    // Calculer l'expiration du thème
-    const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
-
-    // Créer la barre de progression
+    // Créer la barre de progression pour les probabilités
     const createMiniProgressBar = (percentage) => {
-      const totalBars = 15;
+      const totalBars = 10;
       const filledBars = Math.round((percentage / 100) * totalBars);
       const emptyBars = totalBars - filledBars;
-      let fillEmoji = percentage >= 70 ? '🟩' : percentage >= 30 ? '🟨' : '🟥';
-      return fillEmoji.repeat(filledBars) + '⬜'.repeat(emptyBars);
+      return '🟦'.repeat(filledBars) + '⬜'.repeat(emptyBars);
     };
 
-    // Générer le texte de durée
-    let durationText = '';
-    let progressBar = '';
-
-    if (expirationInfo.isUnlimited) {
-      durationText = '♾️ Illimitée';
-    } else if (expirationInfo.notActivated) {
-      durationText = `⏸️ Non activé (${theme.duration_days}j configurés)`;
-    } else if (expirationInfo.isExpired) {
-      durationText = '🔴 EXPIRÉ';
-      progressBar = '\n' + createMiniProgressBar(0);
-    } else {
-      const daysText = expirationInfo.daysRemaining === 0 ?
-        `⏰ ${expirationInfo.hoursRemaining}h restantes` :
-        expirationInfo.daysRemaining === 1 ?
-        `⚠️ ${expirationInfo.daysRemaining} jour restant` :
-        `⏱️ ${expirationInfo.daysRemaining} jours restants`;
-
-      durationText = `${daysText} (${expirationInfo.percentageRemaining}%)`;
-      progressBar = '\n' + createMiniProgressBar(expirationInfo.percentageRemaining);
-    }
+    // Statut du toggle archivage
+    const autoDeleteStatus = config.auto_delete_celebration_message ? '✅ ON' : '⬜ OFF';
+    const autoDeleteEmoji = config.auto_delete_celebration_message ? '🟢' : '⚪';
 
     const embed = new EmbedBuilder()
-      .setTitle('⚙️ Configuration du Thème')
+      .setTitle('🎁 Gérer la Mystery Box')
       .setDescription(
-        `**Thème:** ${theme.name}\n` +
-        `**Durée restante:** ${durationText}${progressBar}\n\n` +
-        `💡 *Après toute modification, clique sur 🔄 Rafraîchir pour voir les changements*\n\n` +
-        `Choisis un paramètre à modifier :`
+        `**Thème actif:** ${theme.name}\n\n` +
+        `Configure l'apparence et le comportement des mystery boxes :`
       )
-      .setColor('#e67e22');
-
-    if (config) {
-      embed.addFields(
+      .setColor('#9b59b6')
+      .addFields(
         {
-          name: '🎲 Probabilités',
-          value: `Collectibles: ${config.probability_collectible}%\nMissions: ${config.probability_mission}%\nPièges: ${config.probability_trap}%\nSuper Bonus: ${config.probability_super_bonus || 0}%`,
+          name: '🎲 Probabilités de contenu',
+          value:
+            `🎁 Collectibles: **${config.probability_collectible}%**\n${createMiniProgressBar(config.probability_collectible)}\n\n` +
+            `📋 Missions: **${config.probability_mission}%**\n${createMiniProgressBar(config.probability_mission)}\n\n` +
+            `⚠️ Pièges: **${config.probability_trap}%**\n${createMiniProgressBar(config.probability_trap)}\n\n` +
+            `✨ Super Bonus: **${config.probability_super_bonus || 0}%**\n${createMiniProgressBar(config.probability_super_bonus || 0)}`,
           inline: false
         },
         {
-          name: '🖼️ Boîte mystère',
-          value: `Titre: ${config.mystery_box_title}\nImage: ${config.mystery_box_image || 'Aucune'}`,
+          name: '🖼️ Apparence de la boîte',
+          value:
+            `**Titre:** ${config.mystery_box_title || 'Boîte Mystère'}\n` +
+            `**Image:** ${config.mystery_box_image ? '✅ Définie' : '❌ Par défaut'}`,
+          inline: false
+        },
+        {
+          name: '🎉 Message de félicitations',
+          value:
+            `**Texte:** ${config.mystery_box_winner_message ? '✅ Personnalisé' : '❌ Par défaut'}\n` +
+            `**GIF:** ${config.mystery_box_celebration_gif ? '✅ Personnalisé' : '❌ Par défaut'}`,
+          inline: false
+        },
+        {
+          name: `${autoDeleteEmoji} Archivage automatique`,
+          value:
+            `**Statut:** ${autoDeleteStatus}\n` +
+            `Les messages de félicitation ${config.auto_delete_celebration_message ? 'seront supprimés après 10 secondes' : 'restent affichés dans le salon'}`,
           inline: false
         }
-      );
-    }
+      )
+      .setFooter({ text: '💡 Clique sur 🔄 Rafraîchir après chaque modification pour voir les changements' });
 
     const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('theme_image')
+        .setCustomId('mystery_box_image')
         .setLabel('🖼️ Modifier l\'image')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('mystery_box_title')
+        .setLabel('📝 Modifier le titre')
         .setStyle(ButtonStyle.Primary)
     );
 
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('theme_title')
-        .setLabel('📝 Modifier titre/description')
+        .setCustomId('mystery_box_winner_message')
+        .setLabel('✉️ Message de félicitations')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('theme_duration')
-        .setLabel('⏱️ Modifier la durée')
+        .setCustomId('mystery_box_celebration_gif')
+        .setLabel('🎬 GIF de célébration')
         .setStyle(ButtonStyle.Primary)
     );
 
     const row3 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('theme_winner_message')
-        .setLabel('✉️ Message de félicitations')
-        .setStyle(ButtonStyle.Primary)
+        .setCustomId('mystery_box_toggle_auto_delete')
+        .setLabel(`${autoDeleteEmoji} Archivage auto: ${config.auto_delete_celebration_message ? 'ON' : 'OFF'}`)
+        .setStyle(config.auto_delete_celebration_message ? ButtonStyle.Success : ButtonStyle.Secondary)
     );
 
     const row4 = new ActionRowBuilder().addComponents(
@@ -1139,6 +1172,44 @@ class AdminPanelHandler {
       embeds: [embed],
       components: [row1, row2, row3, row4]
     });
+  }
+
+  /**
+   * Toggle archivage automatique des messages de félicitation
+   */
+  async toggleAutoDeleteCelebration(interaction) {
+    await interaction.deferUpdate();
+
+    const theme = await db.getActiveTheme(interaction.guildId);
+    const config = await db.getThemeConfig(interaction.guildId, theme.id);
+
+    // Inverser le statut
+    const newStatus = !config.auto_delete_celebration_message;
+
+    // Mettre à jour dans la base de données
+    await db.query(
+      `UPDATE theme_config
+       SET auto_delete_celebration_message = $1
+       WHERE guild_id = $2 AND theme_id = $3`,
+      [newStatus, interaction.guildId, theme.id]
+    );
+
+    console.log(`✅ [MYSTERY BOX] Archivage auto ${newStatus ? 'ACTIVÉ' : 'DÉSACTIVÉ'} pour ${interaction.guildId}`);
+
+    // Logger l'action
+    await audit.logAdminAction(
+      interaction.guildId,
+      interaction.user.id,
+      'mystery_box_auto_delete_toggled',
+      {
+        theme_id: theme.id,
+        theme_name: theme.name,
+        new_status: newStatus
+      }
+    );
+
+    // Rafraîchir le menu pour afficher le changement
+    await this.showThemeConfigMenu(interaction);
   }
 
   /**
@@ -2885,7 +2956,7 @@ class AdminPanelHandler {
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('admin_theme_config')
-        .setLabel('⚙️ Configurer le Thème')
+        .setLabel('🎁 Gérer la Mystery Box')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!theme), // Désactivé si pas de thème
       new ButtonBuilder()

@@ -257,11 +257,12 @@ class GiveUniqueHandler {
 
     // Mode Super Bonus
     else if (mode === 'super_bonus') {
-      const bonuses = await db.getAllSuperBonuses();
+      // Récupérer UNIQUEMENT les super bonus actifs (is_enabled = TRUE)
+      const bonuses = await db.getAllSuperBonuses(interaction.guildId, null, true);
 
       if (bonuses.length === 0) {
         return interaction.editReply({
-          content: '❌ Aucun super bonus disponible.',
+          content: '❌ Aucun super bonus actif disponible.\n\n💡 **Astuce:** Active des super bonus dans le panneau Super Admin pour pouvoir les envoyer.',
           embeds: [],
           components: [
             new ActionRowBuilder().addComponents(
@@ -281,7 +282,8 @@ class GiveUniqueHandler {
           `**Thème:** ${theme.name}\n\n` +
           `**ÉTAPE 2/4 - SÉLECTION DE L'ITEM**\n\n` +
           `Choisis le super bonus à envoyer aux joueurs:\n\n` +
-          `✨ **Super bonus disponibles:** ${bonuses.length}`
+          `✨ **Super bonus actifs:** ${bonuses.length}\n` +
+          `💡 *Seuls les super bonus activés sont affichés*`
         )
         .setColor('#9b59b6');
 
@@ -291,7 +293,7 @@ class GiveUniqueHandler {
         .addOptions(
           bonuses.slice(0, 25).map(bonus => ({
             label: `${bonus.icon} ${bonus.name}`.substring(0, 100),
-            description: bonus.description?.substring(0, 100) || 'Super Bonus',
+            description: `${bonus.rarity.toUpperCase()} • ${bonus.description?.substring(0, 80) || 'Super Bonus'}`,
             value: `${bonus.id}`
           }))
         );

@@ -1005,6 +1005,257 @@ async function consumeBonusCharge(guildId, userId, activeBonusId) {
   // TODO: Implémenter db.logBonusUsage() pour tracer l'utilisation
 }
 
+// ============================================================================
+// ADMINISTRATION - GESTION ACTIVATION/DÉSACTIVATION DES SUPER BONUS
+// ============================================================================
+
+/**
+ * Afficher le panneau d'administration des super bonus
+ * Design moderne 2025: Sombre, compact, avec badges visuels
+ */
+async function showSuperBonusesAdminPanel(interaction) {
+  // Ne déférer que si pas déjà déféré (éviter double defer depuis toggleSuperBonus)
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferUpdate();
+  }
+
+  const guildId = interaction.guildId;
+
+  // Récupérer tous les super bonus du serveur
+  const bonuses = await db.queryAll(`
+    SELECT
+      id,
+      bonus_id,
+      name,
+      description,
+      icon,
+      rarity,
+      effect_type,
+      activation_mode,
+      is_enabled,
+      (SELECT COUNT(*) FROM player_active_bonuses pab
+       WHERE pab.bonus_id = super_bonuses.id
+         AND pab.guild_id = super_bonuses.guild_id
+         AND pab.is_active = TRUE
+         AND (pab.expires_at IS NULL OR pab.expires_at > NOW())) as active_users
+    FROM super_bonuses
+    WHERE guild_id = $1
+    ORDER BY
+      CASE rarity
+        WHEN 'legendary' THEN 1
+        WHEN 'epic' THEN 2
+        WHEN 'rare' THEN 3
+        WHEN 'common' THEN 4
+      END,
+      name
+  `, [guildId]);
+
+  if (bonuses.length === 0) {
+    return interaction.editReply({
+      content: '❌ Aucun super bonus trouvé pour ce serveur.',
+      components: []
+    });
+  }
+
+  // Statistiques
+  const totalBonuses = bonuses.length;
+  const enabledCount = bonuses.filter(b => b.is_enabled).length;
+  const disabledCount = totalBonuses - enabledCount;
+  const activeUsersTotal = bonuses.reduce((sum, b) => sum + parseInt(b.active_users), 0);
+
+  // Compter les bonus inactifs (is_active = FALSE ou expirés)
+  const inactiveBonusesCount = await db.queryOne(`
+    SELECT COUNT(*) as count
+    FROM player_active_bonuses
+    WHERE guild_id = $1
+      AND (is_active = FALSE OR (expires_at IS NOT NULL AND expires_at <= NOW()))
+  `, [guildId]);
+  const inactiveCount = parseInt(inactiveBonusesCount.count) || 0;
+
+  // Créer l'embed principal (Design 2025: Sombre, moderne, compact)
+  const embed = new EmbedBuilder()
+    .setTitle('⭐ GESTION DES SUPER BONUS')
+    .setDescription(
+      `### 📊 Vue d'ensemble\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `\`\`\`ansi\n` +
+      `\x1b[32m●\x1b[0m ${enabledCount} activé${enabledCount > 1 ? 's' : ''}  |  ` +
+      `\x1b[31m●\x1b[0m ${disabledCount} désactivé${disabledCount > 1 ? 's' : ''}  |  ` +
+      `\x1b[36m${activeUsersTotal} activation${activeUsersTotal > 1 ? 's' : ''} en cours  |  ` +
+      `\x1b[33m${inactiveCount} bonus inactif${inactiveCount > 1 ? 's' : ''}\n` +
+      `\`\`\`\n\n` +
+      `### 🎁 Liste des Bonus\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
+    )
+    .setColor('#2B2D31'); // Couleur sombre Discord 2025
+
+  // Grouper par rareté
+  const rarityGroups = {
+    legendary: { emoji: '🌟', label: 'LÉGENDAIRE', bonuses: [] },
+    epic: { emoji: '💜', label: 'ÉPIQUE', bonuses: [] },
+    rare: { emoji: '💎', label: 'RARE', bonuses: [] },
+    common: { emoji: '⚪', label: 'COMMUN', bonuses: [] }
+  };
+
+  for (const bonus of bonuses) {
+    rarityGroups[bonus.rarity].bonuses.push(bonus);
+  }
+
+  // Construire la description par rareté
+  let description = embed.data.description;
+  for (const [rarity, group] of Object.entries(rarityGroups)) {
+    if (group.bonuses.length === 0) continue;
+
+    description += `${group.emoji} **${group.label}**\n`;
+    for (const bonus of group.bonuses) {
+      const statusEmoji = bonus.is_enabled ? '🟢' : '🔴';
+      const usersBadge = bonus.active_users > 0 ? ` • \`${bonus.active_users} 👤\`` : '';
+      const modeIcon = bonus.activation_mode === 'automatic' ? '⚡' : '🎯';
+      description += `${statusEmoji} **${bonus.icon} ${bonus.name}** ${modeIcon}${usersBadge}\n`;
+    }
+    description += '\n';
+  }
+
+  description += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `💡 Sélectionne un bonus pour l'activer ou le désactiver`;
+
+  embed.setDescription(description);
+  embed.setFooter({ text: '⚡ Automatique | 🎯 Manuel • 👤 Activations en cours' });
+  embed.setTimestamp();
+
+  // Créer le menu de sélection (max 25 options)
+  const selectOptions = bonuses.slice(0, 25).map(bonus => {
+    const statusEmoji = bonus.is_enabled ? '🟢' : '🔴';
+    const rarityEmoji = rarityGroups[bonus.rarity].emoji;
+    return {
+      label: `${bonus.icon} ${bonus.name}`.substring(0, 100),
+      description: `${statusEmoji} ${bonus.is_enabled ? 'Activé' : 'Désactivé'} • ${rarityGroups[bonus.rarity].label}`.substring(0, 100),
+      value: `bonus_toggle_${bonus.id}`,
+      emoji: rarityEmoji
+    };
+  });
+
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId('super_bonus_select')
+    .setPlaceholder('Sélectionner un super bonus à gérer')
+    .addOptions(selectOptions);
+
+  const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+  // Boutons d'action globale
+  const row2 = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('super_bonus_enable_all')
+        .setLabel('🟢 Tout Activer')
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(enabledCount === totalBonuses),
+      new ButtonBuilder()
+        .setCustomId('super_bonus_disable_all')
+        .setLabel('🔴 Tout Désactiver')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(disabledCount === totalBonuses),
+      new ButtonBuilder()
+        .setCustomId('admin_settings')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+  // Boutons d'édition avancée
+  const row3 = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_bonus_edit_duration')
+        .setLabel('⏱️ Modifier Durée/Charges')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('admin_bonus_edit_rarity')
+        .setLabel('🎨 Modifier Raretés')
+        .setStyle(ButtonStyle.Primary)
+    );
+
+  await interaction.editReply({
+    embeds: [embed],
+    components: [row1, row2, row3]
+  });
+}
+
+/**
+ * Activer/Désactiver un super bonus individuel
+ */
+async function toggleSuperBonus(interaction, bonusId) {
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+
+  // Récupérer le bonus
+  const bonus = await db.queryOne(`
+    SELECT * FROM super_bonuses
+    WHERE id = $1 AND guild_id = $2
+  `, [bonusId, guildId]);
+
+  if (!bonus) {
+    return interaction.followUp({
+      content: '❌ Super bonus introuvable.',
+      flags: 64
+    });
+  }
+
+  // Inverser le statut
+  const newStatus = !bonus.is_enabled;
+
+  await db.query(`
+    UPDATE super_bonuses
+    SET is_enabled = $1
+    WHERE id = $2 AND guild_id = $3
+  `, [newStatus, bonusId, guildId]);
+
+  console.log(`🔄 [SUPER BONUS] ${bonus.name} ${newStatus ? 'ACTIVÉ' : 'DÉSACTIVÉ'} dans ${guildId}`);
+
+  // Rafraîchir le panneau directement (pas de message de confirmation séparé)
+  await showSuperBonusesAdminPanel(interaction);
+}
+
+/**
+ * Activer tous les super bonus
+ */
+async function enableAllSuperBonuses(interaction) {
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+
+  await db.query(`
+    UPDATE super_bonuses
+    SET is_enabled = TRUE
+    WHERE guild_id = $1 AND is_enabled = FALSE
+  `, [guildId]);
+
+  console.log(`🟢 [SUPER BONUS] Tous les bonus activés dans ${guildId}`);
+
+  // Rafraîchir le panneau directement
+  await showSuperBonusesAdminPanel(interaction);
+}
+
+/**
+ * Désactiver tous les super bonus
+ */
+async function disableAllSuperBonuses(interaction) {
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+
+  await db.query(`
+    UPDATE super_bonuses
+    SET is_enabled = FALSE
+    WHERE guild_id = $1 AND is_enabled = TRUE
+  `, [guildId]);
+
+  console.log(`🔴 [SUPER BONUS] Tous les bonus désactivés dans ${guildId}`);
+
+  // Rafraîchir le panneau directement
+  await showSuperBonusesAdminPanel(interaction);
+}
+
 module.exports = {
   cleanupExpiredBonuses,
   getPlayerActiveBonuses,
@@ -1031,5 +1282,10 @@ module.exports = {
   handleBonusDurationSelect,
   handleEditBonusDurationHours,
   handleEditBonusDurationDays,
-  handleEditBonusDurationCharges
+  handleEditBonusDurationCharges,
+  // Admin panel - Activation/Désactivation
+  showSuperBonusesAdminPanel,
+  toggleSuperBonus,
+  enableAllSuperBonuses,
+  disableAllSuperBonuses
 };

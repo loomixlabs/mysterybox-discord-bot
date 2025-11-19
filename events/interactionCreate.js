@@ -157,7 +157,7 @@ module.exports = {
         }
 
         // Boutons du panneau admin
-        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId === 'thread_cancel_collectible') {
+        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId === 'thread_cancel_collectible') {
           await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
@@ -279,7 +279,8 @@ module.exports = {
             interaction.customId.startsWith('template_color_select_') ||
             interaction.customId.startsWith('give_unique_') ||
             interaction.customId.startsWith('campaign_') ||
-            interaction.customId.startsWith('trap_')) {
+            interaction.customId.startsWith('trap_') ||
+            interaction.customId.startsWith('super_bonus_')) {
           await adminPanelHandler.handleSelectMenu(interaction);
         }
         // Select menus Super-Admin

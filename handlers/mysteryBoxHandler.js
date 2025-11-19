@@ -97,12 +97,12 @@ class MysteryBoxHandler {
   async selectSuperBonus(guildId, config = null) {
     console.log(`🎁 [SUPER BONUS] Sélection d'un super bonus pour guild ${guildId}...`);
 
-    // Récupérer tous les super bonuses disponibles
+    // Récupérer tous les super bonuses disponibles ET ACTIVÉS
     const bonuses = await db.queryAll(`
       SELECT id, bonus_id, name, rarity, icon, description,
              duration_type, duration_value, effect_type
       FROM super_bonuses
-      WHERE guild_id = $1
+      WHERE guild_id = $1 AND is_enabled = TRUE
       ORDER BY rarity DESC, name
     `, [guildId]);
 
@@ -346,8 +346,8 @@ class MysteryBoxHandler {
         availableTypes.push({ type: 'trap', items: traps });
       }
 
-      // Pour super_bonus, vérifier qu'au moins 1 existe
-      const hasSuperBonuses = await db.queryOne('SELECT COUNT(*) as count FROM super_bonuses WHERE guild_id = $1', [guildId]);
+      // Pour super_bonus, vérifier qu'au moins 1 est activé
+      const hasSuperBonuses = await db.queryOne('SELECT COUNT(*) as count FROM super_bonuses WHERE guild_id = $1 AND is_enabled = TRUE', [guildId]);
       if (hasSuperBonuses && parseInt(hasSuperBonuses.count) > 0) {
         // On met un placeholder, selectSuperBonus() sera appelé si ce type est choisi
         availableTypes.push({ type: 'super_bonus', items: [{ id: 'placeholder' }] });
@@ -530,6 +530,19 @@ class MysteryBoxHandler {
       }
     } catch (error) {
       console.warn('⚠️ Impossible d\'ajouter des réactions:', error.message);
+    }
+
+    // Auto-suppression du message de félicitation après 10 secondes (si activé)
+    if (config.auto_delete_celebration_message) {
+      console.log('🗑️ [MYSTERY BOX] Suppression auto activée - Message sera supprimé dans 10 secondes');
+      setTimeout(async () => {
+        try {
+          await updatedMessage.delete();
+          console.log('✅ [MYSTERY BOX] Message de félicitation supprimé');
+        } catch (error) {
+          console.warn('⚠️ [MYSTERY BOX] Impossible de supprimer le message:', error.message);
+        }
+      }, 10000); // 10 secondes
     }
 
     // Révéler le contenu selon le type (utilise le content déjà rollé)
@@ -868,14 +881,15 @@ class MysteryBoxHandler {
         .setEmoji(msgConfig.buttonEmoji)
     );
 
+    // Créer la progression de mission AVANT d'envoyer le message
+    // Cela garantit que même si thread.send() échoue, on a le mission_progress en base
+    await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id);
+
     await thread.send({
       content: `<@${interaction.user.id}>`,
       embeds: [missionEmbed],
       components: [button]
     });
-
-    // Créer la progression de mission
-    await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id);
   }
 
   /**
@@ -1396,12 +1410,23 @@ class MysteryBoxHandler {
     // Marquer comme complété
     await db.completeCollection(interaction.guildId, player.id, collectible.theme_id);
 
-    // Attribuer le rôle final
-    const finalRole = interaction.guild.roles.cache.find(r => r.name === theme.final_role_name);
+    // Attribuer le rôle final (par ID Discord, pas par nom)
+    if (theme.final_role_discord_id) {
+      try {
+        const finalRole = interaction.guild.roles.cache.get(theme.final_role_discord_id);
 
-    if (finalRole) {
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      await member.roles.add(finalRole);
+        if (finalRole) {
+          const member = await interaction.guild.members.fetch(interaction.user.id);
+          await member.roles.add(finalRole);
+          console.log(`✅ Rôle "${finalRole.name}" attribué à ${interaction.user.tag}`);
+        } else {
+          console.error(`❌ Rôle ${theme.final_role_discord_id} introuvable dans le serveur`);
+        }
+      } catch (error) {
+        console.error('❌ Erreur lors de l\'attribution du rôle:', error);
+      }
+    } else {
+      console.log('⚠️  Aucun rôle configuré pour ce thème');
     }
 
     // Annonce publique via le système d'annonces
@@ -1510,12 +1535,25 @@ class MysteryBoxHandler {
           .setTimestamp();
 
         // Éditer le message original pour retirer le bouton
-        await originalMessage.edit({
+        const updatedOriginalMessage = await originalMessage.edit({
           embeds: [openedEmbed],
           components: []
         });
 
         console.log(`🔄 [VISION DIVINE] Message original ${messageId} mis à jour (bouton retiré)`);
+
+        // Auto-suppression du message après 10 secondes (si activé)
+        if (config.auto_delete_celebration_message) {
+          console.log('🗑️ [VISION DIVINE] Suppression auto activée - Message sera supprimé dans 10 secondes');
+          setTimeout(async () => {
+            try {
+              await updatedOriginalMessage.delete();
+              console.log('✅ [VISION DIVINE] Message original supprimé');
+            } catch (error) {
+              console.warn('⚠️ [VISION DIVINE] Impossible de supprimer le message:', error.message);
+            }
+          }, 10000); // 10 secondes
+        }
       } catch (error) {
         console.error(`⚠️ [VISION DIVINE] Impossible de mettre à jour le message original ${messageId}:`, error.message);
       }

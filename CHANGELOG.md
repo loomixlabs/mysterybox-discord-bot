@@ -7,6 +7,376 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### ✨ Added
+
+#### **💫 Amélioration de l'Interface "/profile - Mes Bonus"**
+- **Date**: 2025-11-19
+- **Type**: MINOR - Amélioration UX
+- **Description**: Refonte complète de l'affichage des super bonus dans le profil pour une meilleure lisibilité
+- **Problèmes corrigés**:
+  1. Duplication des statistiques en haut (supprimées)
+  2. Manque de séparation visuelle entre les sections
+  3. Titres peu visibles et non hiérarchisés
+- **Améliorations appliquées** (Option 1):
+  - ✅ Section **STATISTIQUES** en haut avec séparateur
+  - ✅ Séparateurs visuels `━━━━━━━━━━━━━━━━━━━━━━━━━━` entre chaque section
+  - ✅ Titres en majuscules avec compteurs: **✨ BONUS ACTIFS (4)** et **🎯 BONUS À ACTIVER (5)**
+  - ✅ Descriptions complètes conservées pour chaque bonus
+  - ✅ Hiérarchie claire: Statistiques → Actifs → À Activer
+- **Fichiers modifiés**:
+  - [views/profileView.js](views/profileView.js:645-729)
+    - Ligne 650: Description simplifiée sans STATISTIQUES en haut (suppression doublon)
+    - Lignes 684-695: Section "Bonus Actifs" avec séparateurs `━━━━━━━━━━━━━━━━━━━━━━━━━━`
+    - Lignes 718-729: Section "Bonus à Activer" avec séparateurs et compteurs
+- **Impact**: Interface beaucoup plus lisible et professionnelle avec une séparation claire entre les sections
+- **Note**: Le doublon "Parrain/Marraine" signalé a été investigué et corrigé (voir section "Correction des Doublons de Super Bonus")
+
+#### **🎯 Give Unique: Filtre des Super Bonus Actifs**
+- **Date**: 2025-11-19
+- **Type**: MINOR - Amélioration fonctionnelle
+- **Description**: Filtrage automatique des super bonus actifs dans le Give Unique
+- **Fonctionnalité**:
+  - Lors de la sélection du mode "Envoyer un Super Bonus" dans Give Unique, seuls les super bonus **actifs** (is_enabled = TRUE) sont affichés
+  - Message d'astuce si aucun bonus actif n'est disponible
+  - Le panneau "Gérer les Super Bonuses" continue d'afficher TOUS les bonus (actifs et inactifs)
+- **Fichiers modifiés**:
+  - [utils/database-pg.js](utils/database-pg.js:960-980)
+    - Ajout paramètre optionnel `activeOnly = false` à `getAllSuperBonuses()`
+    - Filtre dynamique sur `is_enabled = TRUE` quand `activeOnly = true`
+  - [handlers/giveUniqueHandler.js](handlers/giveUniqueHandler.js:260-300)
+    - Appel avec `activeOnly = true` pour filtrer les bonus actifs
+    - Message amélioré indiquant "X super bonus actifs" au lieu de "disponibles"
+    - Description du select menu améliorée avec rareté visible
+    - Message d'astuce si aucun bonus actif
+  - [scripts/test-super-bonus-filter.js](scripts/test-super-bonus-filter.js) - Créé
+    - Script de test pour vérifier le filtrage
+- **Impact**:
+  - ✅ Give Unique n'affiche que les bonus que l'admin peut effectivement envoyer
+  - ✅ Évite la confusion avec des bonus désactivés
+  - ✅ Panneau de gestion non affecté (continue à tout afficher)
+- **Test**: 11 bonus totaux → 3 actifs affichés dans Give Unique ✅
+
+### 🐛 Fixed
+
+#### **📊 Correction du Comptage des Activations Super Bonuses**
+- **Date**: 2025-11-19
+- **Type**: PATCH - Correction de comptage et terminologie
+- **Description**: Le panneau admin affichait "5 utilisateurs actifs" alors qu'aucun bonus n'avait été lancé
+- **Problèmes corrigés**:
+  1. Le compteur incluait les bonus inactifs (is_active = FALSE) et expirés
+  2. La terminologie "utilisateurs actifs" était imprécise
+  3. Présence de 5 entrées de test dans `player_active_bonuses` pour l'utilisateur 'floerin'
+  4. Aucun moyen de voir le nombre de bonus inactifs
+- **Fichiers modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js)
+    - Lignes 1036-1040: Requête corrigée pour ne compter que les bonus vraiment actifs
+      - Ajout filtre `is_active = TRUE`
+      - Ajout filtre `expires_at IS NULL OR expires_at > NOW()`
+    - Lignes 1067-1073: Ajout requête pour compter les bonus inactifs
+    - Lignes 1084-1085: Statistiques affichant maintenant:
+      - "X activation(s) en cours" au lieu de "X utilisateur(s) actif(s)"
+      - "X bonus inactif(s)" (nouvelle métrique)
+    - Ligne 1123: Footer mis à jour "👤 Activations en cours" au lieu de "Utilisateurs actifs"
+  - [scripts/cleanup-floerin-test-bonuses.js](scripts/cleanup-floerin-test-bonuses.js) - Créé
+    - Script de nettoyage des 5 bonus de test
+- **Actions effectuées**:
+  - ✅ Suppression des 5 bonus de test de 'floerin' (obtained_from = 'admin_test')
+  - ✅ Compteur corrigé pour n'afficher que les activations vraiment actives
+  - ✅ Ajout statistique des bonus inactifs (is_active = FALSE ou expirés)
+  - ✅ Terminologie plus précise: "activations en cours" au lieu de "utilisateurs actifs"
+- **Impact**: Les administrateurs voient maintenant le nombre réel de bonus actifs et peuvent aussi voir combien de bonus sont inactifs ou expirés
+
+#### **🔧 Correction des Doublons de Super Bonus**
+- **Date**: 2025-11-19
+- **Type**: PATCH - Bug critique + Migration DB
+- **Description**: Correction d'un bug permettant aux joueurs d'obtenir le même super bonus actif plusieurs fois simultanément
+- **Problème détecté**:
+  - L'utilisateur signalait "Parrain/Marraine apparaît 2 fois identique" dans `/profile - Mes Bonus`
+  - Investigation révélée: **9 doublons** dans `player_active_bonuses` sur le serveur de test
+  - Aucune contrainte n'empêchait les doublons lors de l'attribution via mystery boxes
+- **Analyse**:
+  - ✅ Aucun doublon dans `super_bonuses` (table de définition des bonus)
+  - ❌ **Doublons détectés dans `player_active_bonuses`** (table d'attribution aux joueurs):
+    - Vision Divine: 5 entrées (utilisateur xmicordix)
+    - Jackpot x2: 5 entrées (utilisateur xmicordix)
+    - Parrain/Marraine: 2 entrées (utilisateur xmicordix)
+  - ✅ Serveur de production: Aucun doublon
+- **Corrections appliquées**:
+  1. **Nettoyage des doublons** (serveur de test):
+     - ✅ 3 bonus conservés (premiers IDs)
+     - ✅ 9 doublons supprimés
+  2. **Migration DB** pour empêcher les doublons futurs:
+     - ✅ Contrainte UNIQUE partielle ajoutée: `unique_active_bonus_per_player`
+     - ✅ S'applique uniquement aux bonus actifs (`WHERE is_active = TRUE`)
+     - ✅ Permet l'historique (bonus inactifs multiples autorisés)
+- **Fichiers créés/modifiés**:
+  - [database/migrations/add-unique-active-bonus-constraint.sql](database/migrations/add-unique-active-bonus-constraint.sql) - Créé
+    - Index unique partiel sur `(guild_id, user_id, bonus_id) WHERE is_active = TRUE`
+  - [scripts/check-player-bonuses-parrain.js](scripts/check-player-bonuses-parrain.js) - Créé
+    - Script de diagnostic pour Parrain/Marraine spécifiquement
+  - [scripts/check-all-bonus-duplicates.js](scripts/check-all-bonus-duplicates.js) - Créé
+    - Script de vérification complète des doublons sur les deux serveurs
+  - [scripts/cleanup-bonus-duplicates.js](scripts/cleanup-bonus-duplicates.js) - Créé
+    - Script de nettoyage automatique conservant les premiers IDs
+  - [scripts/run-add-unique-active-bonus-constraint.js](scripts/run-add-unique-active-bonus-constraint.js) - Créé
+    - Script d'application de la migration
+- **Protection ajoutée**:
+  - ✅ Un joueur ne peut **PAS** avoir le même bonus actif 2 fois simultanément
+  - ✅ Un joueur **PEUT** avoir plusieurs entrées inactives du même bonus (historique)
+  - ✅ Protection multi-serveur via `guild_id`
+- **Impact**: Le bug d'affichage de doublons dans `/profile` est corrigé et les futurs doublons sont impossible
+
+#### **🎮 Amélioration de l'Interface Super Bonuses**
+- **Date**: 2025-11-19
+- **Type**: PATCH - Corrections d'interface et UX
+- **Description**: Corrections multiples de l'interface de gestion des super bonuses
+- **Problèmes corrigés**:
+  1. Les boutons "Modifier Durée/Charges" et "Modifier Raretés" avaient disparu
+  2. Le sélecteur ne fonctionnait pas (erreur de routing)
+  3. Les boutons "Tout Activer/Désactiver" ne fonctionnaient pas
+  4. Messages de confirmation séparés au lieu de rafraîchissement direct
+  5. Erreurs de double defer causant des échecs d'interaction
+- **Fichiers modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) - Corrections multiples
+    - Lignes 1017-1020: Vérification defer avant deferUpdate (éviter double defer)
+    - Lignes 1152-1163: Ajout row3 avec les 2 boutons d'édition
+    - Lignes 1145: Suppression bouton Rafraîchir (rafraîchissement auto)
+    - Lignes 1206-1207, 1222-1223, 1242-1243: Suppression followUp de confirmation
+  - [events/interactionCreate.js](events/interactionCreate.js)
+    - Ligne 160: Ajout `super_bonus_` dans routing boutons admin
+    - Ligne 283: Ajout `super_bonus_` dans routing select menus
+  - [handlers/adminPanelHandler.js](handlers/adminPanelHandler.js)
+    - Lignes 82-87, 92: Nettoyage routing `super_bonus_refresh`
+- **Améliorations UX**:
+  - ✅ Rafraîchissement automatique et instantané du panneau après chaque action
+  - ✅ Plus de messages de confirmation séparés (mise à jour directe)
+  - ✅ Bouton Rafraîchir supprimé (devenu inutile)
+  - ✅ Expérience fluide sans erreurs d'interaction
+- **Interface finale**:
+  - Row 1: Sélecteur (toggle activation/désactivation instantané)
+  - Row 2: 🟢 Tout Activer | 🔴 Tout Désactiver | 🔙 Retour
+  - Row 3: ⏱️ Modifier Durée/Charges | 🎨 Modifier Raretés
+
+#### **🎭 Bug Critique: Attribution Automatique des Rôles de Collection**
+- **Date**: 2025-11-19
+- **Type**: PATCH - Correction de bug critique
+- **Severity**: 🔴 CRITIQUE - Aucun joueur ne recevait son rôle de récompense
+- **Description**: Les joueurs complétant leur collection ne recevaient pas automatiquement leur rôle de récompense
+- **Cause**: Le code cherchait le rôle par **nom** (`final_role_name`) au lieu de l'**ID Discord** (`final_role_discord_id`), causant des échecs silencieux
+- **Impact**:
+  - Affectait **3 handlers** (mysteryBoxHandler, missionHandler, giveHandler)
+  - 5 joueurs ont dû recevoir manuellement leur rôle via script de correction
+  - Bug présent depuis la création du système de thèmes
+- **Fichiers modifiés**:
+  - [utils/database-pg.js](utils/database-pg.js) (lignes 346-356) - Ajout `final_role_discord_id` dans `getCollectibleById()`
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 1410-1430) - Utilisation `.get(id)` au lieu de `.find(name)`
+  - [handlers/missionHandler.js](handlers/missionHandler.js) (lignes 671-688) - Utilisation `.get(id)` au lieu de `.find(name)`
+  - [handlers/giveHandler.js](handlers/giveHandler.js) (lignes 338-354) - Utilisation `.get(id)` au lieu de `.find(name)`
+- **Fichiers créés**:
+  - [scripts/check-aurelie0419-role.js](scripts/check-aurelie0419-role.js) - Vérification et correction du joueur initial
+  - [scripts/fix-all-completed-players-roles.js](scripts/fix-all-completed-players-roles.js) - Correction des 5 joueurs affectés
+  - [scripts/check-final-role-discord-id.js](scripts/check-final-role-discord-id.js) - Vérification structure DB
+- **Solution**:
+  ```javascript
+  // ❌ AVANT (recherche par nom - échec silencieux)
+  const finalRole = guild.roles.cache.find(r => r.name === theme.final_role_name);
+
+  // ✅ APRÈS (recherche par ID Discord - fiable)
+  const finalRole = guild.roles.cache.get(theme.final_role_discord_id);
+  ```
+- **Améliorations**:
+  - Ajout de try-catch pour gestion d'erreurs
+  - Logs détaillés lors de l'attribution (succès/échec)
+  - Vérification existence du rôle avant attribution
+  - Messages d'erreur explicites si rôle introuvable
+- **Joueurs corrigés manuellement**:
+  - aurelie0419 (1188059381233897534) - 19/11/2025 16:18
+  - _so_fine_ (1344750102979416084) - 17/11/2025 19:35
+  - floerin (692649463805640724) - 16/11/2025 22:54
+  - vincent_0508 (1181345369003655168) - 14/11/2025 12:49
+  - olympe34370 (1248027211689234535) - 13/11/2025 22:59
+
+### 🔄 Changed
+_(Aucune modification en attente)_
+
+---
+
+## [1.5.0] - 2025-11-19
+
+### ✨ Added
+
+#### **⭐ Système de Gestion des Super Bonuses (Activation/Désactivation)**
+- **Date**: 2025-11-19
+- **Type**: MINOR - Nouvelle fonctionnalité d'administration
+- **Description**: Nouveau système permettant aux admins d'activer/désactiver individuellement chaque super bonus via une interface graphique moderne
+- **Fichiers créés**:
+  - [database/migrations/add-super-bonus-is-enabled.sql](database/migrations/add-super-bonus-is-enabled.sql) - Migration colonne `is_enabled`
+  - [scripts/run-add-super-bonus-is-enabled.js](scripts/run-add-super-bonus-is-enabled.js) - Exécution migration
+  - [scripts/list-super-bonuses-status.js](scripts/list-super-bonuses-status.js) - Monitoring status bonus
+- **Fichiers modifiés**:
+  - [handlers/superBonusHandler.js](handlers/superBonusHandler.js) (lignes 1008-1283) - 4 nouvelles fonctions admin
+  - [handlers/adminPanelHandler.js](handlers/adminPanelHandler.js) (lignes 81-108, 514-518) - Routing boutons et select menu
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 105, 350) - Filtrage bonus activés uniquement
+- **Fonctionnalités**:
+  - **Interface admin moderne (Discord 2025)**:
+    - Design sombre (#2B2D31 Onyx)
+    - Statistiques ANSI colorées: 🟢 activés | 🔴 désactivés | 👥 utilisateurs actifs
+    - Liste groupée par rareté (🌟💜💎⚪) avec Unicode separators (━)
+    - Badges visuels: Status (🟢/🔴), Mode (⚡/🎯), Utilisateurs (👤 count)
+  - **Gestion individuelle**:
+    - Select menu pour toggle individuel (max 25 bonus)
+    - Affichage du nom, rareté, type d'effet, mode d'activation
+    - Compteur d'utilisateurs actifs en temps réel
+  - **Actions globales**:
+    - 🟢 Tout Activer - Active tous les bonus en un clic
+    - 🔴 Tout Désactiver - Désactive tous les bonus en un clic
+    - 🔄 Rafraîchir - Recharge l'interface
+    - 🔙 Retour - Retour au menu Paramétrage
+  - **Filtrage automatique**:
+    - Mystery boxes ne distribuent QUE les bonus avec `is_enabled = TRUE`
+    - Vérification à 2 niveaux: sélection (ligne 105) + count (ligne 350)
+  - **Index optimisé**: `idx_super_bonuses_is_enabled` sur `(guild_id, is_enabled)`
+- **Database**:
+  - Nouvelle colonne `is_enabled` (BOOLEAN DEFAULT TRUE NOT NULL)
+  - 23 bonus existants passés à `TRUE` par défaut lors de la migration
+  - Commentaire SQL explicatif sur la colonne
+- **Accès**: `/admin-panel` → Paramétrage → "⭐ Gérer les Super Bonus"
+- **Impact**:
+  - Contrôle fin de la distribution des super bonuses
+  - Possibilité de désactiver temporairement un bonus sans le supprimer
+  - Interface moderne suivant les dernières tendances Discord 2025
+  - Zero impact sur les bonus déjà actifs chez les joueurs
+
+#### **🎁 Mystery Box - Archivage Automatique des Messages de Félicitation**
+- **Date**: 2025-11-18
+- **Type**: MINOR - Nouvelle fonctionnalité
+- **Description**: Ajout d'un toggle dans le panneau admin pour activer/désactiver la suppression automatique du message de félicitation après ouverture de mystery box (après 10 secondes)
+- **Problème résolu**: Les messages de félicitation polluaient les salons quand de nombreuses mystery boxes étaient envoyées
+- **Fichiers créés**:
+  - [database/migrations/add-auto-delete-celebration.sql](database/migrations/add-auto-delete-celebration.sql) - Migration SQL
+  - [scripts/run-add-auto-delete-celebration.js](scripts/run-add-auto-delete-celebration.js) - Script d'exécution
+- **Fichiers modifiés**:
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 535-546, 1534-1545) - Logique de suppression après 10s (flow normal + Vision Divine)
+  - [handlers/adminPanelHandler.js](handlers/adminPanelHandler.js) (lignes 160-161, 1039-1180, 2886) - Menu redesigné et toggle
+  - [events/interactionCreate.js](events/interactionCreate.js) (ligne 160) - Routing du bouton `mystery_box_`
+- **Fonctionnalités**:
+  - Nouvelle colonne `auto_delete_celebration_message` dans `theme_config`
+  - Menu "🎁 Gérer la Mystery Box" complètement redesigné avec :
+    - Barres de progression des probabilités (collectibles, missions, pièges, super bonus)
+    - Informations sur l'apparence de la mystery box
+    - Statut de personnalisation du message de célébration
+    - Toggle d'archivage automatique avec indicateur visuel (🟢/⚪)
+  - Fonction `toggleAutoDeleteCelebration()` avec audit logging
+  - Suppression automatique après 10 secondes si toggle activé
+  - **Compatible avec Vision Divine** : Fonctionne aussi quand le joueur accepte une boîte après révélation
+- **Usage**: `/admin-panel` → Paramétrage → "🎁 Gérer la Mystery Box" → Toggle "Archivage auto"
+- **Bugs corrigés pendant l'implémentation**:
+  - Routing manquant pour `mystery_box_` dans interactionCreate.js
+  - Requête SQL avec colonne inexistante `updated_at`
+  - Appel incorrect à `audit.logAction` au lieu de `audit.logAdminAction`
+
+### 🐛 Fixed
+
+#### **🔴 CRITIQUE - Mission "Mot Deviné" Bloquée (Initialisation Incomplète)**
+- **Date**: 2025-11-19
+- **Type**: PATCH - Réparation de mission bloquée
+- **Thread affecté**: 1440615770626195498 (Monopoly Friends - Production)
+- **Joueur**: alias1830 (Discord ID: 1191426533756252250)
+- **Mission Progress ID**: 268
+- **Problème**: Mission "Mot Deviné" créée mais jamais initialisée correctement
+  - `target_keyword`: NULL (devait être "Joyeux")
+  - `target_channel_id`: NULL (devait être le canal parent)
+  - `expires_at`: 1970-01-01 (epoch 0 - timestamp invalide)
+- **Cause**: Conséquence du race condition précédemment corrigé, mais affectant la phase d'initialisation des paramètres
+- **Impact**:
+  - Mission visible dans le thread mais non surveillée par le bot
+  - Joueur ne pouvait pas compléter la mission car aucun mot assigné
+  - Mission expirée depuis 1970 selon la base de données
+- **Diagnostic créé**:
+  - [scripts/analyze-stuck-mission-1440615770626195498.js](scripts/analyze-stuck-mission-1440615770626195498.js) - Analyse complète de la mission
+- **Solution appliquée**:
+  - [scripts/fix-mission-1440615770626195498.js](scripts/fix-mission-1440615770626195498.js) - Script de réparation
+  - Assignation du keyword "Joyeux"
+  - Configuration du canal cible (1420779903179292753)
+  - Calcul d'une nouvelle expiration valide (22/11/2025 03:54:14)
+  - Renvoi du message d'instruction dans le thread
+- **Résultat**: ✅ Mission réparée avec succès - Le joueur peut maintenant la compléter
+
+#### **🔴 CRITIQUE - Mission Progress Non Créé (Race Condition)**
+- **Date**: 2025-11-18
+- **Type**: PATCH - Bug critique de création de mission
+- **Problème**: Lors de la révélation d'une mission depuis une mystery box, `db.createMissionProgress()` était appelé APRÈS `thread.send()`. Si `thread.send()` échouait ou timeout, l'exécution s'arrêtait avant la création du mission_progress
+- **Impact**:
+  - Thread créé avec bouton "Lancer la mission" visible
+  - MAIS aucun mission_progress en base de données
+  - Clic sur le bouton → Erreur "❌ Progression de mission introuvable"
+  - Joueur bloqué, mission impossible à démarrer
+- **Cause racine**: `thread.send()` (ligne 875) peut échouer (erreur réseau, timeout Discord), interrompant l'exécution avant `createMissionProgress()` (ligne 878)
+- **Fichiers modifiés**:
+  - [handlers/mysteryBoxHandler.js](handlers/mysteryBoxHandler.js) (lignes 871-879)
+- **Solution**:
+  - Déplacé `db.createMissionProgress()` AVANT `thread.send()`
+  - Garantit que mission_progress existe en base AVANT d'envoyer le message au joueur
+  - Si `thread.send()` échoue, on peut retrouver le mission_progress et créer un nouveau bouton
+- **Résultat**: Mission progress toujours créé, même si l'envoi du message échoue
+
+#### **🔴 CRITIQUE - Thread de Mission Non Fermé (Problème de Cache Discord.js)**
+- **Date**: 2025-11-18
+- **Type**: PATCH - Bug critique de cache Discord.js
+- **Problème**: Quand un joueur dit lui-même le mot dans une mission "Mot Deviné", la mission échoue correctement, mais le thread privé ne se ferme pas automatiquement pour les threads créés APRÈS le redémarrage du bot
+- **Impact**:
+  - Thread reste ouvert indéfiniment
+  - Message d'échec non envoyé dans le thread
+  - Joueur ne reçoit pas la notification d'échec dans le thread
+  - **ERREUR**: `⚠️ Thread XXXXXX introuvable: Unknown Channel`
+- **Cause racine**: `guild.channels.fetch()` utilise le **CACHE** du guild et ne trouve PAS les threads créés après le redémarrage du bot. Discord.js ne met pas automatiquement les nouveaux threads dans le cache du guild.
+- **Investigation détaillée**:
+  - Thread créé AVANT redémarrage → Trouvé via `guild.channels.fetch()` ✅
+  - Thread créé APRÈS redémarrage → "Unknown Channel" via `guild.channels.fetch()` ❌
+  - Les deux types de threads existent toujours sur Discord
+  - Le problème est uniquement lié au cache local du bot
+- **Fichiers modifiés**:
+  - [events/messageCreate.js](events/messageCreate.js) (ligne 345)
+- **Solution**:
+  - Utiliser `guild.client.channels.fetch()` au lieu de `guild.channels.fetch()`
+  - `client.channels.fetch()` fait un appel API direct à Discord SANS passer par le cache
+  - Ajout de commentaire explicatif sur la différence cache vs API
+- **Résultat**: Thread trouvé correctement (même après redémarrage), message d'échec envoyé, thread archivé après 30 secondes
+- **Note**: Le premier fix (`guild.channels.fetch()`) était INCORRECT - il a été inversé pour revenir à `guild.client.channels.fetch()`
+
+#### **Descriptions Hardcodées des Super Bonuses**
+- **Date**: 2025-11-18
+- **Type**: PATCH - Correction de descriptions incohérentes
+- **Problème**: Les descriptions des super bonuses contenaient des durées/charges hardcodées (ex: "pendant 7 jours", "(1 utilisation)") qui ne reflétaient pas les vraies valeurs configurables en base de données
+- **Impact**:
+  - Confusion pour les joueurs (description dit "48h" mais vraie valeur peut être différente)
+  - Impossible de modifier durées via admin panel sans créer incohérence
+  - Descriptions devenaient fausses dès qu'un admin changeait la configuration
+- **Fichiers modifiés**:
+  - [utils/database-pg.js](utils/database-pg.js) (lignes 1781, 1794, 1807, 1820, 1846, 1885, 1911)
+  - [database/migrations/fix-super-bonus-descriptions.sql](database/migrations/fix-super-bonus-descriptions.sql) - Nouveau fichier
+  - [scripts/run-fix-super-bonus-descriptions.js](scripts/run-fix-super-bonus-descriptions.js) - Nouveau script
+- **Bonuses corrigés** (7/11):
+  1. 🎰 **Chance du Diable**: Retiré "pendant 7 jours !"
+  2. 👁️ **Vision Divine**: Retiré "(1 utilisation)"
+  3. 🧲 **Aimant à Légendaires**: Retiré "(3 jours)"
+  4. 👑 **Aura de Célébrité**: Retiré "(48h)"
+  5. 🔍 **Détecteur de Pièges**: Retiré "pendant 48h"
+  6. 🤝 **Parrain/Marraine**: Retiré "(5 jours)"
+  7. 💎 **Assurance Collector**: Retiré "(1 utilisation)"
+- **Solution**:
+  - Migration SQL pour nettoyer les descriptions existantes en DB (7 requêtes UPDATE)
+  - Modification de `installSuperBonuses()` pour futurs serveurs
+  - Descriptions maintenant propres et génériques (durée/charges affichées séparément dynamiquement)
+- **Résultat**:
+  - Single source of truth (base de données, pas descriptions)
+  - Admins peuvent modifier durées sans créer incohérence
+  - Descriptions restent valides quelle que soit la configuration
+- **Documentation**:
+  - [ANALYSE-DESCRIPTIONS-SUPER-BONUS.md](ANALYSE-DESCRIPTIONS-SUPER-BONUS.md) - Analyse complète du problème
+  - [FIX-DESCRIPTIONS-SUPER-BONUS-RESUME.md](FIX-DESCRIPTIONS-SUPER-BONUS-RESUME.md) - Résumé de la correction
+- **Migration exécutée**: ✅ 7 bonus corrigés sur 2 serveurs (prod + test)
+
 ## [1.4.1] - 2025-11-18
 
 ### 🔥 Fixed

@@ -346,7 +346,8 @@ class DatabaseWrapper {
   async getCollectibleById(guildId, id) {
     guildId = this._getGuildId(guildId);
     return this.queryOne(
-      `SELECT c.*, t.name as theme_name, t.required_items, t.final_role_name, t.final_role_color
+      `SELECT c.*, t.name as theme_name, t.required_items,
+              t.final_role_name, t.final_role_color, t.final_role_discord_id
        FROM collectibles c
        JOIN themes t ON c.theme_id = t.id
        WHERE c.guild_id = $1 AND c.id = $2`,
@@ -956,19 +957,25 @@ class DatabaseWrapper {
   /**
    * Récupérer tous les super bonus d'un serveur
    */
-  async getAllSuperBonuses(guildId, themeId = null) {
+  async getAllSuperBonuses(guildId, themeId = null, activeOnly = false) {
     guildId = this._getGuildId(guildId);
+
+    // Construire la clause WHERE
+    let whereClause = 'WHERE guild_id = $1';
+    let params = [guildId];
+
     if (themeId) {
-      return this.queryAll(
-        `SELECT * FROM super_bonuses
-         WHERE guild_id = $1 AND (theme_id = $2 OR theme_id IS NULL)
-         ORDER BY rarity DESC, name ASC`,
-        [guildId, themeId]
-      );
+      whereClause += ' AND (theme_id = $2 OR theme_id IS NULL)';
+      params.push(themeId);
     }
+
+    if (activeOnly) {
+      whereClause += ' AND is_enabled = TRUE';
+    }
+
     return this.queryAll(
-      `SELECT * FROM super_bonuses WHERE guild_id = $1 ORDER BY rarity DESC, name ASC`,
-      [guildId]
+      `SELECT * FROM super_bonuses ${whereClause} ORDER BY rarity DESC, name ASC`,
+      params
     );
   }
 
@@ -1778,7 +1785,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'chance_devil',
         name: 'Chance du Diable',
-        description: '+20% de chance sur toutes les mystery boxes pendant 7 jours !',
+        description: '+20% de chance sur toutes les mystery boxes !',
         icon: '🎰',
         bonus_type: 'boost',
         effect_type: 'probability',
@@ -1791,7 +1798,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'divine_vision',
         name: 'Vision Divine',
-        description: 'Révèle le contenu d\'une mystery box AVANT de cliquer (1 utilisation)',
+        description: 'Révèle le contenu d\'une mystery box AVANT de cliquer',
         icon: '👁️',
         bonus_type: 'boost',
         effect_type: 'reveal',
@@ -1804,7 +1811,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'legendary_magnet',
         name: 'Aimant à Légendaires',
-        description: 'Si un collectible tombe, +50% de chance qu\'il soit légendaire (3 jours)',
+        description: 'Si un collectible tombe, +50% de chance qu\'il soit légendaire',
         icon: '🧲',
         bonus_type: 'boost',
         effect_type: 'rarity_boost',
@@ -1817,7 +1824,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'celebrity_aura',
         name: 'Aura de Célébrité',
-        description: 'Nom en GOLD et réaction ⭐ automatique sur tous tes messages (48h)',
+        description: 'Nom en GOLD et réaction ⭐ automatique sur tous tes messages',
         icon: '👑',
         bonus_type: 'social',
         effect_type: 'cosmetic',
@@ -1843,7 +1850,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'collector_insurance',
         name: 'Assurance Collector',
-        description: 'Si tu perds un collectible (piège), récupération automatique GRATUITE (1 utilisation)',
+        description: 'Si tu perds un collectible (piège), récupération automatique GRATUITE',
         icon: '💎',
         bonus_type: 'protection',
         effect_type: 'protection',
@@ -1882,7 +1889,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'trap_detector',
         name: 'Détecteur de Pièges',
-        description: 'Les mystery boxes pièges sont marquées 💀 (visible que pour toi) pendant 48h',
+        description: 'Les mystery boxes pièges sont marquées 💀 (visible que pour toi)',
         icon: '🔍',
         bonus_type: 'economy',
         effect_type: 'detector',
@@ -1908,7 +1915,7 @@ class DatabaseWrapper {
       {
         bonus_id: 'godparent',
         name: 'Parrain/Marraine',
-        description: 'Offre UNE mystery box à quelqu\'un. S\'il trouve un collectible, tu gagnes 2x points ! (5 jours)',
+        description: 'Offre UNE mystery box à quelqu\'un. S\'il trouve un collectible, tu gagnes 2x points !',
         icon: '🤝',
         bonus_type: 'social',
         effect_type: 'transfer',

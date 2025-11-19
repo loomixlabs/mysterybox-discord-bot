@@ -14,13 +14,15 @@ module.exports = {
     .setDescription('[DEV] Interface de gestion multi-serveur'),
 
   async execute(interaction) {
+    // Déférer IMMÉDIATEMENT
+    await interaction.deferReply({ flags: 64 }); // EPHEMERAL
+
     // Vérifier si l'utilisateur est super-admin
     const isSuperAdmin = await superAdminHandler.isSuperAdmin(interaction.user.id);
 
     if (!isSuperAdmin) {
-      return interaction.reply({
-        content: '❌ Cette commande est réservée aux développeurs du bot.',
-        flags: 64
+      return interaction.editReply({
+        content: '❌ Cette commande est réservée aux développeurs du bot.'
       });
     }
 

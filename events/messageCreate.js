@@ -339,13 +339,18 @@ async function findMissionThread(guild, missionProgress, missionOwner) {
     }
 
     console.log(`🔍 Récupération du thread ${missionProgress.thread_id} pour ${missionOwner.username}`);
+
+    // Utiliser guild.client.channels.fetch pour accéder directement à l'API Discord
+    // guild.channels.fetch() utilise le cache et ne trouve pas les threads créés après le redémarrage
     const thread = await guild.client.channels.fetch(missionProgress.thread_id);
 
     if (thread) {
       console.log(`✅ Thread trouvé: "${thread.name}"`);
+      return thread;
+    } else {
+      console.warn(`⚠️  Thread ${missionProgress.thread_id} est null`);
+      return null;
     }
-
-    return thread;
   } catch (error) {
     console.warn(`⚠️  Thread ${missionProgress.thread_id} introuvable:`, error.message);
     return null;

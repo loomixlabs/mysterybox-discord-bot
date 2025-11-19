@@ -91,10 +91,12 @@ Gives totaux       : ${totalGives}
         .setStyle(ButtonStyle.Danger)
     );
 
-  await interaction.reply({
+  // Utiliser editReply si déféré, sinon reply
+  const replyMethod = interaction.deferred ? 'editReply' : 'reply';
+  await interaction[replyMethod]({
     embeds: [embed],
     components: [row],
-    flags: 64
+    ...(replyMethod === 'reply' ? { flags: 64 } : {})
   });
 }
 
@@ -215,6 +217,10 @@ Dernière act. : ${config.last_activity ? new Date(config.last_activity).toLocal
       new ButtonBuilder()
         .setCustomId(`superadmin_guild_logs_${guildId}`)
         .setLabel('📜 Logs d\'Actions')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`superadmin_bonuses_${guildId}`)
+        .setLabel('🎁 Gérer les Super Bonus')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('superadmin_guilds')
