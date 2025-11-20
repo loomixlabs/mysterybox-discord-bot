@@ -7,6 +7,17 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.7.1] - 2025-11-20
+
+### 🔧 Hotfix
+
+- **BUG 13 - Quiz**: Import manquant `auditLogger` dans missionHandler
+  - **Cause**: BUG 11 a ajouté appel à `audit.logMissionQuizQuestionDeleted()` mais module non importé
+  - **Erreur**: `ReferenceError: audit is not defined` lors de suppression question
+  - **Fix**: Ajout `const audit = require('../utils/auditLogger');` ligne 5
+  - **Fichier**: [handlers/missionHandler.js:5](handlers/missionHandler.js#L5)
+  - **Type**: PATCH - Hotfix critique post-v1.7.0
+
 ## [1.7.0] - 2025-11-20
 
 ### 🐛 Fixed

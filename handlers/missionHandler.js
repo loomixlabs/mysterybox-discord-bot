@@ -2,6 +2,7 @@ const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
 const badgeHandler = require('./badgeHandler');
+const audit = require('../utils/auditLogger');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
 /**
