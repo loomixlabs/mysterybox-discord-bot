@@ -1,6 +1,7 @@
 const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
+const badgeHandler = require('./badgeHandler');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
 /**
@@ -641,6 +642,14 @@ class MissionHandler {
         mission.name,
         randomCollectible.name
       );
+
+      // 🏆 BADGE TRACKING - Mission Completed
+      try {
+        await badgeHandler.onMissionCompleted(interaction.guildId, player.id, interaction.client);
+        console.log(`🏆 [BADGES] Mission badge tracking appelé pour player ${player.id}`);
+      } catch (error) {
+        console.error('🔴 [BADGES] Erreur tracking mission:', error);
+      }
 
       // Message immédiat + fermeture après 10 secondes
       await interaction.channel.send('✅ **Mission terminée !** Le thread se ferme dans 10 secondes...');

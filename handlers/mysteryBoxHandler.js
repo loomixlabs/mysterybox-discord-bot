@@ -3,6 +3,7 @@ const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
 const superBonusHandler = require('./superBonusHandler');
 const themeExpirationHandler = require('./themeExpirationHandler');
+const badgeHandler = require('./badgeHandler');
 const { SUPER_ADMINS } = require('../utils/permissions');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
@@ -574,6 +575,14 @@ class MysteryBoxHandler {
         console.error(`❌ [MYSTERY BOX] Type inconnu: "${content.type}"`);
     }
 
+    // 🏆 BADGE TRACKING - Mystery Box Opened
+    try {
+      await badgeHandler.onMysteryBoxOpened(interaction.guildId, player.id, interaction.client);
+      console.log(`🏆 [BADGES] Mystery Box badge tracking appelé pour player ${player.id}`);
+    } catch (error) {
+      console.error('🔴 [BADGES] Erreur tracking mystery box:', error);
+    }
+
     // Le gagnant a déjà été enregistré au début de la fonction (ligne 244)
     // pour éviter les clics multiples
   }
@@ -793,6 +802,14 @@ class MysteryBoxHandler {
     if (progress.collected_count >= collectible.required_items && !progress.is_completed) {
       await this.handleCollectionComplete(interaction, player, collectible);
     }
+
+    // 🏆 BADGE TRACKING - Collectible Found
+    try {
+      await badgeHandler.onCollectibleFound(interaction.guildId, player.id, collectible.rarity, interaction.client);
+      console.log(`🏆 [BADGES] Collectible badge tracking appelé pour player ${player.id}`);
+    } catch (error) {
+      console.error('🔴 [BADGES] Erreur tracking collectible:', error);
+    }
   }
 
   /**
@@ -912,20 +929,55 @@ class MysteryBoxHandler {
     const trapShield = await superBonusHandler.hasTrapShield(interaction.guildId, interaction.user.id);
 
     if (trapShield) {
-      // Consommer le bouclier
-      await superBonusHandler.consumeTrapShield(interaction.guildId, interaction.user.id, trap.name);
+      // Consommer le bouclier et récupérer les stats
+      const shieldStats = await superBonusHandler.consumeTrapShield(interaction.guildId, interaction.user.id, trap.name);
 
-      // Embed de blocage du piège
+      // Récupérer le compteur de pièges bloqués
+      const playerStats = await db.queryOne(`
+        SELECT traps_blocked FROM players
+        WHERE id = $1
+      `, [player.id]);
+
+      const totalBlocked = playerStats ? playerStats.traps_blocked : 0;
+
+      // Tracking badge pour piège bloqué
+      try {
+        await badgeHandler.onTrapBlocked(interaction.guildId, player.id, interaction.client);
+      } catch (error) {
+        console.error('🔴 Erreur tracking badge onTrapBlocked:', error);
+      }
+
+      // Embed de blocage du piège - VERSION ÉPIQUE
       const embed = new EmbedBuilder()
-        .setTitle('🛡️ PIÈGE BLOQUÉ !')
+        .setTitle('🛡️ ════════════════════════════════════ 🛡️')
         .setDescription(
-          `Tu as activé une **${trap.name}**, mais ton super bonus **${trapShield.name}** ${trapShield.icon} t'a protégé !\n\n` +
-          `Le piège a été annulé. Tu es sain et sauf ! ✨`
+          `\n**💥 PIÈGE BLOQUÉ ! 💥**\n\n` +
+          `🔥 **Vous avez déclenché**: ${trap.name}\n` +
+          `🛡️ **Votre Bouclier Anti-Piège a absorbé le coup !**\n\n` +
+          `╔═══════════════════════════════════╗\n` +
+          `║  ❌ **Effet annulé**: ${trap.description.split('\n')[0]}\n` +
+          `║  ✅ **Vos collectibles sont en sécurité !**\n` +
+          `╚═══════════════════════════════════╝\n\n` +
+          `🛡️ **Charges restantes**: ${shieldStats.remainingCharges}/${shieldStats.totalCharges}\n` +
+          `📊 **Pièges évités au total**: ${totalBlocked}\n\n` +
+          `🛡️ ════════════════════════════════════ 🛡️`
         )
-        .setColor(branding.secondary_color)
-        .setFooter(getLoomixFooterWithCustomText(`Bonus utilisé: ${trapShield.name}`));
+        .setColor('#FFD700')
+        .setFooter(getLoomixFooterWithCustomText(`Protection activée: ${trapShield.name}`));
 
-      return interaction.followUp({ embeds: [embed], flags: 64 });
+      // Animation Discord: Ajouter réaction 🛡️ puis ✅
+      const message = await interaction.followUp({ embeds: [embed], flags: 64 });
+
+      try {
+        await message.react('🛡️');
+        await new Promise(resolve => setTimeout(resolve, 1500)); // Attendre 1.5s
+        await message.react('✅');
+      } catch (error) {
+        console.error('⚠️  Erreur ajout réactions:', error);
+        // Continuer même si réactions échouent
+      }
+
+      return message;
     }
 
     // Embed de révélation
@@ -970,6 +1022,14 @@ class MysteryBoxHandler {
       'INSERT INTO trap_triggered (guild_id, player_id, trap_id) VALUES ($1, $2, $3)',
       [interaction.guildId, player.id, trapId]
     );
+
+    // 🏆 BADGE TRACKING - Trap Survived
+    try {
+      await badgeHandler.onTrapSurvived(interaction.guildId, player.id, interaction.client);
+      console.log(`🏆 [BADGES] Trap Survival badge tracking appelé pour player ${player.id}`);
+    } catch (error) {
+      console.error('🔴 [BADGES] Erreur tracking trap survival:', error);
+    }
   }
 
   /**
