@@ -7,6 +7,56 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.7.0] - 2025-11-20
+
+### 🐛 Fixed
+
+#### **🔧 Corrections Massives Admin Panel & Missions (12 bugs)**
+
+- **Type**: PATCH - Corrections critiques
+- **Bugs corrigés**:
+  1. **BUG 1 - Création thème**: Contrainte `check_probabilities_sum_100` violée
+     - **Cause**: INSERT n'incluait pas `probability_super_bonus` (110% au lieu de 100%)
+     - **Fix**: Ajout du 4ème paramètre avec valeur 10%
+     - **Fichier**: [utils/database-pg.js:193](utils/database-pg.js#L193)
+  2. **BUG 2 - Prolongation thème**: Système manquant
+     - **Fix**: Système complet créé (bouton conditionnel + modal + DB + handler)
+     - **Fichiers**: [adminPanelHandler.js](handlers/adminPanelHandler.js), [database-pg.js:279-298](utils/database-pg.js), [modalHandler.js:824-876](handlers/modalHandler.js)
+  3. **BUG 3 - Mystery Box**: 4 boutons configuration non routés
+     - **Fix**: Routing ajouté + création `showImageModal()`
+     - **Fichier**: [adminPanelHandler.js:189-196](handlers/adminPanelHandler.js)
+  4. **BUG 4 - Quiz**: Erreur affichage >25 questions (limite Discord embed)
+     - **Fix**: Pagination 20 questions/page avec boutons Précédent/Suivant
+     - **Fichier**: [missionHandler.js:897-990](handlers/missionHandler.js)
+  5. **BUG 5 - Missions Mot Deviné**: Erreur suppression mot-clé (mais fonctionnait)
+     - **Cause**: `interaction.update()` après `setTimeout()`
+     - **Fix**: `interaction.editReply()` à la place
+     - **Fichier**: [missionHandler.js:1047](handlers/missionHandler.js)
+  6. **BUG 6/7 - Missions**: Boutons retour après suppression non fonctionnels
+     - **Cause**: Interaction non déférée avant `editReply()`
+     - **Fix**: Routing `select_mission_*` étendu + `deferUpdate()` conditionnel
+     - **Fichier**: [adminPanelHandler.js:592,6115](handlers/adminPanelHandler.js)
+  7. **BUG 8 - Profile Inventaire**: Pagination page 3+ bloquée
+     - **Cause**: Incohérence `itemsPerPage` (5 dans handler vs 3 dans view)
+     - **Fix**: Harmonisé à 3
+     - **Fichier**: [profileHandler.js:521](handlers/profileHandler.js)
+  8. **BUG 9 - Badge MP**: Bouton "Mes Badges" sans routing
+     - **Fix**: CustomId avec guildId + routing complet DM → Badges
+     - **Fichiers**: [badgeHandler.js:589](handlers/badgeHandler.js), [interactionCreate.js:68-93](events/interactionCreate.js)
+  9. **BUG 10 - Quiz**: Erreur création question (`substring` undefined)
+     - **Cause**: Mauvais paramètres audit log (3 au lieu de 5)
+     - **Fix**: Appel correct `logMissionQuizQuestionAdded()`
+     - **Fichier**: [modalHandler.js:1671-1677](handlers/modalHandler.js)
+  10. **BUG 11 - Quiz**: Erreur suppression question
+      - **Cause**: Pas de `deferUpdate()` + `setTimeout()` problématique
+      - **Fix**: Ajout defer + retrait setTimeout + audit log
+      - **Fichier**: [missionHandler.js:1651-1689](handlers/missionHandler.js)
+  11. **BUG 12 - Quiz**: Suppression question échoue si >25 questions (limite Discord)
+      - **Cause**: `handleQuizDelete()` créait select menu avec toutes les questions (>25 options = crash)
+      - **Fix**: Système pagination-based - select menu par page (max 20 questions/page)
+      - **Utilisateur peut**: Paginer avec Précédent/Suivant + supprimer depuis n'importe quelle page
+      - **Fichiers**: [missionHandler.js:948-979](handlers/missionHandler.js) (ajout select menu), [missionHandler.js:1606-1666](handlers/missionHandler.js) (limitation handleQuizDelete à 25)
+
 ### ✨ Added
 
 #### **🏆 Système de Badges Complet v1.6.0 (Sprint 1 - Super Bonus Badges)**
@@ -193,6 +243,67 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   - Ajouter table `player_login_history` avec daily tracking
   - Compléter tests E2E pour les 5 badges Engagement
   - Analytics et métriques d'engagement
+
+#### **🏆 Système de Badges Sprint 3 - Login Tracking pour Badges Engagement**
+
+- **Date**: 2025-11-20
+- **Type**: MINOR - Système de tracking de connexion pour badges Engagement
+- **Description**: Implémentation complète du système de login tracking quotidien avec calcul automatique des streaks pour débloquer les 5 badges Engagement (3, 7, 14, 30, 90 jours consécutifs)
+- **Fonctionnalités implémentées**:
+  1. **Migration Base de Données**:
+     - Table `player_login_history`: Enregistrement daily des connexions (guild_id, player_id, login_date UNIQUE)
+     - Colonnes cache dans `players`: `current_login_streak`, `last_login_date`, `best_login_streak`
+     - Contrainte UNIQUE sur `(guild_id, id)` dans `players` pour foreign keys
+     - 4 indexes optimisés (guild_player, date DESC, lookup composite, streak)
+  2. **Méthodes Database Wrapper** ([utils/database-pg.js:2316-2448](utils/database-pg.js:2316-2448)):
+     - `recordLogin(guildId, playerId)`: Enregistre login, calcule streak, met à jour cache
+     - `getLoginStreak(guildId, playerId)`: Récupère statistiques streak actuelles
+     - `getLoginHistory(guildId, playerId, limit)`: Historique des logins
+  3. **Intégration Automatique** ([events/interactionCreate.js:369-582](events/interactionCreate.js:369-582)):
+     - Fonction `handleLoginTracking()` appelée pour TOUTES les interactions (slash, button, select, modal)
+     - Détection automatique sans bloquer les interactions (async non-bloquant)
+     - Appel de `badgeHandler.onLoginStreak()` si streak augmente
+  4. **Calcul de Streak Intelligent**:
+     - Détection jour consécutif (diff === 1) → incrémente le streak
+     - Détection streak cassé (diff > 1) → reset à 1
+     - Mise à jour automatic du meilleur streak atteint
+     - Ignorer les logins multiples le même jour
+  5. **Tests E2E Complets** ([scripts/test-login-tracking-e2e.js](scripts/test-login-tracking-e2e.js)):
+     - Phase 1: Récupération joueur de test ✅
+     - Phase 2: Login enregistré, même jour ignoré ✅
+     - Phase 3: Vérification badges actuels ✅
+     - Phase 4: Statistiques détaillées (streak, historique) ✅
+     - Phase 5: Conditions de déblocage (progression 1/3, 1/7, etc.) ✅
+     - Phase 6: Hook onLoginStreak() vérifié ✅
+- **Fichiers modifiés**:
+  - [database/migrations/add-login-tracking-system.sql](database/migrations/add-login-tracking-system.sql) (55 lignes) - Migration SQL
+  - [scripts/run-login-tracking-migration.js](scripts/run-login-tracking-migration.js) (93 lignes) - Exécution migration
+  - [utils/database-pg.js](utils/database-pg.js:2316-2448) (+133 lignes) - 3 méthodes login tracking
+  - [events/interactionCreate.js](events/interactionCreate.js:369-582) (+48 lignes) - Intégration automatique
+  - [scripts/test-login-tracking-e2e.js](scripts/test-login-tracking-e2e.js) (168 lignes) - Tests E2E complets
+- **Badges Engagement Activés**:
+  - 📅✨ **Actif** (uncommon) - 3 jours consécutifs
+  - 📅⭐ **Assidu** (rare) - 7 jours consécutifs
+  - 📅💎 **Dévoué** (epic) - 14 jours consécutifs
+  - 📅🏆 **Marathonien** (legendary) - 30 jours consécutifs
+  - 📅👑✨ **Éternel** (mythic) - 90 jours consécutifs
+- **Impact**:
+  - Déblocage automatique des badges Engagement lors des interactions Discord
+  - Tracking passif sans action utilisateur requise
+  - Gamification de l'assiduité (+35% rétention attendue d'après Duolingo)
+  - Système évolutif pour futurs badges basés sur l'activité
+- **Conformité**:
+  - ✅ Sprint 3 complet (login tracking + 5 badges Engagement)
+  - ✅ Migration SQL exécutée avec succès
+  - ✅ Tests E2E 6/6 phases validées
+  - ✅ Système 100% automatique et non-intrusif
+  - ✅ Performance optimisée (indexes, cache columns, async non-bloquant)
+  - ✅ Architecture extensible maintenue
+- **Prochaines étapes**:
+  - Tester sur plusieurs jours en production pour valider les streaks
+  - Surveiller le déblocage automatique des badges (3, 7, 14, 30, 90 jours)
+  - Ajouter analytics de rétention basées sur les streaks
+  - Considérer récompenses bonus pour les meilleurs streaks (leaderboard hebdomadaire)
 
 #### **🛡️ Implémentation Complète du Bouclier Anti-Piège**
 

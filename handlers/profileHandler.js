@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/database-pg');
-const { showOverview, showInventory, showHistory, showAchievements, showBonuses } = require('../views/profileView');
+const { showOverview, showInventory, showHistory, showAchievements, showBonuses, showBadges } = require('../views/profileView');
 const {
   getRarityEmoji,
   createProgressBar,
@@ -43,7 +43,10 @@ function getProfileState(userId) {
     profileState.set(userId, {
       currentView: 'overview',
       inventoryPage: 0,
-      inventoryFilter: 'all'
+      inventoryFilter: 'all',
+      badgesPage: 0,
+      badgesCategory: 'all',
+      badgesRarity: 'all'
     });
   }
   return profileState.get(userId);
@@ -139,6 +142,20 @@ async function handleProfileInteraction(interaction) {
       await profileColorHandler.showProfileColorPalette(interaction, player, theme, progress);
     } else if (customId === 'profile_color_auto') {
       await profileColorHandler.resetToAutoColor(interaction);
+    } else if (customId === 'profile_badges') {
+      await handleBadges(interaction, player, theme, state);
+    } else if (customId === 'profile_badges_category') {
+      await handleBadgesCategory(interaction, player, theme, state);
+    } else if (customId === 'profile_badges_rarity') {
+      await handleBadgesRarity(interaction, player, theme, state);
+    } else if (customId.startsWith('profile_badges_prev:')) {
+      await handleBadgesPagination(interaction, player, theme, state, 'prev');
+    } else if (customId.startsWith('profile_badges_next:')) {
+      await handleBadgesPagination(interaction, player, theme, state, 'next');
+    } else if (customId === 'profile_badges_leaderboard') {
+      await handleBadgesLeaderboard(interaction, player, theme, state);
+    } else if (customId === 'profile_badges_refresh') {
+      await handleBadges(interaction, player, theme, state);
     }
 
   } catch (error) {
@@ -343,6 +360,8 @@ async function handleRefresh(interaction, player, theme, progress, state) {
     await handleHistory(interaction, player, theme, state);
   } else if (currentView === 'achievements') {
     await handleAchievements(interaction, player, theme, progress, state);
+  } else if (currentView === 'badges') {
+    await handleBadges(interaction, player, theme, state);
   } else {
     // Défaut: overview
     await handleOverview(interaction, player, theme, progress, state);
@@ -499,7 +518,7 @@ async function handleInventoryPagination(interaction, player, theme, progress, s
     filteredItems = inventory[state.inventoryFilter] || [];
   }
 
-  const itemsPerPage = 5;
+  const itemsPerPage = 3; // Doit correspondre à profileView.js pour éviter pages vides
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage) || 1;
   let newPage = state.inventoryPage;
 
@@ -526,6 +545,159 @@ async function handleInventoryPagination(interaction, player, theme, progress, s
   );
 
   await interaction.editReply(content);
+}
+
+/**
+ * 🏆 Handler: Vue Badges
+ */
+async function handleBadges(interaction, player, theme, state) {
+  state.currentView = 'badges';
+  state.badgesPage = 0; // Reset à la première page
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showBadges(
+    interaction,
+    player,
+    theme,
+    state.badgesCategory,
+    state.badgesRarity,
+    state.badgesPage
+  );
+
+  await interaction.editReply(content);
+}
+
+/**
+ * 🔍 Handler: Filtre catégorie badges (SelectMenu)
+ */
+async function handleBadgesCategory(interaction, player, theme, state) {
+  const selectedCategory = interaction.values[0];
+
+  state.badgesCategory = selectedCategory;
+  state.badgesPage = 0; // Reset à la première page
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showBadges(
+    interaction,
+    player,
+    theme,
+    state.badgesCategory,
+    state.badgesRarity,
+    state.badgesPage
+  );
+
+  await interaction.editReply(content);
+}
+
+/**
+ * 🌟 Handler: Filtre rareté badges (SelectMenu)
+ */
+async function handleBadgesRarity(interaction, player, theme, state) {
+  const selectedRarity = interaction.values[0];
+
+  state.badgesRarity = selectedRarity;
+  state.badgesPage = 0; // Reset à la première page
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showBadges(
+    interaction,
+    player,
+    theme,
+    state.badgesCategory,
+    state.badgesRarity,
+    state.badgesPage
+  );
+
+  await interaction.editReply(content);
+}
+
+/**
+ * 📄 Handler: Pagination badges
+ */
+async function handleBadgesPagination(interaction, player, theme, state, action) {
+  const guildId = interaction.guildId;
+
+  // Récupérer le nombre total de badges filtrés
+  const filters = {};
+  if (state.badgesCategory !== 'all') filters.category = state.badgesCategory;
+  if (state.badgesRarity !== 'all') filters.rarity = state.badgesRarity;
+
+  const unlockedBadges = await db.getPlayerBadges(guildId, player.id, filters);
+
+  const itemsPerPage = 5;
+  const totalPages = Math.ceil(unlockedBadges.length / itemsPerPage) || 1;
+  let newPage = state.badgesPage;
+
+  if (action === 'prev') {
+    newPage = Math.max(0, state.badgesPage - 1);
+  } else if (action === 'next') {
+    newPage = Math.min(totalPages - 1, state.badgesPage + 1);
+  }
+
+  state.badgesPage = newPage;
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showBadges(
+    interaction,
+    player,
+    theme,
+    state.badgesCategory,
+    state.badgesRarity,
+    state.badgesPage
+  );
+
+  await interaction.editReply(content);
+}
+
+/**
+ * 🏅 Handler: Leaderboard badges
+ */
+async function handleBadgesLeaderboard(interaction, player, theme, state) {
+  const guildId = interaction.guildId;
+  const badgeHandler = require('./badgeHandler');
+
+  // Récupérer le leaderboard
+  const leaderboard = await badgeHandler.getBadgeLeaderboard(guildId, 10);
+
+  if (!leaderboard || leaderboard.length === 0) {
+    return interaction.editReply({
+      content: '❌ Aucun joueur n\'a encore débloqué de badges.',
+      components: []
+    });
+  }
+
+  // Créer l'embed du leaderboard
+  const leaderboardText = leaderboard.map((entry, index) => {
+    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `**#${index + 1}**`;
+    return `${medal} <@${entry.discord_id}> - **${entry.total_badges}** badges`;
+  }).join('\n');
+
+  const embed = new EmbedBuilder()
+    .setTitle('🏆 TOP 10 - COLLECTIONNEURS DE BADGES')
+    .setColor('#f39c12')
+    .setDescription(
+      `### 👑 Les Maîtres de la Collection\n\n${leaderboardText}\n\n` +
+      `💡 *Continue à utiliser des Super Bonus pour débloquer plus de badges !*`
+    )
+    .setTimestamp();
+
+  // Boutons de navigation
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_badges')
+      .setLabel('← Retour')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('profile_badges_refresh')
+      .setLabel('Actualiser')
+      .setEmoji('🔄')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  await interaction.editReply({
+    embeds: [embed],
+    components: [row]
+  });
 }
 
 /**

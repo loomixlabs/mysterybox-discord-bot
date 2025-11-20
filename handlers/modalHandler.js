@@ -51,6 +51,8 @@ class ModalHandler {
       await this.handleAddCollectible(interaction);
     } else if (customId === 'modal_create_theme') {
       await this.handleCreateTheme(interaction);
+    } else if (customId === 'modal_extend_theme') {
+      await this.handleExtendTheme(interaction);
     }
     // Gestion des campagnes (délégation)
     else if (customId.startsWith('campaign_modal_')) {
@@ -812,6 +814,63 @@ class ModalHandler {
           content: errorMessage,
           flags: 64
         });
+      }
+    }
+  }
+
+  /**
+   * Handler pour prolonger un thème actif
+   */
+  async handleExtendTheme(interaction) {
+    try {
+      // Extraire la valeur du modal
+      const additionalDaysInput = interaction.fields.getTextInputValue('additional_days').trim();
+
+      // Validation
+      const additionalDays = parseInt(additionalDaysInput);
+
+      if (isNaN(additionalDays) || additionalDays <= 0 || additionalDays > 365) {
+        return interaction.reply({
+          content: '❌ Le nombre de jours doit être un nombre entre 1 et 365.',
+          flags: 64
+        });
+      }
+
+      // Validation OK, defer l'update
+      await interaction.deferUpdate();
+
+      // Prolonger le thème
+      const updatedTheme = await db.extendTheme(interaction.guildId, additionalDays);
+
+      console.log(`✅ Thème prolongé: ${updatedTheme.name} (+${additionalDays} jours)`);
+
+      // Logger l'action
+      await audit.logThemeUpdated(
+        interaction.guildId,
+        interaction.user.id,
+        {
+          id: updatedTheme.id,
+          name: updatedTheme.name,
+          changes: { duration_days: `+${additionalDays} jours` }
+        }
+      );
+
+      // Refresh le menu des thèmes
+      const adminPanelHandler = require('./adminPanelHandler');
+      await adminPanelHandler.showThemesMenu(interaction);
+
+    } catch (error) {
+      console.error('🔴 Erreur handleExtendTheme:', error);
+
+      const errorMsg = {
+        content: `❌ Erreur: ${error.message}`,
+        flags: 64
+      };
+
+      if (interaction.deferred) {
+        await interaction.editReply(errorMsg);
+      } else {
+        await interaction.reply(errorMsg);
       }
     }
   }
@@ -1612,10 +1671,9 @@ class ModalHandler {
       await audit.logMissionQuizQuestionAdded(
         interaction.guildId,
         interaction.user.id,
-        {
-          mission_id: missionId,
-          question: questionText.substring(0, 100)
-        }
+        missionId,
+        questionText,
+        finalDifficulty
       );
 
       // Message de succès éphémère

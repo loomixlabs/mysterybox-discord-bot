@@ -586,7 +586,7 @@ async function sendBadgeUnlockNotification(client, guildId, playerId, badge) {
     // Bouton pour voir tous les badges
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('view_my_badges')
+        .setCustomId(`view_my_badges:${guildId}`)
         .setLabel('Voir mes badges')
         .setEmoji('🏆')
         .setStyle(ButtonStyle.Primary)

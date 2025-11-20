@@ -189,6 +189,15 @@ async function calculateBadges(playerId, guildId, themeId) {
       badges.push('🍀'); // Chanceux
     }
 
+    // Badge Indestructible - A bloqué au moins 10 pièges avec le Bouclier Anti-Piège
+    const trapsBlocked = await db.queryOne(`
+      SELECT traps_blocked FROM players WHERE id = $1
+    `, [playerId]);
+
+    if (trapsBlocked && parseInt(trapsBlocked.traps_blocked) >= 10) {
+      badges.push('🛡️'); // Indestructible
+    }
+
     return badges.length > 0 ? badges : ['🔰'];
 
   } catch (error) {

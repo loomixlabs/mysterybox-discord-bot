@@ -894,7 +894,7 @@ class MissionHandler {
   /**
    * Admin clique sur "Gérer les Questions" (Quiz mission)
    */
-  async handleQuizQuestionsManagement(interaction) {
+  async handleQuizQuestionsManagement(interaction, page = 0) {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
@@ -914,21 +914,29 @@ class MissionHandler {
       // Récupérer toutes les questions existantes
       const questions = await db.getQuizQuestionsByTheme(interaction.guildId, mission.theme_id);
 
+      // Pagination (20 questions par page pour rester sous la limite de 25 fields)
+      const questionsPerPage = 20;
+      const totalPages = Math.ceil(questions.length / questionsPerPage) || 1;
+      const currentPage = Math.min(Math.max(0, page), totalPages - 1);
+      const startIndex = currentPage * questionsPerPage;
+      const endIndex = startIndex + questionsPerPage;
+      const paginatedQuestions = questions.slice(startIndex, endIndex);
+
       const embed = new EmbedBuilder()
         .setTitle(`📝 Questions du Quiz - ${mission.name}`)
         .setDescription(questions.length === 0
           ? '**Aucune question n\'a encore été créée.**\n\nCliquez sur "Ajouter une Question" pour commencer.'
-          : `**${questions.length} question(s) enregistrée(s)**`)
+          : `**${questions.length} question(s) enregistrée(s)** (Page ${currentPage + 1}/${totalPages})`)
         .setColor(branding.secondary_color);
 
-      if (questions.length > 0) {
-        questions.forEach((q, i) => {
+      if (paginatedQuestions.length > 0) {
+        paginatedQuestions.forEach((q, i) => {
           const wrongAnswersText = q.wrong_answers && q.wrong_answers.length > 0
             ? `\n❌ Mauvaises réponses: ${q.wrong_answers.join(', ')}`
             : '';
 
           embed.addFields({
-            name: `${i + 1}. ${q.question_text}`,
+            name: `${startIndex + i + 1}. ${q.question_text}`,
             value: `✅ Réponse: **${q.correct_answer}**${wrongAnswersText}\n💡 Difficulté: ${q.difficulty}${q.hint ? `\n💭 Indice: ${q.hint}` : ''}`,
             inline: false
           });
@@ -937,18 +945,13 @@ class MissionHandler {
 
       embed.setFooter(await getLoomixFooter(interaction.guildId));
 
-      const buttons = new ActionRowBuilder().addComponents(
+      const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`mission_quiz_add_${missionId}`)
           .setLabel('➕ Ajouter une Question')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId(`mission_quiz_delete_${missionId}`)
-          .setLabel('🗑️ Supprimer une Question')
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(questions.length === 0),
-        new ButtonBuilder()
-          .setCustomId(`mission_quiz_questions_${missionId}`)
+          .setCustomId(`mission_quiz_questions_${missionId}:${currentPage}`)
           .setLabel('🔄 Rafraîchir')
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
@@ -957,9 +960,44 @@ class MissionHandler {
           .setStyle(ButtonStyle.Secondary)
       );
 
+      const components = [row1];
+
+      // Ajouter select menu pour supprimer (seulement questions de la page actuelle)
+      if (paginatedQuestions.length > 0) {
+        const deleteMenu = new StringSelectMenuBuilder()
+          .setCustomId(`select_quiz_delete_${missionId}`)
+          .setPlaceholder('🗑️ Supprimer une question de cette page')
+          .addOptions(
+            paginatedQuestions.map((q, index) => ({
+              label: `Q${startIndex + index + 1}: ${q.question_text.substring(0, 80)}${q.question_text.length > 80 ? '...' : ''}`,
+              value: q.id.toString(),
+              description: `Réponse: ${q.correct_answer.substring(0, 50)}`
+            }))
+          );
+
+        components.push(new ActionRowBuilder().addComponents(deleteMenu));
+      }
+
+      // Ajouter boutons de pagination si nécessaire
+      if (totalPages > 1) {
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_quiz_page_${missionId}:${Math.max(0, currentPage - 1)}`)
+            .setLabel('◀️ Précédent')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(currentPage === 0),
+          new ButtonBuilder()
+            .setCustomId(`mission_quiz_page_${missionId}:${Math.min(totalPages - 1, currentPage + 1)}`)
+            .setLabel('Suivant ▶️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(currentPage >= totalPages - 1)
+        );
+        components.push(row2);
+      }
+
       await interaction.update({
         embeds: [embed],
-        components: [buttons]
+        components
       });
 
     } catch (error) {
@@ -978,6 +1016,11 @@ class MissionHandler {
     const missionId = parseInt(interaction.customId.split('_')[3]);
 
     try {
+      // Déférer l'interaction si pas encore répondue
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.deferUpdate();
+      }
+
       // Récupérer la mission et le branding
       const [mission, branding] = await Promise.all([
         db.getMissionById(interaction.guildId, missionId),
@@ -1044,7 +1087,7 @@ class MissionHandler {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      await interaction.update({
+      await interaction.editReply({
         embeds: [embed],
         components: [buttons]
       });
@@ -1584,12 +1627,16 @@ class MissionHandler {
         });
       }
 
-      // Créer un select menu avec toutes les questions
+      // Limiter à 25 questions (limite Discord pour select menu)
+      const questionsToShow = questions.slice(0, 25);
+      const hasMore = questions.length > 25;
+
+      // Créer un select menu avec les questions (max 25)
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(`select_quiz_delete_${missionId}`)
         .setPlaceholder('Choisir une question à supprimer')
         .addOptions(
-          questions.map((q, index) => ({
+          questionsToShow.map((q, index) => ({
             label: `Q${index + 1}: ${q.question_text.substring(0, 80)}${q.question_text.length > 80 ? '...' : ''}`,
             value: q.id.toString(),
             description: `Réponse: ${q.correct_answer.substring(0, 50)}`
@@ -1598,8 +1645,13 @@ class MissionHandler {
 
       const row = new ActionRowBuilder().addComponents(selectMenu);
 
+      let content = '🗑️ **Sélectionne la question à supprimer:**';
+      if (hasMore) {
+        content += `\n⚠️ Affichage limité aux 25 premières questions (total: ${questions.length})\n💡 Supprime des questions pour voir les suivantes.`;
+      }
+
       await interaction.reply({
-        content: '🗑️ **Sélectionne la question à supprimer:**',
+        content,
         components: [row],
         flags: 64
       });
@@ -1621,29 +1673,38 @@ class MissionHandler {
     const questionId = parseInt(interaction.values[0]);
 
     try {
+      // Déférer l'interaction avant les requêtes DB
+      await interaction.deferUpdate();
+
       // Supprimer la question
       await db.deleteQuizQuestion(interaction.guildId, questionId);
 
-      await interaction.update({
-        content: '✅ **Question supprimée avec succès !**',
+      // Logger l'action
+      await audit.logMissionQuizQuestionDeleted(
+        interaction.guildId,
+        interaction.user.id,
+        missionId,
+        questionId
+      );
+
+      await interaction.editReply({
+        content: '✅ **Question supprimée avec succès !**\n\n💡 Utilise le bouton "🔙 Retour" pour revenir à la mission.',
         components: []
       });
-
-      // Retourner automatiquement à la liste des questions après 1.5 secondes
-      setTimeout(async () => {
-        await this.handleQuizQuestionsManagement({
-          ...interaction,
-          customId: `mission_quiz_questions_${missionId}`,
-          reply: interaction.followUp.bind(interaction)
-        });
-      }, 1500);
 
     } catch (error) {
       console.error('🔴 Erreur handleQuizDeleteConfirm:', error);
-      await interaction.update({
+
+      const errorMsg = {
         content: '❌ Une erreur est survenue lors de la suppression.',
         components: []
-      });
+      };
+
+      if (interaction.deferred) {
+        await interaction.editReply(errorMsg);
+      } else {
+        await interaction.update(errorMsg);
+      }
     }
   }
 

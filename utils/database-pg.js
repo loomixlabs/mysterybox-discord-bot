@@ -190,8 +190,8 @@ class DatabaseWrapper {
 
       // Créer la configuration par défaut
       await this.query(
-        `INSERT INTO theme_config (guild_id, theme_id, probability_collectible, probability_mission, probability_trap)
-         VALUES ($1, $2, 40, 40, 20)`,
+        `INSERT INTO theme_config (guild_id, theme_id, probability_collectible, probability_mission, probability_trap, probability_super_bonus)
+         VALUES ($1, $2, 50, 25, 15, 10)`,
         [guildId, theme.id]
       );
 
@@ -271,6 +271,30 @@ class DatabaseWrapper {
       await this.query('ROLLBACK');
       throw error;
     }
+  }
+
+  /**
+   * Prolonger la durée d'un thème actif
+   */
+  async extendTheme(guildId, additionalDays) {
+    guildId = this._getGuildId(guildId);
+
+    const result = await this.queryOne(
+      `UPDATE themes
+       SET duration_days = CASE
+         WHEN duration_days IS NULL THEN $2
+         ELSE duration_days + $2
+       END
+       WHERE guild_id = $1 AND is_active = TRUE
+       RETURNING *`,
+      [guildId, additionalDays]
+    );
+
+    if (!result) {
+      throw new Error('Aucun thème actif trouvé pour ce serveur');
+    }
+
+    return result;
   }
 
   /**
@@ -1968,6 +1992,700 @@ class DatabaseWrapper {
 
     console.log(`🎁 Installation terminée: ${installed} installés, ${skipped} déjà existants (total: ${bonuses.length})`);
     return { installed, skipped, total: bonuses.length };
+  }
+
+  // =====================================================
+  // SECTION: BADGE SYSTEM
+  // =====================================================
+
+  /**
+   * Créer un badge dans la base de données
+   */
+  async createBadge(badgeData) {
+    const {
+      code, name, description, emoji, color, rarity, category,
+      condition_type, condition_target, condition_value,
+      display_order = 0, is_secret = false
+    } = badgeData;
+
+    return this.queryOne(`
+      INSERT INTO badges (
+        code, name, description, emoji, color, rarity, category,
+        condition_type, condition_target, condition_value,
+        display_order, is_secret
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ON CONFLICT (code) DO UPDATE SET
+        name = EXCLUDED.name,
+        description = EXCLUDED.description,
+        emoji = EXCLUDED.emoji
+      RETURNING *
+    `, [
+      code, name, description, emoji, color, rarity, category,
+      condition_type, condition_target, condition_value,
+      display_order, is_secret
+    ]);
+  }
+
+  /**
+   * Récupérer un badge par son code
+   */
+  async getBadgeByCode(code) {
+    return this.queryOne('SELECT * FROM badges WHERE code = $1', [code]);
+  }
+
+  /**
+   * Récupérer tous les badges d'une catégorie
+   */
+  async getBadgesByCategory(category) {
+    return this.query(`
+      SELECT * FROM badges
+      WHERE category = $1
+      ORDER BY display_order ASC, rarity DESC, name ASC
+    `, [category]);
+  }
+
+  /**
+   * Récupérer tous les badges (avec filtre optionnel)
+   */
+  async getAllBadges(filters = {}) {
+    let query = 'SELECT * FROM badges WHERE 1=1';
+    const params = [];
+
+    if (filters.category) {
+      params.push(filters.category);
+      query += ` AND category = $${params.length}`;
+    }
+
+    if (filters.rarity) {
+      params.push(filters.rarity);
+      query += ` AND rarity = $${params.length}`;
+    }
+
+    if (filters.condition_type) {
+      params.push(filters.condition_type);
+      query += ` AND condition_type = $${params.length}`;
+    }
+
+    if (filters.exclude_secret) {
+      query += ' AND is_secret = FALSE';
+    }
+
+    query += ' ORDER BY display_order ASC, rarity DESC, name ASC';
+
+    return this.query(query, params);
+  }
+
+  /**
+   * Débloquer un badge pour un joueur
+   */
+  async unlockBadge(guildId, playerId, badgeId, unlockedFrom = null) {
+    try {
+      const result = await this.queryOne(`
+        INSERT INTO player_badges (guild_id, player_id, badge_id, unlocked_from)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, player_id, badge_id) DO NOTHING
+        RETURNING *
+      `, [guildId, playerId, badgeId, unlockedFrom]);
+
+      // Si le badge a été débloqué (pas déjà existant)
+      if (result) {
+        // Supprimer la progression associée
+        await this.query(`
+          DELETE FROM badge_progress
+          WHERE guild_id = $1 AND player_id = $2 AND badge_id = $3
+        `, [guildId, playerId, badgeId]);
+      }
+
+      return result;
+    } catch (error) {
+      console.error('🔴 Erreur unlockBadge:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Vérifier si un joueur a un badge
+   */
+  async playerHasBadge(guildId, playerId, badgeId) {
+    const result = await this.queryOne(`
+      SELECT 1 FROM player_badges
+      WHERE guild_id = $1 AND player_id = $2 AND badge_id = $3
+    `, [guildId, playerId, badgeId]);
+
+    return !!result;
+  }
+
+  /**
+   * Récupérer tous les badges d'un joueur
+   */
+  async getPlayerBadges(guildId, playerId, filters = {}) {
+    let query = `
+      SELECT
+        pb.*,
+        b.code,
+        b.name,
+        b.description,
+        b.emoji,
+        b.color,
+        b.rarity,
+        b.category
+      FROM player_badges pb
+      JOIN badges b ON pb.badge_id = b.id
+      WHERE pb.guild_id = $1 AND pb.player_id = $2
+    `;
+    const params = [guildId, playerId];
+
+    if (filters.category) {
+      params.push(filters.category);
+      query += ` AND b.category = $${params.length}`;
+    }
+
+    if (filters.rarity) {
+      params.push(filters.rarity);
+      query += ` AND b.rarity = $${params.length}`;
+    }
+
+    query += ' ORDER BY pb.unlocked_at DESC';
+
+    return this.query(query, params);
+  }
+
+  /**
+   * Compter les badges d'un joueur
+   */
+  async countPlayerBadges(guildId, playerId, filters = {}) {
+    let query = `
+      SELECT COUNT(*) as count
+      FROM player_badges pb
+      JOIN badges b ON pb.badge_id = b.id
+      WHERE pb.guild_id = $1 AND pb.player_id = $2
+    `;
+    const params = [guildId, playerId];
+
+    if (filters.category) {
+      params.push(filters.category);
+      query += ` AND b.category = $${params.length}`;
+    }
+
+    if (filters.rarity) {
+      params.push(filters.rarity);
+      query += ` AND b.rarity = $${params.length}`;
+    }
+
+    const result = await this.queryOne(query, params);
+    return result ? parseInt(result.count) : 0;
+  }
+
+  /**
+   * Mettre à jour ou créer la progression d'un badge
+   */
+  async updateBadgeProgress(guildId, playerId, badgeId, currentValue, targetValue) {
+    try {
+      // Vérifier si le badge est déjà débloqué
+      const isUnlocked = await this.playerHasBadge(guildId, playerId, badgeId);
+      if (isUnlocked) {
+        return null; // Badge déjà débloqué, pas de progression
+      }
+
+      const result = await this.queryOne(`
+        INSERT INTO badge_progress (guild_id, player_id, badge_id, current_value, target_value)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (guild_id, player_id, badge_id) DO UPDATE SET
+          current_value = EXCLUDED.current_value,
+          target_value = EXCLUDED.target_value,
+          updated_at = NOW()
+        RETURNING *
+      `, [guildId, playerId, badgeId, currentValue, targetValue]);
+
+      return result;
+    } catch (error) {
+      console.error('🔴 Erreur updateBadgeProgress:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Incrémenter la progression d'un badge
+   */
+  async incrementBadgeProgress(guildId, playerId, badgeId, incrementBy = 1, targetValue) {
+    try {
+      // Vérifier si le badge est déjà débloqué
+      const isUnlocked = await this.playerHasBadge(guildId, playerId, badgeId);
+      if (isUnlocked) {
+        return null;
+      }
+
+      const result = await this.queryOne(`
+        INSERT INTO badge_progress (guild_id, player_id, badge_id, current_value, target_value)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (guild_id, player_id, badge_id) DO UPDATE SET
+          current_value = badge_progress.current_value + $4,
+          updated_at = NOW()
+        RETURNING *
+      `, [guildId, playerId, badgeId, incrementBy, targetValue]);
+
+      return result;
+    } catch (error) {
+      console.error('🔴 Erreur incrementBadgeProgress:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer la progression d'un badge pour un joueur
+   */
+  async getBadgeProgress(guildId, playerId, badgeId) {
+    return this.queryOne(`
+      SELECT * FROM badge_progress
+      WHERE guild_id = $1 AND player_id = $2 AND badge_id = $3
+    `, [guildId, playerId, badgeId]);
+  }
+
+  /**
+   * Récupérer toutes les progressions d'un joueur
+   */
+  async getPlayerBadgeProgress(guildId, playerId) {
+    return this.query(`
+      SELECT
+        bp.*,
+        b.code,
+        b.name,
+        b.description,
+        b.emoji,
+        b.color,
+        b.rarity,
+        b.category
+      FROM badge_progress bp
+      JOIN badges b ON bp.badge_id = b.id
+      WHERE bp.guild_id = $1 AND bp.player_id = $2
+      ORDER BY bp.percentage DESC, b.rarity DESC
+    `, [guildId, playerId]);
+  }
+
+  /**
+   * Statistiques des badges d'un joueur
+   */
+  async getPlayerBadgeStats(guildId, playerId) {
+    const stats = await this.queryOne(`
+      SELECT
+        COUNT(*) as total_badges,
+        COUNT(CASE WHEN b.rarity = 'common' THEN 1 END) as common_count,
+        COUNT(CASE WHEN b.rarity = 'uncommon' THEN 1 END) as uncommon_count,
+        COUNT(CASE WHEN b.rarity = 'rare' THEN 1 END) as rare_count,
+        COUNT(CASE WHEN b.rarity = 'epic' THEN 1 END) as epic_count,
+        COUNT(CASE WHEN b.rarity = 'legendary' THEN 1 END) as legendary_count,
+        COUNT(CASE WHEN b.rarity = 'mythic' THEN 1 END) as mythic_count,
+        COUNT(CASE WHEN b.category = 'super_bonus' THEN 1 END) as super_bonus_count
+      FROM player_badges pb
+      JOIN badges b ON pb.badge_id = b.id
+      WHERE pb.guild_id = $1 AND pb.player_id = $2
+    `, [guildId, playerId]);
+
+    return stats || {
+      total_badges: 0,
+      common_count: 0,
+      uncommon_count: 0,
+      rare_count: 0,
+      epic_count: 0,
+      legendary_count: 0,
+      mythic_count: 0,
+      super_bonus_count: 0
+    };
+  }
+
+  /**
+   * Leaderboard des badges (top joueurs)
+   */
+  async getBadgeLeaderboard(guildId, limit = 10) {
+    return this.query(`
+      SELECT
+        p.discord_id,
+        p.username,
+        COUNT(pb.id) as total_badges,
+        COUNT(CASE WHEN b.rarity = 'legendary' THEN 1 END) as legendary_count,
+        COUNT(CASE WHEN b.rarity = 'mythic' THEN 1 END) as mythic_count,
+        MAX(pb.unlocked_at) as last_unlock
+      FROM player_badges pb
+      JOIN badges b ON pb.badge_id = b.id
+      JOIN players p ON pb.player_id = p.id
+      WHERE pb.guild_id = $1
+      GROUP BY p.discord_id, p.username
+      ORDER BY total_badges DESC, legendary_count DESC, mythic_count DESC
+      LIMIT $2
+    `, [guildId, limit]);
+  }
+
+  /**
+   * Badges récemment débloqués (activité)
+   */
+  async getRecentBadgeUnlocks(guildId, limit = 10) {
+    return this.query(`
+      SELECT
+        pb.*,
+        b.code,
+        b.name,
+        b.emoji,
+        b.rarity,
+        p.discord_id,
+        p.username
+      FROM player_badges pb
+      JOIN badges b ON pb.badge_id = b.id
+      JOIN players p ON pb.player_id = p.id
+      WHERE pb.guild_id = $1
+      ORDER BY pb.unlocked_at DESC
+      LIMIT $2
+    `, [guildId, limit]);
+  }
+
+  // ============================================================================
+  // 📅 LOGIN TRACKING - Pour badges Engagement
+  // ============================================================================
+
+  /**
+   * Enregistrer un login et calculer le streak
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @returns {Object} { streak, previousStreak, isNewStreak, brokeStreak }
+   */
+  async recordLogin(guildId, playerId) {
+    try {
+      const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+
+      // Récupérer le dernier login du joueur
+      const player = await this.queryOne(`
+        SELECT current_login_streak, last_login_date, best_login_streak
+        FROM players
+        WHERE guild_id = $1 AND id = $2
+      `, [guildId, playerId]);
+
+      if (!player) {
+        console.warn(`⚠️  Joueur ${playerId} introuvable pour guild ${guildId}`);
+        return null;
+      }
+
+      // Si déjà connecté aujourd'hui, ne rien faire
+      if (player.last_login_date === today) {
+        console.log(`ℹ️  Joueur ${playerId} déjà connecté aujourd'hui`);
+        return {
+          streak: player.current_login_streak,
+          previousStreak: player.current_login_streak,
+          isNewStreak: false,
+          brokeStreak: false
+        };
+      }
+
+      // Insérer le login du jour (ou ignorer si existe déjà)
+      await this.query(`
+        INSERT INTO player_login_history (guild_id, player_id, login_date)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, player_id, login_date) DO NOTHING
+      `, [guildId, playerId, today]);
+
+      // Calculer le nouveau streak
+      const lastLogin = player.last_login_date ? new Date(player.last_login_date) : null;
+      const todayDate = new Date(today);
+
+      let newStreak = 1;
+      let brokeStreak = false;
+      const previousStreak = player.current_login_streak || 0;
+
+      if (lastLogin) {
+        // Calculer la différence en jours
+        const diffTime = todayDate - lastLogin;
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 1) {
+          // Jour consécutif - incrémenter le streak
+          newStreak = (player.current_login_streak || 0) + 1;
+        } else if (diffDays > 1) {
+          // Streak cassé - recommencer à 1
+          newStreak = 1;
+          brokeStreak = true;
+          console.log(`📅 Streak cassé pour joueur ${playerId} (${diffDays} jours d'absence)`);
+        }
+      }
+
+      // Mettre à jour le best streak si nécessaire
+      const newBestStreak = Math.max(player.best_login_streak || 0, newStreak);
+
+      // Mettre à jour les colonnes de cache dans players
+      await this.query(`
+        UPDATE players
+        SET
+          current_login_streak = $1,
+          last_login_date = $2,
+          best_login_streak = $3,
+          updated_at = NOW()
+        WHERE guild_id = $4 AND id = $5
+      `, [newStreak, today, newBestStreak, guildId, playerId]);
+
+      console.log(`📅 Login enregistré: Joueur ${playerId} - Streak: ${newStreak} (best: ${newBestStreak})`);
+
+      return {
+        streak: newStreak,
+        previousStreak,
+        isNewStreak: newStreak > previousStreak,
+        brokeStreak,
+        bestStreak: newBestStreak
+      };
+    } catch (error) {
+      console.error('🔴 Erreur recordLogin:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer le streak actuel d'un joueur
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @returns {Object} { currentStreak, lastLoginDate, bestStreak }
+   */
+  async getLoginStreak(guildId, playerId) {
+    const player = await this.queryOne(`
+      SELECT current_login_streak, last_login_date, best_login_streak
+      FROM players
+      WHERE guild_id = $1 AND id = $2
+    `, [guildId, playerId]);
+
+    return {
+      currentStreak: player?.current_login_streak || 0,
+      lastLoginDate: player?.last_login_date || null,
+      bestStreak: player?.best_login_streak || 0
+    };
+  }
+
+  /**
+   * Récupérer l'historique des logins d'un joueur
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @param {number} limit - Nombre de logins à récupérer
+   * @returns {Array} Liste des dates de login
+   */
+  async getLoginHistory(guildId, playerId, limit = 30) {
+    return this.query(`
+      SELECT login_date, created_at
+      FROM player_login_history
+      WHERE guild_id = $1 AND player_id = $2
+      ORDER BY login_date DESC
+      LIMIT $3
+    `, [guildId, playerId, limit]);
+  }
+
+  // ============================================================================
+
+  /**
+   * Seed les badges Super Bonus en base de données
+   */
+  async seedSuperBonusBadges(guildId = null) {
+    guildId = guildId || process.env.GUILD_ID;
+
+    console.log('🏆 SEEDING: Badges Super Bonus\n');
+    console.log('═'.repeat(100));
+
+    const badges = [
+      // Vision Divine - Tier 1 à 5
+      {
+        code: 'VOYANT_DIVIN_APPRENTI',
+        name: 'Voyant Divin',
+        description: 'As-tu vu l\'avenir ?',
+        emoji: '👁️✨',
+        color: '#9b59b6',
+        rarity: 'epic',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'vision_divine',
+        condition_value: 10,
+        display_order: 1
+      },
+      {
+        code: 'VOYANT_DIVIN_EXPERT',
+        name: 'Expert Vision',
+        description: 'Tu commences à maîtriser la voyance',
+        emoji: '👁️🔮',
+        color: '#9b59b6',
+        rarity: 'epic',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'vision_divine',
+        condition_value: 50,
+        display_order: 2
+      },
+      {
+        code: 'VOYANT_DIVIN_MAITRE',
+        name: 'Maître Vision',
+        description: 'Tu vois TOUT',
+        emoji: '👁️👑',
+        color: '#9b59b6',
+        rarity: 'legendary',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'vision_divine',
+        condition_value: 100,
+        display_order: 3
+      },
+
+      // Bouclier Anti-Piège - Tier 1 à 3
+      {
+        code: 'BOUCLIER_NOVICE',
+        name: 'Gardien Novice',
+        description: 'Premier piège bloqué !',
+        emoji: '🛡️✨',
+        color: '#3498db',
+        rarity: 'rare',
+        category: 'super_bonus',
+        condition_type: 'trap_block',
+        condition_target: null,
+        condition_value: 1,
+        display_order: 10
+      },
+      {
+        code: 'BOUCLIER_EXPERT',
+        name: 'Défenseur Aguerri',
+        description: 'Les pièges ne te font plus peur',
+        emoji: '🛡️⚡',
+        color: '#3498db',
+        rarity: 'epic',
+        category: 'super_bonus',
+        condition_type: 'trap_block',
+        condition_target: null,
+        condition_value: 25,
+        display_order: 11
+      },
+      {
+        code: 'BOUCLIER_LEGENDE',
+        name: 'Indestructible',
+        description: 'Rien ne peut t\'arrêter',
+        emoji: '🛡️👑',
+        color: '#3498db',
+        rarity: 'legendary',
+        category: 'super_bonus',
+        condition_type: 'trap_block',
+        condition_target: null,
+        condition_value: 50,
+        display_order: 12
+      },
+
+      // Jackpot x2 - Tier 1 à 3
+      {
+        code: 'JACKPOT_CHANCEUX',
+        name: 'Coup de Chance',
+        description: 'Ton premier jackpot !',
+        emoji: '💰✨',
+        color: '#f1c40f',
+        rarity: 'epic',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'jackpot_x2',
+        condition_value: 10,
+        display_order: 20
+      },
+      {
+        code: 'JACKPOT_FORTUNE',
+        name: 'Machine à Gains',
+        description: 'Tu attires l\'or !',
+        emoji: '💰🎰',
+        color: '#f1c40f',
+        rarity: 'epic',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'jackpot_x2',
+        condition_value: 30,
+        display_order: 21
+      },
+      {
+        code: 'JACKPOT_ROI',
+        name: 'Roi du Jackpot',
+        description: 'Tu transformes tout en or',
+        emoji: '💰👑',
+        color: '#f1c40f',
+        rarity: 'legendary',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'jackpot_x2',
+        condition_value: 50,
+        display_order: 22
+      },
+
+      // Aimant à Légendaires - Tier 1 à 3
+      {
+        code: 'AIMANT_DEBUTANT',
+        name: 'Attraction Magique',
+        description: 'Les légendaires t\'aiment bien',
+        emoji: '🧲✨',
+        color: '#e74c3c',
+        rarity: 'epic',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'legendary_magnet',
+        condition_value: 5,
+        display_order: 30
+      },
+      {
+        code: 'AIMANT_COLLECTIONNEUR',
+        name: 'Collectionneur Légendaire',
+        description: 'Tu es une véritable attraction',
+        emoji: '🧲💎',
+        color: '#e74c3c',
+        rarity: 'legendary',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'legendary_magnet',
+        condition_value: 15,
+        display_order: 31
+      },
+      {
+        code: 'AIMANT_MAITRE',
+        name: 'Maître de l\'Aimant',
+        description: 'Tous les légendaires te trouvent',
+        emoji: '🧲👑',
+        color: '#e74c3c',
+        rarity: 'mythic',
+        category: 'super_bonus',
+        condition_type: 'super_bonus_usage',
+        condition_target: 'legendary_magnet',
+        condition_value: 30,
+        display_order: 32
+      },
+
+      // Badge spécial: Débloquer au moins 1 de chaque type de Super Bonus
+      {
+        code: 'SUPER_BONUS_COLLECTIONNEUR',
+        name: 'Collectionneur de Super Bonus',
+        description: 'Tu as utilisé tous les types de Super Bonus !',
+        emoji: '🌟🏆',
+        color: '#9b59b6',
+        rarity: 'legendary',
+        category: 'super_bonus',
+        condition_type: 'custom',
+        condition_target: 'all_super_bonus_types',
+        condition_value: 11, // Nombre total de types de super bonus
+        display_order: 100
+      }
+    ];
+
+    let created = 0;
+    let updated = 0;
+
+    for (const badge of badges) {
+      try {
+        const result = await this.createBadge(badge);
+
+        if (result) {
+          created++;
+          console.log(`   ✅ ${badge.emoji} ${badge.name} (${badge.rarity})`);
+        }
+      } catch (error) {
+        if (error.message.includes('duplicate')) {
+          updated++;
+          console.log(`   ⏭️  ${badge.emoji} ${badge.name} déjà existant`);
+        } else {
+          console.error(`   ❌ Erreur création ${badge.name}:`, error.message);
+        }
+      }
+    }
+
+    console.log(`\n🏆 Seeding terminé: ${created} créés, ${updated} mis à jour (total: ${badges.length})`);
+    return { created, updated, total: badges.length };
   }
 }
 

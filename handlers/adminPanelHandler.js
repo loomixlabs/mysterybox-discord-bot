@@ -161,6 +161,8 @@ class AdminPanelHandler {
     // Gestion des thèmes (création/suppression)
     else if (customId === 'theme_create') {
       await this.showCreateThemeModal(interaction);
+    } else if (customId === 'theme_extend') {
+      await this.showExtendThemeModal(interaction);
     } else if (customId.startsWith('theme_delete_confirm_')) {
       await this.handleDeleteTheme(interaction);
     }
@@ -186,6 +188,14 @@ class AdminPanelHandler {
       await this.showWinnerMessageModal(interaction);
     } else if (customId === 'mystery_box_toggle_auto_delete') {
       await this.toggleAutoDeleteCelebration(interaction);
+    } else if (customId === 'mystery_box_image') {
+      await this.showImageModal(interaction);
+    } else if (customId === 'mystery_box_title') {
+      await this.showTitleModal(interaction);
+    } else if (customId === 'mystery_box_winner_message') {
+      await this.showWinnerMessageModal(interaction);
+    } else if (customId === 'mystery_box_celebration_gif') {
+      await this.showWinnerMessageModal(interaction);
     } else if (customId === 'theme_config_refresh') {
       await this.showThemeConfigMenu(interaction);
     } else if (customId === 'theme_config_back') {
@@ -589,7 +599,7 @@ class AdminPanelHandler {
       await this.handleTemplateColorSelection(interaction);
     }
     // Sélections pour les missions
-    else if (customId === 'select_mission') {
+    else if (customId === 'select_mission' || customId.startsWith('select_mission_')) {
       await this.handleMissionSelection(interaction);
     } else if (customId === 'select_mission_type') {
       await this.handleMissionTypeSelection(interaction);
@@ -845,13 +855,26 @@ class AdminPanelHandler {
 
       const components = [];
 
-      // Bouton créer thème
-      const row1 = new ActionRowBuilder().addComponents(
+      // Boutons d'action
+      const row1Buttons = [
         new ButtonBuilder()
           .setCustomId('theme_create')
           .setLabel('➕ Créer un Thème')
           .setStyle(ButtonStyle.Success)
-      );
+      ];
+
+      // Ajouter bouton prolongation si un thème actif existe
+      const activeTheme = allThemes.find(t => t.is_active);
+      if (activeTheme && activeTheme.duration_days !== null) {
+        row1Buttons.push(
+          new ButtonBuilder()
+            .setCustomId('theme_extend')
+            .setLabel('⏰ Prolonger le Thème Actif')
+            .setStyle(ButtonStyle.Primary)
+        );
+      }
+
+      const row1 = new ActionRowBuilder().addComponents(...row1Buttons);
       components.push(row1);
 
       // Select menu pour supprimer un thème (si au moins 1 thème existe)
@@ -1210,6 +1233,42 @@ class AdminPanelHandler {
 
     // Rafraîchir le menu pour afficher le changement
     await this.showThemeConfigMenu(interaction);
+  }
+
+  /**
+   * Modal pour prolonger la durée du thème actif
+   */
+  async showExtendThemeModal(interaction) {
+    const theme = await db.getActiveTheme(interaction.guildId);
+    const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_extend_theme')
+      .setTitle('⏰ Prolonger le Thème');
+
+    let currentInfo = '';
+    if (expirationInfo.isUnlimited) {
+      currentInfo = 'Durée actuelle: ♾️ Illimitée';
+    } else if (expirationInfo.notActivated) {
+      currentInfo = `Durée configurée: ${theme.duration_days} jours (non activé)`;
+    } else {
+      currentInfo = `Jours restants: ${expirationInfo.daysRemaining} jours`;
+    }
+
+    const daysInput = new TextInputBuilder()
+      .setCustomId('additional_days')
+      .setLabel(`Jours à AJOUTER (${currentInfo})`)
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: 7 pour ajouter 7 jours')
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(4);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(daysInput)
+    );
+
+    return interaction.showModal(modal);
   }
 
   /**
@@ -1738,6 +1797,33 @@ class AdminPanelHandler {
       new ActionRowBuilder().addComponents(messageInput),
       new ActionRowBuilder().addComponents(gifInput),
       new ActionRowBuilder().addComponents(emojisInput)
+    );
+
+    return interaction.showModal(modal);
+  }
+
+  /**
+   * Modal pour modifier l'image de la boîte mystère
+   */
+  async showImageModal(interaction) {
+    const theme = await db.getActiveTheme(interaction.guildId);
+    const config = await db.getThemeConfig(interaction.guildId, theme.id);
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_image')
+      .setTitle('🖼️ Image de la Boîte Mystère');
+
+    const imageInput = new TextInputBuilder()
+      .setCustomId('mystery_box_image')
+      .setLabel('URL de l\'image')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('https://example.com/image.png')
+      .setValue(config?.mystery_box_image || '')
+      .setRequired(false)
+      .setMaxLength(500);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(imageInput)
     );
 
     return interaction.showModal(modal);
@@ -6102,16 +6188,17 @@ class AdminPanelHandler {
    */
   async handleMissionSelection(interaction) {
     console.log('🔍 [MISSION SELECT] Début handleMissionSelection');
-    // Note: deferUpdate() est déjà fait dans handleSelectMenu()
-    console.log('🔍 [MISSION SELECT] Skip deferUpdate (déjà fait par handleSelectMenu)');
 
     // Gérer les deux cas: select menu (values) ou bouton (customId)
     let missionId;
     if (interaction.values && interaction.values.length > 0) {
-      // Cas select menu
+      // Cas select menu - deferUpdate déjà fait dans handleSelectMenu()
+      console.log('🔍 [MISSION SELECT] Select menu - deferUpdate déjà fait');
       missionId = parseInt(interaction.values[0]);
     } else if (interaction.customId && interaction.customId.startsWith('select_mission_')) {
-      // Cas bouton
+      // Cas bouton - il faut defer ici
+      console.log('🔍 [MISSION SELECT] Bouton - deferUpdate nécessaire');
+      await interaction.deferUpdate();
       missionId = parseInt(interaction.customId.replace('select_mission_', ''));
     } else {
       console.error('🔴 [MISSION SELECT] Impossible d\'extraire le missionId');

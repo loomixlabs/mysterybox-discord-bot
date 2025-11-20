@@ -105,9 +105,9 @@ async function showOverview(interaction, player, theme, progress) {
         .setEmoji('📜')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('profile_achievements')
-        .setLabel('Succès')
-        .setEmoji('🏅')
+        .setCustomId('profile_badges')
+        .setLabel('Badges')
+        .setEmoji('🏆')
         .setStyle(ButtonStyle.Secondary)
     );
 
@@ -528,6 +528,7 @@ async function showAchievements(interaction, player, theme, progress) {
       `✅ Missions complétées: **${stats.missions_completed || 0}**`,
       `❌ Missions échouées: **${stats.missions_failed || 0}**`,
       `⚠️ Pièges activés: **${stats.traps_triggered || 0}**`,
+      `🛡️ Pièges bloqués: **${stats.traps_blocked || 0}**`,
       `⚡ Points malus: **${stats.total_malus || 0}**`
     ].join('\n'),
     inline: true
@@ -799,10 +800,193 @@ async function showBonuses(interaction, player, theme) {
   };
 }
 
+/**
+ * 🏆 VIEW 6: BADGES - Vue des badges et achievements
+ */
+async function showBadges(interaction, player, theme, selectedCategory = 'all', selectedRarity = 'all', page = 0) {
+  const guildId = interaction.guildId;
+  const badgeHandler = require('../handlers/badgeHandler');
+
+  // Récupérer les stats des badges du joueur
+  const stats = await badgeHandler.getPlayerBadgeStats(guildId, player.id);
+
+  // Récupérer les badges débloqués avec filtres
+  const filters = {};
+  if (selectedCategory !== 'all') filters.category = selectedCategory;
+  if (selectedRarity !== 'all') filters.rarity = selectedRarity;
+
+  const unlockedBadges = await db.getPlayerBadges(guildId, player.id, filters);
+
+  // Récupérer la progression
+  const progressBadges = await db.getPlayerBadgeProgress(guildId, player.id);
+
+  // Couleur selon rareté sélectionnée
+  const rarityColors = badgeHandler.RARITY_COLORS;
+  const color = selectedRarity !== 'all' ? rarityColors[selectedRarity] : '#2B2D31';
+
+  // Construction de l'embed
+  const embed = new EmbedBuilder()
+    .setTitle('🏆 MES BADGES & ACHIEVEMENTS')
+    .setColor(color)
+    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
+    .setDescription(
+      `### 📊 Statistiques Globales\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `**Total**: ${stats.total_badges} badges débloqués (${stats.completionPercentage}%)\n\n` +
+      `**Par rareté**:\n` +
+      `${badgeHandler.RARITY_EMOJIS.mythic} Mythique: ${stats.mythic_count}\n` +
+      `${badgeHandler.RARITY_EMOJIS.legendary} Légendaire: ${stats.legendary_count}\n` +
+      `${badgeHandler.RARITY_EMOJIS.epic} Épique: ${stats.epic_count}\n` +
+      `${badgeHandler.RARITY_EMOJIS.rare} Rare: ${stats.rare_count}\n` +
+      `${badgeHandler.RARITY_EMOJIS.uncommon} Peu commun: ${stats.uncommon_count}\n` +
+      `${badgeHandler.RARITY_EMOJIS.common} Commun: ${stats.common_count}\n\n` +
+      `**Super Bonus**: ${stats.super_bonus_count} badges\n\n`
+    );
+
+  // Section badges récents
+  if (unlockedBadges.length > 0) {
+    const ITEMS_PER_PAGE = 5;
+    const totalPages = Math.ceil(unlockedBadges.length / ITEMS_PER_PAGE);
+    const startIndex = page * ITEMS_PER_PAGE;
+    const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, unlockedBadges.length);
+    const pageBadges = unlockedBadges.slice(startIndex, endIndex);
+
+    let badgesList = `### 🎖️ Badges Débloqués (${unlockedBadges.length})\n`;
+    badgesList += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    pageBadges.forEach(badge => {
+      const rarityEmoji = badgeHandler.RARITY_EMOJIS[badge.rarity];
+      const rarityName = badgeHandler.RARITY_NAMES[badge.rarity];
+      const unlockedDate = new Date(badge.unlocked_at);
+      const timeAgo = formatTimeAgo(unlockedDate);
+
+      badgesList += `${badge.emoji} **${badge.name}** ${rarityEmoji}\n`;
+      badgesList += `   *${badge.description}*\n`;
+      badgesList += `   📅 Débloqué ${timeAgo}\n\n`;
+    });
+
+    if (totalPages > 1) {
+      badgesList += `\n📄 Page ${page + 1}/${totalPages}\n`;
+    }
+
+    embed.addFields({
+      name: '\u200B',
+      value: badgesList
+    });
+  } else {
+    embed.addFields({
+      name: '🎖️ Badges Débloqués',
+      value: '❌ Aucun badge débloqué avec ces filtres.\n*Utilise les super bonus et collecte pour débloquer des badges !*'
+    });
+  }
+
+  // Section progression
+  if (progressBadges.length > 0) {
+    let progressList = `### 📈 Progression en Cours\n`;
+    progressList += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    progressBadges.slice(0, 3).forEach(progress => {
+      const rarityEmoji = badgeHandler.RARITY_EMOJIS[progress.rarity];
+      const progressBar = createProgressBar(progress.current_value, progress.target_value, 10);
+
+      progressList += `${progress.emoji} **${progress.name}** ${rarityEmoji}\n`;
+      progressList += `${progressBar} ${Math.round(progress.percentage)}%\n`;
+      progressList += `${progress.current_value}/${progress.target_value}\n\n`;
+    });
+
+    embed.addFields({
+      name: '\u200B',
+      value: progressList
+    });
+  }
+
+  // Composants (filtres + navigation)
+  const components = [];
+
+  // Row 1: Filtres catégorie
+  const categoryOptions = [
+    { label: 'Toutes catégories', value: 'all', emoji: '📦', default: selectedCategory === 'all' },
+    { label: 'Super Bonus', value: 'super_bonus', emoji: '⭐', default: selectedCategory === 'super_bonus' },
+    { label: 'Collection', value: 'collection', emoji: '🎨', default: selectedCategory === 'collection' },
+    { label: 'Missions', value: 'mission', emoji: '📋', default: selectedCategory === 'mission' },
+    { label: 'Pièges', value: 'trap', emoji: '💥', default: selectedCategory === 'trap' }
+  ];
+
+  const categorySelect = new StringSelectMenuBuilder()
+    .setCustomId('profile_badges_category')
+    .setPlaceholder('Filtrer par catégorie')
+    .addOptions(categoryOptions);
+
+  components.push(new ActionRowBuilder().addComponents(categorySelect));
+
+  // Row 2: Filtres rareté
+  const rarityOptions = [
+    { label: 'Toutes raretés', value: 'all', emoji: '🌟', default: selectedRarity === 'all' },
+    { label: 'Mythique', value: 'mythic', emoji: '🔴', default: selectedRarity === 'mythic' },
+    { label: 'Légendaire', value: 'legendary', emoji: '🟠', default: selectedRarity === 'legendary' },
+    { label: 'Épique', value: 'epic', emoji: '🟣', default: selectedRarity === 'epic' },
+    { label: 'Rare', value: 'rare', emoji: '🔵', default: selectedRarity === 'rare' }
+  ];
+
+  const raritySelect = new StringSelectMenuBuilder()
+    .setCustomId('profile_badges_rarity')
+    .setPlaceholder('Filtrer par rareté')
+    .addOptions(rarityOptions);
+
+  components.push(new ActionRowBuilder().addComponents(raritySelect));
+
+  // Row 3: Navigation
+  const navRow = new ActionRowBuilder();
+
+  if (unlockedBadges.length > 5) {
+    const totalPages = Math.ceil(unlockedBadges.length / 5);
+
+    navRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`profile_badges_prev:${page}`)
+        .setLabel('◀️ Précédent')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === 0)
+    );
+
+    navRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`profile_badges_next:${page}`)
+        .setLabel('Suivant ▶️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page >= totalPages - 1)
+    );
+  }
+
+  navRow.addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_badges_leaderboard')
+      .setLabel('Classement')
+      .setEmoji('🏆')
+      .setStyle(ButtonStyle.Success)
+  );
+
+  navRow.addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_refresh')
+      .setLabel('Actualiser')
+      .setEmoji('🔄')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  components.push(navRow);
+
+  return {
+    embeds: [embed],
+    components
+  };
+}
+
 module.exports = {
   showOverview,
   showInventory,
   showHistory,
   showAchievements,
-  showBonuses
+  showBonuses,
+  showBadges
 };

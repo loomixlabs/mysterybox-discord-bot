@@ -9,6 +9,10 @@ const setupHandler = require('../handlers/setupHandler');
 const profileHandler = require('../handlers/profileHandler');
 const ServerConfigHandler = require('../handlers/serverConfigHandler');
 
+// Pour le tracking des connexions et badges Engagement
+const db = require('../utils/database-pg');
+const badgeHandler = require('../handlers/badgeHandler');
+
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction, client) {
@@ -60,6 +64,34 @@ module.exports = {
           await profileHandler.handleProfileInteraction(interaction);
         }
 
+        // Bouton "Voir mes badges" depuis MP (view_my_badges:guildId)
+        else if (customId.startsWith('view_my_badges:')) {
+          await interaction.deferReply({ flags: 64 }); // Ephemeral
+
+          const guildId = customId.split(':')[1];
+          const player = await db.getPlayer(guildId, interaction.user.id);
+
+          if (!player) {
+            return interaction.editReply({
+              content: '❌ Tu n\'es pas enregistré sur ce serveur. Utilise `/profile` sur le serveur pour t\'inscrire.',
+            });
+          }
+
+          const theme = await db.getActiveTheme(guildId);
+          const state = {
+            currentView: 'badges',
+            badgesPage: 0,
+            badgesCategory: 'all',
+            badgesRarity: 'all'
+          };
+
+          // Utiliser la fonction showBadges de profileHandler
+          const { showBadges } = require('../handlers/profileHandler');
+          const content = await showBadges(interaction, player, theme, state.badgesCategory, state.badgesRarity, state.badgesPage);
+
+          await interaction.editReply(content);
+        }
+
         // Boutons de configuration serveur (server_config_*)
         else if (customId.startsWith('server_config_') || customId.startsWith('edit_') || customId === 'show_role_tutorial') {
           const handler = new ServerConfigHandler();
@@ -103,7 +135,14 @@ module.exports = {
           await missionHandler.rejectMission(interaction);
         }
         else if (customId.startsWith('mission_quiz_questions_')) {
-          await missionHandler.handleQuizQuestionsManagement(interaction);
+          // Extraire la page si présente dans le customId (format: mission_quiz_questions_123:page)
+          const page = customId.includes(':') ? parseInt(customId.split(':')[1]) : 0;
+          await missionHandler.handleQuizQuestionsManagement(interaction, page);
+        }
+        else if (customId.startsWith('mission_quiz_page_')) {
+          // Pagination quiz: mission_quiz_page_123:page
+          const page = parseInt(customId.split(':')[1]);
+          await missionHandler.handleQuizQuestionsManagement(interaction, page);
         }
         else if (customId.startsWith('mission_quiz_add_')) {
           await missionHandler.handleQuizAdd(interaction);
@@ -361,6 +400,11 @@ module.exports = {
         }
       }
     }
+
+    // 📅 Tracking de connexion pour badges Engagement (async, ne bloque pas)
+    handleLoginTracking(interaction, client).catch(err => {
+      console.error('🔴 Erreur handleLoginTracking:', err);
+    });
   }
 };
 
@@ -515,5 +559,59 @@ async function handleSuperAdminSelect(interaction) {
     const guildId = customId.replace('superadmin_remove_role_', '');
     const roleId = interaction.values[0];
     return await superAdminHandler.handleRemoveAdminRole(interaction, guildId, roleId);
+  }
+}
+
+/**
+ * Gérer le tracking de connexion et déblocage des badges Engagement
+ * Cette fonction est appelée pour TOUTES les interactions (slash, button, select, modal)
+ * Elle enregistre le login du jour et déclenche les badges si le streak augmente
+ */
+async function handleLoginTracking(interaction, client) {
+  try {
+    // Ignorer si pas dans un serveur
+    if (!interaction.guildId) {
+      return;
+    }
+
+    const guildId = interaction.guildId;
+    const discordId = interaction.user.id;
+
+    // Récupérer le joueur depuis Discord ID
+    const player = await db.getPlayerByDiscordId(guildId, discordId);
+
+    if (!player) {
+      // Joueur pas encore enregistré - normal pour les nouveaux utilisateurs
+      return;
+    }
+
+    // Enregistrer le login du jour et récupérer le streak
+    const loginResult = await db.recordLogin(guildId, player.id);
+
+    if (!loginResult) {
+      // Erreur lors de l'enregistrement
+      return;
+    }
+
+    // Si le streak a augmenté, déclencher les badges Engagement
+    if (loginResult.isNewStreak) {
+      console.log(`📅 Nouveau streak pour ${player.username}: ${loginResult.streak} jours`);
+
+      // Appeler le hook onLoginStreak pour débloquer les badges
+      await badgeHandler.onLoginStreak(
+        guildId,
+        player.id,
+        loginResult.streak,
+        client
+      );
+    }
+
+    // Si le streak a été cassé, notifier (optionnel)
+    if (loginResult.brokeStreak) {
+      console.log(`📅 Streak cassé pour ${player.username} - Redémarre à 1`);
+    }
+  } catch (error) {
+    // Ne pas faire échouer l'interaction si le tracking échoue
+    console.error('🔴 Erreur handleLoginTracking:', error);
   }
 }

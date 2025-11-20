@@ -6,6 +6,7 @@ const {
   ButtonStyle
 } = require('discord.js');
 const db = require('../utils/database-pg');
+const badgeHandler = require('./badgeHandler');
 
 /**
  * SUPER BONUS HANDLER - Phase 5
@@ -216,16 +217,54 @@ async function consumeTrapShield(guildId, userId, trapName) {
   const shield = await hasTrapShield(guildId, userId);
   if (!shield) return null;
 
-  await db.consumeBonus(shield.id);
-  // TODO: Implémenter db.logBonusUsage() dans database-pg.js
-  // await db.logBonusUsage(
-  //   userId,
-  //   shield.bonus_id,
-  //   { action: 'trap_blocked', trap_name: trapName },
-  //   'automatic'
-  // );
+  // Décrémenter une charge du bouclier (pas le désactiver complètement)
+  await db.decrementBonusCharge(guildId, shield.id);
 
-  return shield;
+  // Vérifier s'il reste des charges après décrémentation
+  const updatedBonus = await db.queryOne(`
+    SELECT remaining_charges
+    FROM player_active_bonuses
+    WHERE id = $1 AND guild_id = $2
+  `, [shield.id, guildId]);
+
+  // Si plus de charges, désactiver le bonus
+  if (updatedBonus && updatedBonus.remaining_charges <= 0) {
+    await db.query(`
+      UPDATE player_active_bonuses
+      SET is_active = FALSE, used_at = NOW()
+      WHERE id = $1 AND guild_id = $2
+    `, [shield.id, guildId]);
+  }
+
+  // Incrémenter le compteur de pièges bloqués
+  await db.query(`
+    UPDATE players
+    SET traps_blocked = traps_blocked + 1
+    WHERE discord_id = $1 AND guild_id = $2
+  `, [userId, guildId]);
+
+  // Logger l'utilisation du bonus (user_id, pas player_id)
+  try {
+    await db.query(`
+      INSERT INTO bonus_usage_history (guild_id, user_id, bonus_id, used_at, effect_result, trigger_type)
+      VALUES ($1, $2, $3, NOW(), $4, 'trap_blocked')
+    `, [
+      guildId,
+      userId,
+      shield.bonus_id,
+      JSON.stringify({ trap_name: trapName, remaining_charges: updatedBonus?.remaining_charges || 0 })
+    ]);
+  } catch (logError) {
+    console.error('⚠️  Erreur logging bonus usage:', logError);
+    // Continuer même si logging échoue
+  }
+
+  // Retourner les stats pour l'affichage
+  return {
+    ...shield,
+    remainingCharges: updatedBonus?.remaining_charges || 0,
+    totalCharges: shield.default_charges || 3
+  };
 }
 
 /**
@@ -998,11 +1037,35 @@ async function hasMultiplierBonus(guildId, userId, contentType) {
  * @param {string} guildId - Guild ID
  * @param {string} userId - User ID (pour les logs futurs)
  * @param {number} activeBonusId - ID du bonus actif dans player_active_bonuses
+ * @param {Object} client - Client Discord (optionnel, pour tracking badges)
  */
-async function consumeBonusCharge(guildId, userId, activeBonusId) {
+async function consumeBonusCharge(guildId, userId, activeBonusId, client = null) {
   await db.decrementBonusCharge(guildId, activeBonusId);
   console.log(`📉 [BONUS] Charge consommée - activeBonusId: ${activeBonusId}, userId: ${userId}`);
-  // TODO: Implémenter db.logBonusUsage() pour tracer l'utilisation
+
+  // Tracking des badges
+  try {
+    // Récupérer le player_id et le bonus_id
+    const activeBonus = await db.queryOne(`
+      SELECT pab.player_id, sb.bonus_id
+      FROM player_active_bonuses pab
+      JOIN super_bonuses sb ON pab.bonus_id = sb.id
+      WHERE pab.id = $1 AND pab.guild_id = $2
+    `, [activeBonusId, guildId]);
+
+    if (activeBonus) {
+      await badgeHandler.onSuperBonusUsed(
+        guildId,
+        activeBonus.player_id,
+        activeBonus.bonus_id,
+        client
+      );
+    }
+  } catch (error) {
+    console.error(`🔴 Erreur tracking badge dans consumeBonusCharge:`, error);
+  }
+
+  // TODO: Implémenter db.logBonusUsage() pour tracer l'utilisation complète
 }
 
 // ============================================================================

@@ -153,6 +153,13 @@ async function getDetailedStats(playerId, guildId, themeId) {
         AND c.lost_at IS NULL
     `, [playerId, guildId, themeId]);
 
+    // Stats de pièges bloqués par le Bouclier Anti-Piège
+    const trapsBlocked = await db.queryOne(`
+      SELECT COALESCE(traps_blocked, 0) as traps_blocked
+      FROM players
+      WHERE id = $1
+    `, [playerId]);
+
     // Compiler les stats
     const stats = {
       total_collected: parseInt(totalCollected?.count || 0),
@@ -165,6 +172,7 @@ async function getDetailedStats(playerId, guildId, themeId) {
       missions_approved: parseInt(missionStats?.missions_approved || 0),
       missions_rejected: parseInt(missionStats?.missions_rejected || 0),
       traps_triggered: parseInt(trapCount?.traps_triggered || 0),
+      traps_blocked: parseInt(trapsBlocked?.traps_blocked || 0),
       total_malus: parseInt(malusPoints?.total_malus || 0),
       mystery_boxes_opened: parseInt(mysteryBoxCount?.count || 0)
     };
@@ -201,6 +209,7 @@ async function getDetailedStats(playerId, guildId, themeId) {
       missions_approved: 0,
       missions_rejected: 0,
       traps_triggered: 0,
+      traps_blocked: 0,
       total_malus: 0,
       mystery_boxes_opened: 0
     };
