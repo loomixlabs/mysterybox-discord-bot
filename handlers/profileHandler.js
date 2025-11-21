@@ -559,6 +559,7 @@ async function handleBadges(interaction, player, theme, state) {
     interaction,
     player,
     theme,
+    interaction.guildId,  // BUG 16 FIX: Pass guildId explicitly
     state.badgesCategory,
     state.badgesRarity,
     state.badgesPage
@@ -581,6 +582,7 @@ async function handleBadgesCategory(interaction, player, theme, state) {
     interaction,
     player,
     theme,
+    interaction.guildId,  // BUG 16 FIX: Pass guildId explicitly
     state.badgesCategory,
     state.badgesRarity,
     state.badgesPage
@@ -603,6 +605,7 @@ async function handleBadgesRarity(interaction, player, theme, state) {
     interaction,
     player,
     theme,
+    interaction.guildId,  // BUG 16 FIX: Pass guildId explicitly
     state.badgesCategory,
     state.badgesRarity,
     state.badgesPage
@@ -641,6 +644,7 @@ async function handleBadgesPagination(interaction, player, theme, state, action)
     interaction,
     player,
     theme,
+    guildId,  // BUG 16 FIX: Pass guildId explicitly (already defined in line 618)
     state.badgesCategory,
     state.badgesRarity,
     state.badgesPage

@@ -7,6 +7,78 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### 🐛 Fixed
+
+- **BUG 15 - Missions Mot à Deviner**: Missions bloquées avec `target_channel_id` et `target_keyword` NULL (rare mais récurrent)
+  - **Cause**: UPDATE de `mission_progress` arrivait APRÈS les validations dans `validateKeywordMessage()`
+  - **Impact**: Si erreur/crash entre création et update → mission bloquée (bot ne détecte pas le mot)
+  - **Symptômes**:
+    - Thread créé mais mission ne se valide jamais
+    - `target_channel_id` et `target_keyword` restent NULL en base
+    - Affecte ~1% des missions "Mot à Deviner" (124 missions, 2 bloquées)
+  - **Fix Correctif**: Scripts de réparation (`fix-mission-654.js`, `fix-mission-668.js`)
+  - **Fix Préventif**: Refactorisation de `validateKeywordMessage()` pour UPDATE AVANT validations
+    - L'UPDATE se fait maintenant dans un try-catch AVANT les early returns
+    - Garantit que les champs sont toujours remplis, même si erreur ultérieure
+  - **Fichiers**:
+    - Correctif: [scripts/fix-blocked-keyword-missions.js](scripts/fix-blocked-keyword-missions.js), [scripts/analyze-thread-1441352468733886589.js](scripts/analyze-thread-1441352468733886589.js)
+    - Préventif: [handlers/missionHandler.js:284-406](handlers/missionHandler.js#L284-L406)
+  - **Type**: PATCH - Correction critique + prévention
+  - **Missions réparées**: #654 (alexsandra01., mot: "diamant"), #668 (amelie.vl, mot: "marâtre")
+  - **Taux de succès**: Passé de 98.39% → 100%
+
+- **BUG 16 - Badge MP**: Erreur "Une erreur est survenue" / Badges vides lors du clic sur "🏆 Voir mes badges" en MP
+  - **Cause Racine 1** (investigation 1-2): Import path incorrect de `showBadges`
+    - Code importait depuis `'../handlers/profileHandler'` qui n'exporte QUE `handleProfileInteraction`
+    - `showBadges` est exporté depuis `'../views/profileView'`
+    - TypeError: `showBadges is not a function` (ligne 90)
+  - **Cause Racine 2** (investigation 3-4 après feedback utilisateur): Context DM - `guildId` NULL
+    - `showBadges()` lisait `guildId` depuis `interaction.guildId` (ligne 807 profileView.js)
+    - Dans un DM, `interaction.guildId` est `null` → toutes les requêtes DB cherchent avec `guildId = null`
+    - Résultat: Aucun badge trouvé, classement vide
+  - **Impact**: Bouton "Voir mes badges" dans notification MP badge complètement non fonctionnel
+  - **Symptômes**:
+    - Notification MP reçue correctement après obtention badge
+    - Clic sur bouton "🏆 Voir mes badges" → Affiche "0 badges" et classement vide
+    - Sur serveur avec `/profile` → Fonctionne correctement
+    - Logs: `TypeError: showBadges is not a function` (après fix 1: pas d'erreur mais badges vides)
+  - **Investigation Progressive**:
+    1. ❌ Fix tenté: Changement `db.getPlayer()` → `db.getPlayerByDiscordId()` (hypothèse 1)
+    2. ❌ Fix tenté: Kill 7 processus node.exe multiples empêchant changements
+    3. ✅ Fix appliqué: Changement import path `'../handlers/profileHandler'` → `'../views/profileView'`
+    4. 🔴 Feedback utilisateur: "ca me dit que j'au aucun badge et si je regarde le classement, personne n'est present"
+    5. ✅ Fix final: Modification signature `showBadges()` pour accepter `guildId` comme paramètre
+       - Changé ligne 806: `showBadges(interaction, player, theme, guildId, ...)`
+       - Mise à jour 5 appels (1 DM + 4 serveur) pour passer `guildId` explicitement
+  - **Fichiers**:
+    - Import path: [events/interactionCreate.js:89](events/interactionCreate.js#L89)
+    - Signature fonction: [views/profileView.js:806-807](views/profileView.js#L806-L807)
+    - Appel DM: [events/interactionCreate.js:90](events/interactionCreate.js#L90)
+    - Appels serveur: [handlers/profileHandler.js:562,585,608,647](handlers/profileHandler.js)
+    - Fix secondaire: [events/interactionCreate.js:72](events/interactionCreate.js#L72) (getPlayerByDiscordId)
+  - **Type**: PATCH - Correction critique DM badges
+  - **Note 1**: BUG 9 (v1.7.0) avait ajouté le routing du bouton mais avec mauvais import ET sans gérer DM context
+  - **Note 2**: Diagnostic très difficile - 4 tentatives nécessaires suite feedbacks utilisateur
+  - **Note 3**: Context DM nécessite `guildId` dans customId (`view_my_badges:guildId`) ET comme paramètre fonction
+  - **Note 4**: Pattern généralisable: Toutes les fonctions de vue doivent accepter `guildId` en paramètre pour support DM
+
+- **BUG 17 - Super Bonus Badge Tracking**: Erreur `la colonne pab.player_id n'existe pas` lors consommation super bonus
+  - **Cause**: Requête SQL dans `consumeBonusCharge()` utilisait colonne inexistante
+    - Table `player_active_bonuses` a colonne `user_id` (Discord ID)
+    - Requête essayait de sélectionner `pab.player_id` qui n'existe pas
+    - PostgreSQL error: `error: la colonne pab.player_id n'existe pas`
+  - **Impact**: Tracking badges super bonus échoue systématiquement
+  - **Symptômes**:
+    - Super bonus fonctionne correctement (charges décrementées)
+    - Badge "Utilisateur de Super Bonus" ne se débloque jamais
+    - Logs: `🔴 Database query error: error: la colonne pab.player_id n'existe pas`
+  - **Fix**: Correction requête SQL + ajout conversion user_id → player.id
+    - Changé `SELECT pab.player_id` → `SELECT pab.user_id`
+    - Ajout `getPlayerByDiscordId()` pour convertir user_id → player.id
+    - Badge tracking appelle maintenant `onSuperBonusUsed()` avec player.id correct
+  - **Fichier**: [handlers/superBonusHandler.js:1046-1070](handlers/superBonusHandler.js#L1046-L1070)
+  - **Type**: PATCH - Correction critique badge tracking
+
 ## [1.7.1] - 2025-11-20
 
 ### 🔧 Hotfix

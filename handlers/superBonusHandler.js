@@ -1045,21 +1045,25 @@ async function consumeBonusCharge(guildId, userId, activeBonusId, client = null)
 
   // Tracking des badges
   try {
-    // Récupérer le player_id et le bonus_id
+    // Récupérer le user_id et le bonus_id
     const activeBonus = await db.queryOne(`
-      SELECT pab.player_id, sb.bonus_id
+      SELECT pab.user_id, sb.bonus_id
       FROM player_active_bonuses pab
       JOIN super_bonuses sb ON pab.bonus_id = sb.id
       WHERE pab.id = $1 AND pab.guild_id = $2
     `, [activeBonusId, guildId]);
 
     if (activeBonus) {
-      await badgeHandler.onSuperBonusUsed(
-        guildId,
-        activeBonus.player_id,
-        activeBonus.bonus_id,
-        client
-      );
+      // Récupérer player_id depuis user_id (Discord ID)
+      const player = await db.getPlayerByDiscordId(guildId, activeBonus.user_id);
+      if (player) {
+        await badgeHandler.onSuperBonusUsed(
+          guildId,
+          player.id,
+          activeBonus.bonus_id,
+          client
+        );
+      }
     }
   } catch (error) {
     console.error(`🔴 Erreur tracking badge dans consumeBonusCharge:`, error);

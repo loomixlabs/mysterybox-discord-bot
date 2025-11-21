@@ -95,6 +95,60 @@ node verify-mission-system.js           # Vérification système missions
 
 ---
 
+## ⚠️ LACUNES & PRÉVENTION (LECTURE OBLIGATOIRE)
+
+> **DOCUMENTATION CRITIQUE**: Voir [LACUNES-ET-AMELIORATIONS.md](LACUNES-ET-AMELIORATIONS.md)
+
+**Basé sur l'analyse complète de toutes nos conversations depuis le début du projet.**
+
+Ce fichier documente les **7 lacunes récurrentes** qui ont fait perdre 4-8h par session:
+
+1. 🔴 **Modification DB sans consulter schéma** → 2-4h perdues
+2. 🔴 **Oubli `guild_id` (bug multi-serveur critique)** → 1-3h + bug prod
+3. 🟠 **Interaction timeout (Code 10062)** → 1-2h
+4. 🟠 **Routing incomplet** → 1-2h
+5. 🟡 **Sous-estimation du travail** → 30min-1h
+6. 🟡 **Tests E2E manquants** → Bugs tardifs
+7. 🟡 **Documentation tardive** → Perte de contexte
+
+**✅ CHECKLIST UNIVERSELLE - À CONSULTER AVANT TOUTE TÂCHE**:
+
+```
+□ J'ai lu DATABASE-SCHEMA.md pour les tables concernées
+□ J'ai vérifié l'existence de TOUTES les colonnes mentionnées
+□ J'extrais guildId = interaction.guildId en PREMIÈRE ligne
+□ Je défère l'interaction IMMÉDIATEMENT (deferUpdate/deferReply)
+□ Toutes mes requêtes SQL incluent WHERE guild_id = $X
+□ Je crée un script de test E2E après implémentation
+□ Je mets à jour CHANGELOG.md immédiatement
+□ Je route TOUS les types d'interactions (buttons, selects, modals)
+```
+
+**Si UNE SEULE étape manque: ARRÊTER et compléter avant de continuer.**
+
+---
+
+## 📊 Référence Base de Données
+
+> **DOCUMENTATION COMPLÈTE**: Voir [DATABASE-SCHEMA.md](../DATABASE-SCHEMA.md)
+
+Le fichier DATABASE-SCHEMA.md contient:
+- ✅ Structure exhaustive de **33 tables**
+- ✅ Types de colonnes, contraintes, index
+- ✅ Clés étrangères et relations
+- ✅ Contraintes CHECK et UNIQUE détaillées
+- ✅ Catégorisation par système (Configuration, Thèmes, Missions, Super Bonus, etc.)
+- ✅ Exemples de requêtes correctes vs incorrectes
+- ✅ Règles critiques d'isolation multi-serveur
+
+**IMPORTANT**: TOUJOURS consulter DATABASE-SCHEMA.md AVANT de manipuler la DB pour:
+1. Vérifier l'existence des colonnes
+2. Comprendre les relations entre tables
+3. Respecter les contraintes CHECK
+4. Utiliser les bons types de données
+
+---
+
 ## 💾 Base de Données PostgreSQL
 
 ### RÈGLE IMPÉRATIVE: Toujours utiliser Node.js
@@ -640,19 +694,152 @@ else if (customId.startsWith('give_unique_')) {
 
 ---
 
+## 🏆 Système de Badges (OBLIGATOIRE)
+
+### RÈGLE IMPÉRATIVE: Maintenance des badges à chaque ajout
+
+**Après CHAQUE ajout/modification de badge, Claude DOIT**:
+
+1. ✅ **Suivre le process complet** (4 étapes obligatoires):
+   ```
+   ÉTAPE 1: DÉFINITION     → Créer l'entrée du badge avec tous les champs
+   ÉTAPE 2: SEEDING        → Script de seeding + exécution + vérification
+   ÉTAPE 3: TRACKING       → Hook fonction + intégration handler
+   ÉTAPE 4: DOCUMENTATION  → Mettre à jour GUIDE-INTEGRATION-BADGES.md
+   ```
+
+2. ✅ **Mettre à jour GUIDE-INTEGRATION-BADGES.md** IMMÉDIATEMENT:
+   - Section **[HISTORIQUE DES BADGES]** avec tableau détaillé
+   - Fichiers modifiés (handlers, mappings, hooks)
+   - Script de seeding créé
+   - Intégration dans handlers existants
+
+3. ✅ **Mettre à jour CHANGELOG.md** avec les nouveaux badges:
+   ```markdown
+   ### Added
+   - **[Badges]**: Nouveau système de badges [Catégorie]
+     - Ajout de X badges pour [catégorie]
+     - Hook: badgeHandler.onNouvelEvenement()
+     - Integration dans [handler]
+     - Script de seed: scripts/seed-[category]-badges.js
+   ```
+
+4. ✅ **Vérifier la conformité**:
+   - Code unique respecte le format `CATEGORY_NAME_TIER`
+   - Couleur correspond à la rareté (voir GUIDE-INTEGRATION-BADGES.md)
+   - Emojis composés (ex: 👁️✨, 🛡️⚡, 💰👑)
+   - Mapping ajouté dans badgeHandler.js (lignes 40-135)
+
+### Checklist Obligatoire Après Chaque Nouveau Badge
+
+```
+✅ Étape 1: Définition
+  □ Code unique choisi (format: CATEGORY_NAME_TIER)
+  □ Nom et description clairs
+  □ Emoji et couleur selon rareté
+  □ Catégorie et condition_type définis
+
+✅ Étape 2: Seeding
+  □ Script de seeding créé (scripts/seed-[category]-badges.js)
+  □ Script exécuté sans erreur
+  □ Badge visible dans la table `badges`
+
+✅ Étape 3: Tracking
+  □ Mapping ajouté dans badgeHandler.js
+  □ Hook fonction créé (si nouvelle catégorie)
+  □ Hook intégré dans le handler concerné
+
+✅ Étape 4: Documentation
+  □ GUIDE-INTEGRATION-BADGES.md mis à jour (section Historique)
+  □ CHANGELOG.md mis à jour
+  □ Tests E2E effectués
+
+✅ Validation Finale
+  □ Badge s'affiche dans /profile → Badges
+  □ Progression fonctionne correctement
+  □ Déblocage automatique testé
+  □ Notification DM reçue
+```
+
+### Documentation de Référence
+
+- **[GUIDE-INTEGRATION-BADGES.md](GUIDE-INTEGRATION-BADGES.md)** - Guide complet d'intégration (DOIT être lu avant tout ajout)
+- **[SYSTEME-BADGES-COMPLET-2025.md](SYSTEME-BADGES-COMPLET-2025.md)** - Spécification système badges
+- **[handlers/badgeHandler.js](handlers/badgeHandler.js)** - Logique centrale badges (550+ lignes)
+- **[scripts/seed-super-bonus-badges.js](scripts/seed-super-bonus-badges.js)** - Exemple de seeding
+
+### Catégories de Badges Disponibles
+
+```
+super_bonus    # Badges liés aux super bonus (Vision Divine, Jackpot, etc.)
+collection     # Badges de progression collection (Débutant, Maître, etc.)
+rarity         # Badges par rareté spécifique (Chasseur Légendaire, etc.)
+mystery_box    # Badges ouverture de mystery boxes
+trap           # Badges pièges (déclenchés, bloqués, survie)
+mission        # Badges missions (complétées, approuvées, etc.)
+engagement     # Badges fidélité/streaks (jours consécutifs)
+social         # Badges partage/parrainage
+special        # Badges spéciaux/events
+```
+
+### Exemple de Process Complet
+
+```markdown
+## AJOUT: Badges Collection (Catégorie 2)
+
+### Étape 1: Définition ✅
+- 6 badges créés: Débutant, Collectionneur, Chasseur, Expert, Maître, Légende
+- Raretés: Common → Mythic
+- Emojis composés: 🔰, 🎯💎, ⭐🏹, 💫🎓, 🏆👑, 👑✨🌟
+
+### Étape 2: Seeding ✅
+- Script: `scripts/seed-collection-badges.js`
+- Exécuté: ✅ 6 badges créés
+- Vérification: `SELECT * FROM badges WHERE category = 'collection'`
+
+### Étape 3: Tracking ✅
+- Hook créé: `badgeHandler.onCollectibleFound()`
+- Mapping: Lignes 137-155 dans badgeHandler.js
+- Intégration: mysteryBoxHandler.js (après addCollectible)
+
+### Étape 4: Documentation ✅
+- GUIDE-INTEGRATION-BADGES.md: Section Historique mise à jour
+- CHANGELOG.md: Entrée "Added - [Badges] Collection Badges"
+- Tests E2E: scripts/test-collection-badges.js
+```
+
+### Workflow de Claude pour Nouveaux Badges
+
+**À chaque demande d'ajout de badges**, Claude DOIT:
+
+```
+1. Lire GUIDE-INTEGRATION-BADGES.md (section complète)
+2. Lire SYSTEME-BADGES-COMPLET-2025.md (spécifications)
+3. Vérifier les badges existants pour cohérence
+4. Suivre les 4 étapes OBLIGATOIRES
+5. Mettre à jour GUIDE-INTEGRATION-BADGES.md + CHANGELOG.md
+6. Créer script de test E2E
+7. Proposer validation à l'utilisateur
+```
+
+---
+
 ## 🎯 Règles Importantes
 
 ### À TOUJOURS FAIRE
 
 1. ✅ **VERSIONING**: Mettre à jour CHANGELOG.md après CHAQUE modification
 2. ✅ **VERSIONING**: Proposer un bump de version en fin de session
-3. ✅ Utiliser Node.js pour toute vérification DB (jamais psql direct)
-4. ✅ Inclure `guild_id` dans toutes les requêtes SQL
-5. ✅ Déférer les interactions Discord IMMÉDIATEMENT (`deferUpdate()` / `deferReply()`)
-6. ✅ Créer un script de vérification après toute migration DB
-7. ✅ Utiliser `editReply()` après avoir déféré (jamais `update()` ou `reply()`)
-8. ✅ Gérer l'erreur 10062 (interaction timeout) gracefully
-9. ✅ Utiliser les emojis dans les logs (✅ 🔴 ⚠️ 🔍)
+3. ✅ **BADGES**: Lire GUIDE-INTEGRATION-BADGES.md AVANT tout ajout de badge
+4. ✅ **BADGES**: Suivre les 4 étapes obligatoires (Définition, Seeding, Tracking, Documentation)
+5. ✅ **BADGES**: Mettre à jour GUIDE-INTEGRATION-BADGES.md section Historique
+6. ✅ Utiliser Node.js pour toute vérification DB (jamais psql direct)
+7. ✅ Inclure `guild_id` dans toutes les requêtes SQL
+8. ✅ Déférer les interactions Discord IMMÉDIATEMENT (`deferUpdate()` / `deferReply()`)
+9. ✅ Créer un script de vérification après toute migration DB
+10. ✅ Utiliser `editReply()` après avoir déféré (jamais `update()` ou `reply()`)
+11. ✅ Gérer l'erreur 10062 (interaction timeout) gracefully
+12. ✅ Utiliser les emojis dans les logs (✅ 🔴 ⚠️ 🔍)
 
 ### À NE JAMAIS FAIRE
 

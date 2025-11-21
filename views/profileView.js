@@ -803,8 +803,8 @@ async function showBonuses(interaction, player, theme) {
 /**
  * 🏆 VIEW 6: BADGES - Vue des badges et achievements
  */
-async function showBadges(interaction, player, theme, selectedCategory = 'all', selectedRarity = 'all', page = 0) {
-  const guildId = interaction.guildId;
+async function showBadges(interaction, player, theme, guildId, selectedCategory = 'all', selectedRarity = 'all', page = 0) {
+  // BUG 16 FIX: guildId passé en paramètre au lieu de interaction.guildId pour supporter DM context
   const badgeHandler = require('../handlers/badgeHandler');
 
   // Récupérer les stats des badges du joueur

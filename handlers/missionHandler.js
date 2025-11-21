@@ -286,27 +286,98 @@ class MissionHandler {
    * Le joueur doit faire DEVINER le mot à un autre joueur
    * Si le joueur dit le mot lui-même → mission échoue
    * Si un autre joueur dit le mot → mission réussie
+   *
+   * BUG FIX 15 (2025-11-21): UPDATE mission_progress AVANT les validations
+   * pour éviter les missions bloquées avec target_channel_id/target_keyword NULL
    */
   async validateKeywordMessage(interaction, mission, player, progress, validationData) {
-    // Sélectionner un mot-clé aléatoire depuis la table mission_keywords
-    const keywordData = await db.queryOne(
-      `SELECT keyword, difficulty, target_channel_id
-       FROM mission_keywords
-       WHERE guild_id = $1 AND mission_id = $2
-       ORDER BY RANDOM()
-       LIMIT 1`,
-      [interaction.guildId, mission.id]
-    );
+    let keyword = null;
+    let difficulty = 'medium';
+    let randomChannel = null;
+    let hasError = false;
+    let errorMessage = '';
 
-    if (!keywordData) {
-      await interaction.followUp({
-        content: '❌ Aucun mot-clé configuré pour cette mission. Contacte un administrateur.'
-      });
+    try {
+      // Sélectionner un mot-clé aléatoire depuis la table mission_keywords
+      const keywordData = await db.queryOne(
+        `SELECT keyword, difficulty, target_channel_id
+         FROM mission_keywords
+         WHERE guild_id = $1 AND mission_id = $2
+         ORDER BY RANDOM()
+         LIMIT 1`,
+        [interaction.guildId, mission.id]
+      );
+
+      if (!keywordData) {
+        hasError = true;
+        errorMessage = '❌ Aucun mot-clé configuré pour cette mission. Contacte un administrateur.';
+      } else {
+        keyword = keywordData.keyword;
+        difficulty = keywordData.difficulty || 'medium';
+
+        // Sélectionner les canaux disponibles en fonction de la configuration
+        let textChannels = interaction.guild.channels.cache.filter(
+          ch => ch.type === 0 && ch.permissionsFor(interaction.guild.members.me).has('ViewChannel')
+        );
+
+        // Si la mission a des canaux autorisés configurés, filtrer uniquement ceux-ci
+        if (mission.allowed_channels && mission.allowed_channels.length > 0) {
+          textChannels = textChannels.filter(ch => mission.allowed_channels.includes(ch.id));
+          console.log(`📡 Mission avec canaux restreints: ${mission.allowed_channels.length} canaux autorisés, ${textChannels.size} disponibles`);
+        } else {
+          console.log(`🌐 Mission sans restriction de canaux: ${textChannels.size} canaux disponibles`);
+        }
+
+        if (textChannels.size === 0) {
+          hasError = true;
+          errorMessage = '❌ Aucun canal disponible pour cette mission.';
+        } else {
+          // Choisir un canal aléatoire parmi les canaux disponibles
+          randomChannel = textChannels.random();
+        }
+      }
+
+      // CRITIQUE: UPDATE mission_progress IMMÉDIATEMENT, même si erreur détectée
+      // Cela évite les missions bloquées avec NULL (BUG 15)
+      const timeoutSeconds = mission.timeout || 300;
+      const expiresAt = new Date(Date.now() + timeoutSeconds * 1000);
+
+      console.log(`🔍 [BUG 15 FIX] Updating mission_progress BEFORE validation checks`);
+      console.log(`   progress.id=${progress.id}, keyword=${keyword || 'NULL'}, channel=${randomChannel?.id || 'NULL'}`);
+
+      const updateResult = await db.query(
+        `UPDATE mission_progress
+         SET target_channel_id = $1,
+             target_keyword = $2,
+             mission_type = $3,
+             expires_at = $4,
+             updated_at = NOW()
+         WHERE id = $5
+         RETURNING id, expires_at`,
+        [randomChannel?.id || null, keyword, 'keyword-message', expiresAt, progress.id]
+      );
+
+      console.log(`✅ Mission mot-clé mission_progress updated:`, updateResult);
+
+    } catch (error) {
+      console.error('🔴 Erreur validateKeywordMessage (data fetch/update):', error);
+      hasError = true;
+      errorMessage = '❌ Erreur lors de la configuration de la mission.';
+    }
+
+    // Gérer les erreurs APRÈS l'UPDATE
+    if (hasError) {
+      await interaction.followUp({ content: errorMessage });
+
+      // Si aucun canal disponible, fallback vers validation manuelle
+      if (errorMessage.includes('canal disponible')) {
+        return this.handleManualValidation(interaction, mission, player, progress);
+      }
+
       return;
     }
 
-    const keyword = keywordData.keyword;
-    const difficulty = keywordData.difficulty || 'medium';
+    // Continuer avec le flow normal si pas d'erreur
     const difficultyEmojis = {
       'easy': '🟢',
       'medium': '🟡',
@@ -314,52 +385,11 @@ class MissionHandler {
     };
     const difficultyIcon = difficultyEmojis[difficulty] || '🟡';
 
-    // Sélectionner les canaux disponibles en fonction de la configuration
-    let textChannels = interaction.guild.channels.cache.filter(
-      ch => ch.type === 0 && ch.permissionsFor(interaction.guild.members.me).has('ViewChannel')
-    );
-
-    // Si la mission a des canaux autorisés configurés, filtrer uniquement ceux-ci
-    if (mission.allowed_channels && mission.allowed_channels.length > 0) {
-      textChannels = textChannels.filter(ch => mission.allowed_channels.includes(ch.id));
-      console.log(`📡 Mission avec canaux restreints: ${mission.allowed_channels.length} canaux autorisés, ${textChannels.size} disponibles`);
-    } else {
-      console.log(`🌐 Mission sans restriction de canaux: ${textChannels.size} canaux disponibles`);
-    }
-
-    if (textChannels.size === 0) {
-      await interaction.followUp({
-        content: '❌ Aucun canal disponible pour cette mission.'
-      });
-      return this.handleManualValidation(interaction, mission, player, progress);
-    }
-
-    // Choisir un canal aléatoire parmi les canaux disponibles
-    const randomChannel = textChannels.random();
-    const timeoutSeconds = mission.timeout || 300; // Timeout en secondes (défaut: 5 minutes)
-    const expiresAt = new Date(Date.now() + timeoutSeconds * 1000); // FIX: Multiplier par 1000 (secondes → ms)
-
-    // Convertir le timeout en unité appropriée pour l'affichage
+    const timeoutSeconds = mission.timeout || 300;
     const timeoutDisplay = timeoutSeconds >= 60 && timeoutSeconds % 60 === 0
       ? `${timeoutSeconds / 60} minute${timeoutSeconds / 60 > 1 ? 's' : ''}`
       : `${timeoutSeconds} seconde${timeoutSeconds > 1 ? 's' : ''}`;
 
-    console.log(`🔍 [DEBUG TIMEOUT] progress.id=${progress.id}, timeout=${timeoutSeconds}s, expires_at=${expiresAt.toISOString()}`);
-
-    // Stocker les informations de la mission dans mission_progress
-    const updateResult = await db.query(
-      `UPDATE mission_progress
-       SET target_channel_id = $1,
-           target_keyword = $2,
-           mission_type = $3,
-           expires_at = $4,
-           updated_at = NOW()
-       WHERE id = $5
-       RETURNING id, expires_at`,
-      [randomChannel.id, keyword, 'keyword-message', expiresAt, progress.id]
-    );
-
-    console.log(`🔍 [DEBUG TIMEOUT] UPDATE result:`, updateResult);
     console.log(`✅ Mission mot-clé démarrée: joueur=${interaction.user.id}, mot="${keyword}", difficulté=${difficulty}, canal=${randomChannel.name}`);
 
     // Informer le joueur des règles avec la difficulté
@@ -1688,9 +1718,17 @@ class MissionHandler {
         questionId
       );
 
+      // Bouton retour vers la mission
+      const backButton = new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('🔙 Retour à la mission')
+        .setStyle(ButtonStyle.Secondary);
+
+      const row = new ActionRowBuilder().addComponents(backButton);
+
       await interaction.editReply({
-        content: '✅ **Question supprimée avec succès !**\n\n💡 Utilise le bouton "🔙 Retour" pour revenir à la mission.',
-        components: []
+        content: '✅ **Question supprimée avec succès !**',
+        components: [row]
       });
 
     } catch (error) {

@@ -69,7 +69,7 @@ module.exports = {
           await interaction.deferReply({ flags: 64 }); // Ephemeral
 
           const guildId = customId.split(':')[1];
-          const player = await db.getPlayer(guildId, interaction.user.id);
+          const player = await db.getPlayerByDiscordId(guildId, interaction.user.id);
 
           if (!player) {
             return interaction.editReply({
@@ -85,9 +85,9 @@ module.exports = {
             badgesRarity: 'all'
           };
 
-          // Utiliser la fonction showBadges de profileHandler
-          const { showBadges } = require('../handlers/profileHandler');
-          const content = await showBadges(interaction, player, theme, state.badgesCategory, state.badgesRarity, state.badgesPage);
+          // BUG 16 FIX: showBadges est dans views/profileView, pas handlers/profileHandler
+          const { showBadges } = require('../views/profileView');
+          const content = await showBadges(interaction, player, theme, guildId, state.badgesCategory, state.badgesRarity, state.badgesPage);
 
           await interaction.editReply(content);
         }
