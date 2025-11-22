@@ -94,19 +94,17 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     footer_text: 'Système de Pièges'
   },
   {
-    type: 'trap_malus_points',
-    title: '⚠️ Piège Maudit Déclenché !',
-    description: '**{userName}** est victime d\'une malédiction !\n\n🎯 **Piège:** {trapName}\n👻 **Effet:** +{malusPoints} points de malédiction\n\n⚠️ Ces points pourraient avoir des conséquences négatives...',
-    color: '#c0392b',
+    type: 'trap_empty_box',
+    title: '📦 Coffre Vide !',
+    description: '**{userName}** a ouvert un coffre vide !\n\n🎯 **Piège:** {trapName}\n📭 **Effet:** Pas de récompense cette fois...\n\n💡 Pas de chance, réessaye !',
+    color: '#95a5a6',
     footer_text: 'Système de Pièges'
   },
-
-  // Templates génériques de pièges (pour compatibilité)
   {
-    type: 'trap_curse',
-    title: '👻 Piège Activé !',
-    description: '**{userName}** est tombé dans un piège !\n\n🎯 **Piège:** {trapName}\n⚠️ **Effet:** {trapEffect}\n\n💡 Attention aux pièges !',
-    color: '#e67e22',
+    type: 'trap_lose_all_collectibles',
+    title: '☠️ Piège Dévastateur !',
+    description: '**{userName}** a tout perdu !\n\n🎯 **Piège:** {trapName}\n💀 **Effet:** Tous les collectibles ont été perdus !\n\n⚠️ Un piège terrible a vidé toute la collection...',
+    color: '#c0392b',
     footer_text: 'Système de Pièges'
   },
   {
@@ -115,6 +113,31 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     description: '**{userName}** a perdu un objet à cause d\'un piège !\n\n🎯 **Piège:** {trapName}\n\n⚠️ Fais attention la prochaine fois !',
     color: '#e74c3c',
     footer_text: 'Système de Pièges'
+  },
+
+  // Templates de thèmes
+  {
+    type: 'theme_expired',
+    title: '🔴 THÈME EXPIRÉ !',
+    description: 'Le thème **{themeName}** a expiré après **{durationDays} jours** !\n\n📅 **Date d\'expiration:** {expirationDate}\n\n⚠️ Contactez un admin pour activer un nouveau thème.',
+    color: '#e74c3c',
+    footer_text: 'Système de Thèmes'
+  },
+  {
+    type: 'theme_expiring_soon',
+    title: '⏰ THÈME EXPIRE BIENTÔT !',
+    description: 'Le thème **{themeName}** expire dans **{daysRemaining} jour(s)** !\n\n📅 **Date d\'expiration:** {expirationDate}\n\n💡 Dépêchez-vous de compléter votre collection !',
+    color: '#f39c12',
+    footer_text: 'Système de Thèmes'
+  },
+
+  // Template Super Bonus
+  {
+    type: 'legendary_super_bonus',
+    title: '🎰 SUPER BONUS OBTENU !',
+    description: '**{userName}** a obtenu un **SUPER BONUS** exceptionnel !\n\n{bonusIcon} **{bonusName}**\n\n🎉 Félicitations pour cette chance incroyable !',
+    color: '#ff00ff',
+    footer_text: 'Système de Super Bonus'
   }
 ];
 
@@ -164,14 +187,15 @@ async function createDefaultAnnouncementSettings(guildId) {
     await db.query(
       `INSERT INTO announcement_settings (
         guild_id, legendary_collectible, collection_completed,
-        collection_traded, collection_lost, trap_curse, mission_word_guessed,
+        collection_traded, collection_lost, mission_word_guessed,
         mission_started, mission_completed, mission_failed,
         mission_approved, mission_rejected,
-        trap_cooldown, trap_lose_collectible, trap_public_shame, trap_malus_points
+        trap_cooldown, trap_lose_collectible, trap_public_shame,
+        trap_empty_box, trap_lose_all_collectibles
       ) VALUES (
-        $1, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
+        $1, TRUE, TRUE, TRUE, TRUE, TRUE,
         TRUE, TRUE, TRUE, TRUE, TRUE,
-        TRUE, TRUE, TRUE, TRUE
+        TRUE, TRUE, TRUE, TRUE, TRUE
       )`,
       [guildId]
     );

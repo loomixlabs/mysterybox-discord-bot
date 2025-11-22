@@ -189,13 +189,13 @@ class AdminPanelHandler {
     } else if (customId === 'mystery_box_toggle_auto_delete') {
       await this.toggleAutoDeleteCelebration(interaction);
     } else if (customId === 'mystery_box_image') {
-      await this.showImageModal(interaction);
+      await this.handleImageUpload(interaction, 'Mystery Box - Image');
     } else if (customId === 'mystery_box_title') {
       await this.showTitleModal(interaction);
     } else if (customId === 'mystery_box_winner_message') {
       await this.showWinnerMessageModal(interaction);
     } else if (customId === 'mystery_box_celebration_gif') {
-      await this.showWinnerMessageModal(interaction);
+      await this.showCelebrationTutorial(interaction);
     } else if (customId === 'theme_config_refresh') {
       await this.showThemeConfigMenu(interaction);
     } else if (customId === 'theme_config_back') {
@@ -450,8 +450,19 @@ class AdminPanelHandler {
         collection_completed: 'Collection Complétée',
         collection_traded: 'Échange de Collection',
         collection_lost: 'Collection Perdue',
-        trap_curse: 'Malédiction',
-        mission_word_guessed: 'Mot Deviné'
+        trap_cooldown: 'Piège Cooldown',
+        trap_lose_collectible: 'Piège Voleur',
+        trap_public_shame: 'Piège de la Honte',
+        trap_empty_box: 'Boîte Vide',
+        trap_lose_all_collectibles: 'Piège Dévastateur',
+        mission_word_guessed: 'Mot Deviné',
+        mission_started: 'Mission Lancée',
+        mission_completed: 'Mission Réussie',
+        mission_failed: 'Mission Échouée',
+        mission_approved: 'Mission Approuvée',
+        mission_rejected: 'Mission Refusée',
+        theme_expired: 'Thème Expiré',
+        theme_expiring_soon: 'Expiration Prochaine'
       };
       const context = `Template ${templateLabels[templateType]} - Image principale`;
       await this.handleImageUpload(interaction, context);
@@ -462,8 +473,19 @@ class AdminPanelHandler {
         collection_completed: 'Collection Complétée',
         collection_traded: 'Échange de Collection',
         collection_lost: 'Collection Perdue',
-        trap_curse: 'Malédiction',
-        mission_word_guessed: 'Mot Deviné'
+        trap_cooldown: 'Piège Cooldown',
+        trap_lose_collectible: 'Piège Voleur',
+        trap_public_shame: 'Piège de la Honte',
+        trap_empty_box: 'Boîte Vide',
+        trap_lose_all_collectibles: 'Piège Dévastateur',
+        mission_word_guessed: 'Mot Deviné',
+        mission_started: 'Mission Lancée',
+        mission_completed: 'Mission Réussie',
+        mission_failed: 'Mission Échouée',
+        mission_approved: 'Mission Approuvée',
+        mission_rejected: 'Mission Refusée',
+        theme_expired: 'Thème Expiré',
+        theme_expiring_soon: 'Expiration Prochaine'
       };
       const context = `Template ${templateLabels[templateType]} - Thumbnail`;
       await this.handleImageUpload(interaction, context);
@@ -538,6 +560,10 @@ class AdminPanelHandler {
     if (customId.startsWith('edit_bonus_duration_charges:')) {
       return superBonusHandler.handleEditBonusDurationCharges(interaction);
     }
+    // select_mission_type doit afficher un modal - PAS de deferUpdate avant showModal
+    if (customId === 'select_mission_type') {
+      return this.handleMissionTypeSelection(interaction);
+    }
 
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT (sauf pour les délégations ci-dessus)
     await interaction.deferUpdate();
@@ -598,11 +624,9 @@ class AdminPanelHandler {
     else if (customId.startsWith('template_color_select_')) {
       await this.handleTemplateColorSelection(interaction);
     }
-    // Sélections pour les missions
+    // Sélections pour les missions (select_mission_type est traité plus haut, AVANT deferUpdate)
     else if (customId === 'select_mission' || customId.startsWith('select_mission_')) {
       await this.handleMissionSelection(interaction);
-    } else if (customId === 'select_mission_type') {
-      await this.handleMissionTypeSelection(interaction);
     } else if (customId.startsWith('select_mission_channels_')) {
       await this.handleMissionChannelsSelection(interaction);
     }
@@ -1191,10 +1215,18 @@ class AdminPanelHandler {
         .setStyle(ButtonStyle.Secondary)
     );
 
-    return interaction.update({
-      embeds: [embed],
-      components: [row1, row2, row3, row4]
-    });
+    // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row1, row2, row3, row4]
+      });
+    } else {
+      return interaction.update({
+        embeds: [embed],
+        components: [row1, row2, row3, row4]
+      });
+    }
   }
 
   /**
@@ -2282,8 +2314,19 @@ class AdminPanelHandler {
               'Collection Complétée': 'collection_completed',
               'Échange de Collection': 'collection_traded',
               'Collection Perdue': 'collection_lost',
-              'Malédiction': 'trap_curse',
-              'Mot Deviné': 'mission_word_guessed'
+              'Piège Cooldown': 'trap_cooldown',
+              'Piège Voleur': 'trap_lose_collectible',
+              'Piège de la Honte': 'trap_public_shame',
+              'Boîte Vide': 'trap_empty_box',
+              'Piège Dévastateur': 'trap_lose_all_collectibles',
+              'Mot Deviné': 'mission_word_guessed',
+              'Mission Lancée': 'mission_started',
+              'Mission Réussie': 'mission_completed',
+              'Mission Échouée': 'mission_failed',
+              'Mission Approuvée': 'mission_approved',
+              'Mission Refusée': 'mission_rejected',
+              'Thème Expiré': 'theme_expired',
+              'Expiration Prochaine': 'theme_expiring_soon'
             };
 
             const templateType = templateLabels[templateMatch[1]];
@@ -2894,8 +2937,7 @@ class AdminPanelHandler {
       const trapTypes = {
         'cooldown': '⏱️ Cooldown',
         'lose-collectible': '💀 Perte collectible',
-        'public-shame': '😱 Shame public',
-        'points-malus': '➖ Malus points'
+        'public-shame': '😱 Shame public'
       };
 
       traps.forEach(trap => {
@@ -3678,7 +3720,8 @@ class AdminPanelHandler {
         settings.legendary_collectible,
         settings.collection_completed,
         settings.collection_traded,
-        settings.collection_lost
+        settings.collection_lost,
+        settings.legendary_super_bonus
       ].filter(Boolean).length;
 
       const missionsCount = [
@@ -3696,18 +3739,18 @@ class AdminPanelHandler {
       ].filter(Boolean).length;
 
       const trapsCount = [
-        settings.trap_curse,
         settings.trap_cooldown,
         settings.trap_lose_collectible,
         settings.trap_public_shame,
-        settings.trap_malus_points
+        settings.trap_empty_box,
+        settings.trap_lose_all_collectibles
       ].filter(Boolean).length;
       const totalActive = collectiblesCount + missionsCount + themesCount + trapsCount;
 
       description += `### 📊 Vue d'Ensemble\n\n`;
-      description += `**Total:** ${totalActive}/17 annonces actives\n\n`;
+      description += `**Total:** ${totalActive}/18 annonces actives\n\n`;
       description += `\`\`\`\n`;
-      description += `📦 Collectibles    ${collectiblesCount}/4\n`;
+      description += `📦 Collectibles    ${collectiblesCount}/5\n`;
       description += `⚔️  Missions        ${missionsCount}/6\n`;
       description += `🎨 Thèmes          ${themesCount}/2\n`;
       description += `🎭 Pièges          ${trapsCount}/5\n`;
@@ -3826,11 +3869,12 @@ class AdminPanelHandler {
       settings.legendary_collectible,
       settings.collection_completed,
       settings.collection_traded,
-      settings.collection_lost
+      settings.collection_lost,
+      settings.legendary_super_bonus
     ].filter(Boolean).length;
 
     let description = '## 📦 Collectibles & Collections\n\n';
-    description += `**${activeCount}/4** annonces actives\n\n`;
+    description += `**${activeCount}/5** annonces actives\n\n`;
     description += '### Types d\'annonces\n\n';
     description += `${settings.legendary_collectible ? '✅' : '⬜'} **Collectible Légendaire**\n`;
     description += `> Annonce quand un joueur obtient un collectible légendaire\n\n`;
@@ -3839,12 +3883,14 @@ class AdminPanelHandler {
     description += `${settings.collection_traded ? '✅' : '⬜'} **Échange de Collection**\n`;
     description += `> Annonce lors d'un échange entre joueurs\n\n`;
     description += `${settings.collection_lost ? '✅' : '⬜'} **Collection Perdue**\n`;
-    description += `> Annonce quand un joueur perd une collection\n`;
+    description += `> Annonce quand un joueur perd une collection\n\n`;
+    description += `${settings.legendary_super_bonus ? '✅' : '⬜'} **Super Bonus Obtenu**\n`;
+    description += `> Annonce quand un joueur obtient un super bonus légendaire\n`;
 
     const embed = new EmbedBuilder()
       .setDescription(description)
       .setColor('#3498DB')
-      .setFooter({ text: `${activeCount} sur 4 actives`, iconURL: interaction.guild.iconURL() })
+      .setFooter({ text: `${activeCount} sur 5 actives`, iconURL: interaction.guild.iconURL() })
       .setTimestamp();
 
     const components = [
@@ -3870,7 +3916,12 @@ class AdminPanelHandler {
           .setCustomId('toggle_collection_lost')
           .setLabel('Collection Perdue')
           .setEmoji(settings.collection_lost ? '✅' : '⬜')
-          .setStyle(settings.collection_lost ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setStyle(settings.collection_lost ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('toggle_legendary_super_bonus')
+          .setLabel('Super Bonus')
+          .setEmoji(settings.legendary_super_bonus ? '✅' : '⬜')
+          .setStyle(settings.legendary_super_bonus ? ButtonStyle.Success : ButtonStyle.Secondary)
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -4026,30 +4077,24 @@ class AdminPanelHandler {
   async showAnnouncementsTrapsMenu(interaction) {
     const settings = await db.getAnnouncementSettings(interaction.guildId);
 
-    // Compter les annonces actives
+    // Compter les annonces actives (5 types de pièges valides)
     const activeCount = [
-      settings.trap_curse,
       settings.trap_cooldown,
       settings.trap_lose_collectible,
       settings.trap_public_shame,
-      settings.trap_malus_points,
       settings.trap_empty_box,
       settings.trap_lose_all_collectibles
     ].filter(Boolean).length;
 
     let description = '## 🎭 Annonces Pièges\n\n';
-    description += `**${activeCount}/7** annonces actives\n\n`;
+    description += `**${activeCount}/5** annonces actives\n\n`;
     description += '### Types de pièges\n\n';
-    description += `${settings.trap_curse ? '✅' : '⬜'} **Malédiction**\n`;
-    description += `> Annonce quand un joueur active une malédiction\n\n`;
     description += `${settings.trap_cooldown ? '✅' : '⬜'} **Piège Cooldown**\n`;
     description += `> Bloque l'ouverture de boîtes temporairement\n\n`;
     description += `${settings.trap_lose_collectible ? '✅' : '⬜'} **Piège Voleur**\n`;
     description += `> Fait perdre un collectible aléatoire\n\n`;
     description += `${settings.trap_public_shame ? '✅' : '⬜'} **Piège de la Honte**\n`;
     description += `> Expose publiquement l'échec du joueur\n\n`;
-    description += `${settings.trap_malus_points ? '✅' : '⬜'} **Piège Maudit**\n`;
-    description += `> Ajoute des points de malédiction\n\n`;
     description += `${settings.trap_empty_box ? '✅' : '⬜'} **Boîte Vide**\n`;
     description += `> Rien du tout dans la boîte !\n\n`;
     description += `${settings.trap_lose_all_collectibles ? '✅' : '⬜'} **Piège Dévastateur**\n`;
@@ -4058,40 +4103,28 @@ class AdminPanelHandler {
     const embed = new EmbedBuilder()
       .setDescription(description)
       .setColor('#E74C3C')
-      .setFooter({ text: `${activeCount} sur 7 actives`, iconURL: interaction.guild.iconURL() })
+      .setFooter({ text: `${activeCount} sur 5 actives`, iconURL: interaction.guild.iconURL() })
       .setTimestamp();
 
     const components = [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('toggle_trap_curse')
-          .setLabel('Malédiction')
-          .setEmoji(settings.trap_curse ? '✅' : '⬜')
-          .setStyle(settings.trap_curse ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder()
           .setCustomId('toggle_trap_cooldown')
           .setLabel('Cooldown')
           .setEmoji(settings.trap_cooldown ? '✅' : '⬜')
-          .setStyle(settings.trap_cooldown ? ButtonStyle.Success : ButtonStyle.Secondary)
-      ),
-      new ActionRowBuilder().addComponents(
+          .setStyle(settings.trap_cooldown ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('toggle_trap_lose_collectible')
           .setLabel('Voleur')
           .setEmoji(settings.trap_lose_collectible ? '✅' : '⬜')
-          .setStyle(settings.trap_lose_collectible ? ButtonStyle.Success : ButtonStyle.Secondary),
+          .setStyle(settings.trap_lose_collectible ? ButtonStyle.Success : ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('toggle_trap_public_shame')
           .setLabel('Honte')
           .setEmoji(settings.trap_public_shame ? '✅' : '⬜')
-          .setStyle(settings.trap_public_shame ? ButtonStyle.Success : ButtonStyle.Secondary)
-      ),
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('toggle_trap_malus_points')
-          .setLabel('Maudit')
-          .setEmoji(settings.trap_malus_points ? '✅' : '⬜')
-          .setStyle(settings.trap_malus_points ? ButtonStyle.Success : ButtonStyle.Secondary),
+          .setStyle(settings.trap_public_shame ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('toggle_trap_empty_box')
           .setLabel('Boîte Vide')
@@ -4279,7 +4312,7 @@ class AdminPanelHandler {
         return this.showAnnouncementsThemesMenu(interaction);
       } else if (settingName.startsWith('trap_')) {
         return this.showAnnouncementsTrapsMenu(interaction);
-      } else if (settingName.includes('collection') || settingName === 'legendary_collectible') {
+      } else if (settingName.includes('collection') || settingName === 'legendary_collectible' || settingName === 'legendary_super_bonus') {
         return this.showAnnouncementsCollectiblesMenu(interaction);
       } else {
         // Fallback au menu principal si type inconnu
@@ -4303,19 +4336,24 @@ class AdminPanelHandler {
    */
   async showTemplatesListMenu(interaction) {
     try {
-      // Récupérer tous les templates
-      const templates = await db.getAllAnnouncementTemplates(interaction.guildId);
+      await interaction.deferUpdate();
+
+      // Récupérer les templates GLOBAUX uniquement (theme_id IS NULL)
+      // pour éviter les doublons et dépasser la limite de 25 options Discord
+      const templates = await db.queryAll(`
+        SELECT * FROM announcement_templates
+        WHERE guild_id = $1 AND theme_id IS NULL
+        ORDER BY type
+      `, [interaction.guildId]);
 
       const templateLabels = {
         legendary_collectible: '⭐ Collectible Légendaire',
         collection_completed: '🎉 Collection Complétée',
         collection_traded: '🔄 Échange de Collection',
         collection_lost: '💀 Collection Perdue',
-        trap_curse: '😈 Malédiction',
         trap_cooldown: '⏱️ Piège Cooldown',
         trap_lose_collectible: '💀 Piège Voleur',
         trap_public_shame: '😱 Piège de la Honte',
-        trap_malus_points: '⚠️ Piège Maudit',
         trap_empty_box: '📦 Boîte Vide',
         trap_lose_all_collectibles: '💥 Piège Dévastateur',
         mission_word_guessed: '🎯 Mot Deviné',
@@ -4325,7 +4363,8 @@ class AdminPanelHandler {
         mission_approved: '👍 Mission Approuvée',
         mission_rejected: '⛔ Mission Refusée',
         theme_expired: '🔴 Thème Expiré',
-        theme_expiring_soon: '⏰ Expiration Prochaine'
+        theme_expiring_soon: '⏰ Expiration Prochaine',
+        legendary_super_bonus: '🎰 Super Bonus Obtenu'
       };
 
       const embed = new EmbedBuilder()
@@ -4374,24 +4413,23 @@ class AdminPanelHandler {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      if (interaction.deferred) {
-        return interaction.editReply({
-          embeds: [embed],
-          components: [selectRow, backButton]
-        });
-      } else {
-        return interaction.update({
-          embeds: [embed],
-          components: [selectRow, backButton]
-        });
-      }
+      return interaction.editReply({
+        embeds: [embed],
+        components: [selectRow, backButton]
+      });
 
     } catch (error) {
       console.error('❌ Erreur lors de l\'affichage des templates:', error);
-      await interaction.reply({
-        content: '❌ Une erreur est survenue lors de l\'affichage des templates.',
-        flags: 64
-      });
+      if (interaction.deferred) {
+        await interaction.editReply({
+          content: '❌ Une erreur est survenue lors de l\'affichage des templates.',
+        });
+      } else {
+        await interaction.reply({
+          content: '❌ Une erreur est survenue lors de l\'affichage des templates.',
+          flags: 64
+        });
+      }
     }
   }
 
@@ -4404,12 +4442,11 @@ class AdminPanelHandler {
       collection_completed: '🎉',
       collection_traded: '🔄',
       collection_lost: '💀',
-      trap_curse: '😈',
       trap_cooldown: '⏱️',
       trap_lose_collectible: '💀',
       trap_public_shame: '😱',
-      trap_malus_points: '⚠️',
       trap_empty_box: '📦',
+      trap_lose_all_collectibles: '💥',
       mission_word_guessed: '🎯',
       mission_started: '⚔️',
       mission_completed: '✅',
@@ -4447,11 +4484,9 @@ class AdminPanelHandler {
         collection_completed: '🎉 Collection Complétée',
         collection_traded: '🔄 Échange de Collection',
         collection_lost: '💀 Collection Perdue',
-        trap_curse: '😈 Malédiction',
         trap_cooldown: '⏱️ Piège Cooldown',
         trap_lose_collectible: '💀 Piège Voleur',
         trap_public_shame: '😱 Piège de la Honte',
-        trap_malus_points: '⚠️ Piège Maudit',
         trap_empty_box: '📦 Boîte Vide',
         trap_lose_all_collectibles: '💥 Piège Dévastateur',
         mission_word_guessed: '🎯 Mot Deviné',
@@ -4461,7 +4496,8 @@ class AdminPanelHandler {
         mission_approved: '👍 Mission Approuvée',
         mission_rejected: '⛔ Mission Refusée',
         theme_expired: '🔴 Thème Expiré',
-        theme_expiring_soon: '⏰ Thème Expire Bientôt'
+        theme_expiring_soon: '⏰ Thème Expire Bientôt',
+        legendary_super_bonus: '🎰 Super Bonus Obtenu'
       };
 
       // Variables disponibles par type
@@ -4470,11 +4506,9 @@ class AdminPanelHandler {
         collection_completed: '{userName}, {themeName}, {roleName}',
         collection_traded: '{user1Name}, {user2Name}, {missionName}',
         collection_lost: '{userName}, {trapName}',
-        trap_curse: '{userName}, {trapName}, {trapEffect}',
         trap_cooldown: '{userName}, {trapName}, {duration}',
         trap_lose_collectible: '{userName}, {trapName}, {collectible}',
         trap_public_shame: '{userName}, {trapName}',
-        trap_malus_points: '{userName}, {trapName}, {points}',
         trap_empty_box: '{userName}, {trapName}',
         trap_lose_all_collectibles: '{userName}, {trapName}, {count}',
         mission_word_guessed: '{userName}, {word}, {missionName}',
@@ -4484,7 +4518,8 @@ class AdminPanelHandler {
         mission_approved: '{userName}, {missionName}, {adminName}, {rewardName}',
         mission_rejected: '{userName}, {missionName}, {adminName}',
         theme_expired: '{themeName}, {durationDays}, {expirationDate}',
-        theme_expiring_soon: '{themeName}, {daysRemaining}, {expirationDate}'
+        theme_expiring_soon: '{themeName}, {daysRemaining}, {expirationDate}',
+        legendary_super_bonus: '{userName}, {bonusName}, {bonusIcon}'
       };
 
       const embed = new EmbedBuilder()
@@ -4666,10 +4701,31 @@ class AdminPanelHandler {
           userName: 'JoueurTest',
           trapName: 'Piège Mortel'
         },
-        trap_curse: {
+        trap_cooldown: {
           userName: 'JoueurTest',
-          trapName: 'Malédiction Sombre',
-          trapEffect: 'Perd 50% de points pendant 24h'
+          trapName: 'Piège Temporel',
+          duration: '30',
+          cooldownMinutes: '30'
+        },
+        trap_lose_collectible: {
+          userName: 'JoueurTest',
+          trapName: 'Piège Voleur',
+          collectible: 'Dragon Légendaire',
+          collectibleLost: 'Dragon Légendaire'
+        },
+        trap_public_shame: {
+          userName: 'JoueurTest',
+          trapName: 'Piège de la Honte',
+          shameMessage: 'Regardez ce joueur qui a échoué lamentablement !'
+        },
+        trap_empty_box: {
+          userName: 'JoueurTest',
+          trapName: 'Coffre Vide'
+        },
+        trap_lose_all_collectibles: {
+          userName: 'JoueurTest',
+          trapName: 'Piège Dévastateur',
+          count: '15'
         },
         mission_word_guessed: {
           userName: 'JoueurTest',
@@ -6824,11 +6880,6 @@ class AdminPanelHandler {
           label: '😱 Shame public',
           value: 'public-shame',
           description: 'Message de honte envoyé dans un canal'
-        },
-        {
-          label: '➖ Malus points',
-          value: 'points-malus',
-          description: 'Retire des points au joueur'
         }
       ]);
 
@@ -6916,17 +6967,6 @@ class AdminPanelHandler {
       );
 
       modal.addComponents(row1, row2, row3, row4);
-    } else if (trapType === 'points-malus') {
-      const row4 = new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('trap_malus_points')
-          .setLabel('Nombre de points de malus')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('ex: 10')
-          .setRequired(true)
-      );
-
-      modal.addComponents(row1, row2, row3, row4);
     } else if (trapType === 'lose-collectible') {
       // Ce piège n'a pas de paramètre spécifique
       modal.addComponents(row1, row2, row3);
@@ -6955,8 +6995,7 @@ class AdminPanelHandler {
     const trapTypes = {
       'cooldown': '⏱️ Cooldown',
       'lose-collectible': '💀 Perte collectible',
-      'public-shame': '😱 Shame public',
-      'points-malus': '➖ Malus points'
+      'public-shame': '😱 Shame public'
     };
 
     const embed = new EmbedBuilder()
@@ -6974,9 +7013,6 @@ class AdminPanelHandler {
     }
     if (trap.shame_message) {
       embed.addFields({ name: 'Message de honte', value: trap.shame_message });
-    }
-    if (trap.malus_points) {
-      embed.addFields({ name: 'Points de malus', value: `${trap.malus_points} points` });
     }
 
     const components = [

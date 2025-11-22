@@ -338,16 +338,18 @@ class GiveHandler {
       // Attribuer le rôle final
       if (collectible.final_role_discord_id) {
         try {
-          const finalRole = guild.roles.cache.get(collectible.final_role_discord_id);
+          // IMPORTANT: Utiliser fetch() au lieu de cache.get() pour garantir la récupération du rôle
+          // car le cache peut ne pas contenir le rôle si le bot vient de redémarrer
+          const finalRole = await guild.roles.fetch(collectible.final_role_discord_id);
 
           if (finalRole) {
             await member.roles.add(finalRole);
-            console.log(`✅ Rôle "${finalRole.name}" attribué à ${member.user.username}`);
+            console.log(`✅ Rôle "${finalRole.name}" (ID: ${finalRole.id}) attribué à ${member.user.username}`);
           } else {
-            console.error(`❌ Rôle ${collectible.final_role_discord_id} introuvable dans le serveur`);
+            console.error(`❌ Rôle avec ID ${collectible.final_role_discord_id} introuvable dans le serveur ${interaction.guildId}`);
           }
         } catch (error) {
-          console.error('❌ Erreur lors de l\'attribution du rôle:', error);
+          console.error(`❌ Erreur lors de l'attribution du rôle (ID: ${collectible.final_role_discord_id}):`, error);
         }
       } else {
         console.log('⚠️  Aucun rôle configuré pour ce thème');

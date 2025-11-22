@@ -7,6 +7,269 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### ✨ Added
+
+- **[Server Config]**: Nouveau menu "Notifications Missions" dans `/server-config`
+  - Configuration granulaire des notifications lors des threads de mission
+  - 6 toggles indépendants pour contrôler Thread/Mention par niveau de permission:
+    - Super Admins (Thread/Mention) - visible uniquement aux super admins
+    - Propriétaire du serveur (Thread/Mention)
+    - Co-fondateurs (Thread/Mention)
+  - **Permissions**:
+    - Super Admins: accès complet à tous les toggles
+    - Propriétaire: peut modifier ses paramètres et ceux des co-fondateurs (pas super admins)
+  - **Fichiers modifiés**:
+    - `handlers/serverConfigHandler.js` - Nouveau menu et handlers (lignes 373-511)
+    - `utils/database-pg.js` - Fonctions `getMissionNotificationSettings()` et `updateMissionNotificationSetting()`
+    - `handlers/mysteryBoxHandler.js` - Vérification préférences avant ajout thread
+    - `handlers/missionHandler.js` - Vérification préférences avant mention
+  - **Migration SQL**: 6 colonnes ajoutées à `guild_config`:
+    - `notify_super_admins_thread`, `notify_super_admins_mention`
+    - `notify_owner_thread`, `notify_owner_mention`
+    - `notify_cofounders_thread`, `notify_cofounders_mention`
+  - Script migration: `scripts/add-missing-thread-columns.js`
+
+- **[Announcements]**: Ajout du template `legendary_super_bonus` (Super Bonus Obtenu)
+  - Nouveau type d'annonce pour les super bonus obtenus
+  - Variables disponibles: `{userName}`, `{bonusName}`, `{bonusIcon}`
+  - Fichiers modifiés:
+    - `utils/announcementTemplates.js` - Ajout du template
+    - `utils/announcementDefaults.js` - Ajout du template et du toggle
+    - `handlers/adminPanelHandler.js` - Ajout dans templateLabels et availableVars
+  - Migration: `scripts/add-legendary-super-bonus-announcement.js`
+  - **Chaque guild a maintenant 18 templates d'annonces** (contre 17 avant)
+
+### 🗑️ Removed (DB Cleanup)
+
+- **[Announcement Settings]**: Suppression des colonnes toggle obsolètes
+  - Colonnes supprimées: `trap_curse`, `trap_malus_points`
+  - **18 toggles** restants (17 types + legendary_super_bonus)
+  - Script: `scripts/add-legendary-super-bonus-announcement.js`
+
+### 🐛 Fixed
+
+- **[Mission Creation]**: Correction du bug empêchant la création de quiz/missions mot-clé
+  - **Erreur**: "Une erreur est survenue" lors du choix du type de mission
+  - **Cause**: `select_mission_type` était traité APRÈS `deferUpdate()`, empêchant l'affichage du modal
+  - **Solution**: Déplacer le traitement de `select_mission_type` AVANT `deferUpdate()` dans `handleSelectMenu`
+  - **Fichier modifié**: `handlers/adminPanelHandler.js` (lignes 563-566)
+  - Ce fix permet à nouveau de créer des missions quiz et mot-clé depuis l'admin panel
+
+- **[Mission Creation]**: Correction du bug "db.addMission is not a function"
+  - **Erreur**: "db.addMission is not a function" lors de la soumission du modal de création de mission
+  - **Cause**: La fonction `addMission` n'existait pas dans `database-pg.js`
+  - **Solution**:
+    1. Création de la fonction `addMission` dans `utils/database-pg.js` (lignes 591-605)
+    2. Correction de l'appel dans `handlers/modalHandler.js` pour passer `guildId` en premier argument (lignes 1387-1399)
+  - Supporte les types: quiz, keyword-message, et autres types de mission
+
+- **[Quiz Missions]**: Correction du bug des quiz partageant toutes les questions
+  - **Erreur**: Un nouveau quiz reprenait toutes les questions de quiz existants du meme theme
+  - **Cause**: Les questions etaient liees au `theme_id` au lieu du `mission_id`
+  - **Solution**:
+    1. Ajout colonne `mission_id` a la table `quiz_questions`
+    2. Migration des questions existantes vers leur mission specifique
+    3. Nouvelles fonctions `getQuizQuestionsByMission()` et `getRandomQuizQuestionByMission()`
+    4. Mise a jour de `addQuizQuestion()` pour inclure `mission_id`
+  - **Fichiers modifies**:
+    - `utils/database-pg.js` (lignes 485-535) - Nouvelles fonctions DB
+    - `handlers/missionHandler.js` (lignes 971, 1690) - Utilisation de `mission_id`
+    - `handlers/modalHandler.js` (ligne 1661) - Passage de `mission.id` a `addQuizQuestion`
+  - **Migration**: `scripts/add-mission-id-to-quiz-questions.js`
+  - Chaque quiz a maintenant ses propres questions independantes
+
+- **[Role Attribution]**: Correction bug critique d'attribution de rôle lors de la complétion de collection
+  - **Cause**: Utilisation de `cache.get()` au lieu de `fetch()` pour récupérer le rôle Discord
+  - **Impact**: Le rôle n'était pas attribué si le bot venait de redémarrer (rôle pas en cache)
+  - **Solution**: Utilisation de `guild.roles.fetch()` pour garantir la récupération du rôle
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxHandler.js` (ligne 1474)
+    - `handlers/giveHandler.js` (ligne 343)
+  - Ce fix garantit l'attribution correcte du rôle lors de la complétion de toute collection
+
+- **[Announcements Production]**: Correction des variables dans les templates de production
+  - Les templates du serveur de production utilisaient des anciennes variables
+  - Variables corrigées: `{player}` → `{userName}`, `{mission_name}` → `{missionName}`, etc.
+  - Script: `scripts/fix-production-template-variables.js`
+
+- **[Admin Panel]**: Correction sélecteur de templates affichant types obsolètes
+  - Suppression de `trap_curse` et `trap_malus_points` de tous les mappings du code
+  - Fichiers modifiés: `handlers/adminPanelHandler.js` (emojiMap, templateLabels, availableVars)
+  - Fichier modifié: `utils/announcements.js` (suppression méthodes obsolètes)
+
+- **[Admin Panel]**: Correction erreur génération preview pour certains templates
+  - Les previews pour `trap_cooldown`, `trap_lose_collectible`, `trap_public_shame`, `trap_empty_box`, `trap_lose_all_collectibles` échouaient
+  - Cause: Données de test manquantes dans `handleTemplatePreview`
+  - Fichier: `handlers/adminPanelHandler.js` (lignes 4685-4710)
+
+- **[Admin Panel]**: Expansion du sélecteur d'upload d'images de 6 à 17 types
+  - Le sélecteur de type lors de l'upload d'images ne montrait que 6 options
+  - Maintenant affiche tous les 17 types de templates disponibles
+  - Fichier: `handlers/adminPanelHandler.js` (lignes 448-489, 2310-2328)
+
+### 🗑️ Removed (DB Cleanup)
+
+- **[Announcement Templates]**: Suppression de 3 templates obsolètes de la DB
+  - Suppression de `trap_curse` (2 templates) et `trap_malus_points` (1 template)
+  - Chaque guild a maintenant exactement 17 templates (au lieu de 18-19)
+  - Script: `scripts/cleanup-obsolete-templates.js`
+
+- **[Theme Importer]**: Correction erreur ON CONFLICT pour la table traps lors de l'import
+  - Erreur: `il n'existe aucune contrainte unique correspondant à ON CONFLICT`
+  - Cause: ON CONFLICT utilisait `(guild_id, trap_id)` au lieu de `(guild_id, theme_id, trap_id)`
+  - Fichier: `utils/themeImporter.js` (ligne 319)
+
+- **[Admin Panel]**: Correction timeout bouton Templates dans le système d'annonces
+  - Erreur: "échec de l'interaction" lors du clic sur le bouton Templates
+  - Cause: Requête DB avant `deferUpdate()` causait un timeout >3s
+  - Solution: Ajout `await interaction.deferUpdate()` au début de `showTemplatesListMenu`
+  - Fichier: `handlers/adminPanelHandler.js` (lignes 4311-4320)
+
+- **[Announcements]**: Suppression des types d'annonces obsolètes `trap_curse` et `trap_malus_points`
+  - Ces types n'avaient pas de type de piège correspondant dans la DB
+  - Menu Pièges passe de 7/7 à 5/5 annonces
+  - Fichiers modifiés:
+    - `handlers/adminPanelHandler.js` - showAnnouncementsTrapsMenu (lignes 4033-4105)
+    - `utils/announcementDefaults.js` - DEFAULT_ANNOUNCEMENT_TEMPLATES et DEFAULT_ANNOUNCEMENT_TOGGLES
+
+### ✨ Added
+
+- **[Announcements]**: Ajout du template `trap_lose_all_collectibles` (Piège Dévastateur)
+  - Manquait dans les templates par défaut
+  - Fichier: `utils/announcementDefaults.js` (lignes 83-91)
+
+### 🗑️ Removed
+
+- **[Trap System]**: Suppression complète du type de piège `points-malus`
+  - Ce type de piège n'était pas utilisé et créait de la confusion
+  - **Fichiers modifiés**:
+    - `handlers/trapAdminHandler.js` - Suppression de 15+ références (menus, modals, mappings)
+    - `handlers/adminPanelHandler.js` - Suppression des options dans les sélecteurs de type
+    - `handlers/mysteryBoxHandler.js` - Suppression du case switch `points-malus`
+    - `handlers/modalHandler.js` - Suppression de la condition de création
+    - `utils/trapDefaults.js` - Suppression de la définition par défaut et des requêtes SQL
+    - `utils/themeValidator.js` - Suppression du type de l'enum de validation
+    - `themes/schema/theme.schema.json` - Suppression du type de l'enum et de la propriété `malus_points`
+    - `tools/checks/verify-improvements.js` - Mise à jour des types attendus (5 → 4)
+  - **Impact**: Les serveurs ne peuvent plus créer de nouveaux pièges de type `points-malus`
+  - **Migration**: Les pièges existants de ce type ont été supprimés de la base de données
+
+### 🐛 Fixed
+
+- **[Setup Handler]**: Message "Configuration terminée" affiche maintenant les infos du thème actif et le rôle de complétion
+  - Fichier: `handlers/setupHandler.js` (lignes 97-115)
+
+- **[Theme Importer]**: Correction du mapping des probabilités pour accepter les deux formats
+  - Accepte maintenant `super_bonus_probability` en plus de `probability_super_bonus`
+  - Conversion automatique des décimaux (0.5 → 50%)
+  - Support de `rarity_probabilities` nested object
+  - Fichier: `utils/themeImporter.js` (lignes 203-254)
+
+- **[Trap Admin Handler]**: Correction de l'erreur "min length" lors de la modification d'un piège
+  - Ajout de valeurs par défaut pour `notif_title` et `notif_description` si vides
+  - Fichier: `handlers/trapAdminHandler.js` (lignes 749-769)
+
+- **[Mission Handler]**: Correction de l'erreur faux positif lors de la suppression d'un mot-clé
+  - Ajout d'un try-catch silencieux dans le setTimeout de refresh automatique
+  - Fichier: `handlers/missionHandler.js` (lignes 1326-1344)
+
+- **[Admin Panel Handler]**: Correction de l'erreur faux positif lors du toggle archivage
+  - `showThemeConfigMenu` utilise maintenant `editReply` après un `deferUpdate`
+  - Fichier: `handlers/adminPanelHandler.js` (lignes 1194-1205)
+
+- **[Monopoly Theme]**: Ajout du 5ème piège manquant "Enchère Ratée" (type public-shame)
+  - Fichier: `themes/presets/monopoly.theme.json` (lignes 275-283)
+
+- **[Admin Panel Handler]**: BUG 5 - Upload d'image utilisait un modal au lieu d'un thread
+  - Le bouton "Modifier l'image" de la Mystery Box ouvrait un modal au lieu d'un thread pour upload
+  - Correction: utilise maintenant `handleImageUpload` avec contexte 'Mystery Box - Image'
+  - Fichier: `handlers/adminPanelHandler.js` (ligne 192)
+
+- **[Badge Handler]**: BUG 8 - Erreur SQL colonne `player_id` inexistante dans `bonus_usage_history`
+  - La table `bonus_usage_history` utilise `user_id` et non `player_id`
+  - Correction de la requête dans `checkSuperBonusUsageBadges`
+  - Fichier: `handlers/badgeHandler.js` (lignes 302-308)
+
+- **[Admin Panel Handler]**: BUG 9 - Bouton GIF célébration ouvrait un modal au lieu du tutoriel Giphy/Tenor
+  - Le bouton "🎬 GIF de célébration" ouvrait directement un modal au lieu d'afficher les liens Giphy/Tenor
+  - Correction: utilise maintenant `showCelebrationTutorial` avec boutons de recherche GIF
+  - Fichier: `handlers/adminPanelHandler.js` (ligne 198)
+
+- **[Modal Handler]**: BUG 10 - Message de probabilités incorrect lors de la création de thème
+  - Le message affichait "40% collectibles, 40% missions, 20% pièges" au lieu des vraies valeurs
+  - Correction: affiche maintenant "50% collectibles, 25% missions, 15% pièges, 10% super bonus"
+  - Fichier: `handlers/modalHandler.js` (ligne 781)
+
+- **[Database/Theme Creation]**: BUG 11 - Création manuelle de thème échoue silencieusement (thème n'apparaît pas)
+  - **Cause racine**: 2 problèmes critiques découverts:
+    1. Contrainte UNIQUE `traps_guild_id_trap_id_key` empêchait les mêmes pièges sur différents thèmes du même serveur
+    2. En PostgreSQL, une erreur dans une transaction (même catchée) met la transaction en "aborted state" → ROLLBACK automatique
+  - **Symptôme**: Le rôle Discord est créé, le message "succès" s'affiche, mais le thème n'existe pas dans la DB
+  - **Corrections appliquées**:
+    - Migration: Contrainte UNIQUE modifiée de `(guild_id, trap_id)` → `(guild_id, theme_id, trap_id)`
+    - `database-pg.js`: COMMIT déplacé AVANT la création des pièges (pour isoler les erreurs)
+    - `modalHandler.js`: Suppression du double appel à `createDefaultTrapsForTheme`
+  - Fichiers: `utils/database-pg.js` (lignes 248-273), `handlers/modalHandler.js` (lignes 735-737)
+  - Script de migration: `scripts/check-and-fix-traps-constraint.js`
+
+### ✨ Added
+
+- **[Theme Import/Export System]**: Nouveau système complet d'import/export de thèmes préconfigurés
+  - **Objectif**: Réduire l'onboarding d'un nouveau serveur de ~2h à ~15 minutes
+  - **Phase 1 - Foundation**:
+    - `themes/schema/theme.schema.json` - JSON Schema de validation complet
+    - `utils/themeValidator.js` - Validateur avec 300+ lignes de vérifications
+    - `utils/themeImporter.js` - Importateur avec support transactions et rollback
+    - `utils/themeExporter.js` - Exportateur vers format .theme.json
+  - **Phase 2 - Thèmes Préconfigurés** (4 thèmes complets):
+    - `themes/presets/monopoly.theme.json` - 20 collectibles (propriétés françaises), 4 pièges, 6 missions
+    - `themes/presets/pokemon.theme.json` - 25 collectibles (Mewtwo, Dracaufeu, Pikachu...), 5 pièges, 8 missions
+    - `themes/presets/harry-potter.theme.json` - 22 collectibles (Reliques, baguettes), 4 pièges, 7 missions
+    - `themes/presets/blanche-neige.theme.json` - 20 collectibles (7 nains + personnages), 4 pièges, 6 missions
+  - **Templates pour créer de nouveaux thèmes**:
+    - `themes/templates/base.theme.json` - Template complet avec commentaires et placeholders
+    - `themes/templates/minimal.theme.json` - Template minimal fonctionnel (5 items)
+  - **Phase 3 - Intégration /setup** (Nouveau flow en 3 étapes):
+    - Étape 1: Configuration des rôles admin (existant)
+    - Étape 2: **Sélection de thème préconfigurés** (NOUVEAU)
+    - Étape 3: Checklist des prérequis (simplifié)
+    - `handlers/setupThemeHandler.js` - Handler pour la sélection et import de thèmes
+    - Import automatique avec création des rôles, collectibles, missions, pièges
+  - **Structure de dossiers**:
+    - `themes/schema/` - Schemas JSON de validation
+    - `themes/presets/` - Thèmes préconfigurés fournis (4 thèmes)
+    - `themes/templates/` - Templates pour créer de nouveaux thèmes
+    - `themes/exports/` - Exports de thèmes existants
+  - **Fichiers modifiés**:
+    - `handlers/setupHandler.js` - Intégration des handlers de thèmes
+    - `commands/admin/setup.js` - Flow en 3 étapes au lieu de 2
+    - `events/interactionCreate.js` - Routing des nouvelles interactions
+  - **Script de test**: `scripts/test-theme-system.js`, `scripts/export-blanche-neige-theme.js`
+  - **Type**: MINOR - Nouvelle fonctionnalité majeure
+  - **Impact**: Onboarding d'un nouveau serveur en ~5 minutes au lieu de ~2h
+  - **Phase 4 - Corrections de Validation**:
+    - Correction du format JSON des 4 thèmes pour correspondre au schéma du validateur
+    - `theme.final_role_name` et `theme.final_role_color` au lieu de `final_role: { name, color }`
+    - `trap.type` avec valeurs valides: `cooldown`, `lose-collectible`, `lose-all-collectibles`, `public-shame`, `points-malus`, `empty-box`
+    - `trap.description` requis pour chaque piège
+    - `trap.cooldown_duration` en secondes pour les pièges de type cooldown
+    - `question.question_text` et `question.correct_answer` pour les quiz
+    - Script de correction automatique: `scripts/fix-theme-quiz-format.js`
+    - Script de validation: `scripts/validate-all-themes.js`
+    - Mise à jour du schema JSON: `themes/schema/theme.schema.json`
+      - Ajout du type `points-malus` dans l'enum des pièges
+      - Ajout des champs `malus_points`, `reveal_message`, `description` pour collectibles
+      - Flexibilité accrue pour `theme_config`, `settings`, `announcement_templates`
+  - **Phase 5 - Bug Fixes Import**:
+    - Fix `TypeError: Cannot read properties of undefined (reading '0')` dans themeImporter.js
+      - **Cause**: `db.query()` retourne directement `rows[]`, pas `{ rows: [...] }`
+      - **Correction**: `result.rows[0]` → `result[0]` (lignes 195 et 377)
+      - **Fichiers**: [utils/themeImporter.js:195](utils/themeImporter.js#L195), [utils/themeImporter.js:377](utils/themeImporter.js#L377)
+    - Fix création rôle Discord non appelée lors de l'import
+      - **Cause**: Options mal nommées + `guild` non passé dans les options
+      - **Correction**: `autoCreateRoles`, `autoInstallSuperBonuses`, `guild: interaction.guild`
+      - **Fichiers**: [handlers/setupThemeHandler.js:267-273](handlers/setupThemeHandler.js#L267-L273)
+
 ### 🐛 Fixed
 
 - **BUG 15 - Missions Mot à Deviner**: Missions bloquées avec `target_channel_id` et `target_keyword` NULL (rare mais récurrent)

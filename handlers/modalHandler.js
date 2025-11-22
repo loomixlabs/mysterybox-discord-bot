@@ -732,15 +732,8 @@ class ModalHandler {
 
       console.log(`✅ Thème créé dans la DB: ${newTheme.name} (ID: ${newTheme.id})`);
 
-      // Créer les 4 pièges par défaut pour ce thème
-      const trapDefaults = require('../utils/trapDefaults');
-      try {
-        await trapDefaults.createDefaultTrapsForTheme(interaction.guildId, newTheme.id);
-        console.log(`✅ Pièges par défaut créés pour le thème ${newTheme.name}`);
-      } catch (trapError) {
-        console.error('⚠️ Erreur lors de la création des pièges par défaut:', trapError);
-        // On continue quand même, les pièges peuvent être ajoutés manuellement plus tard
-      }
+      // NOTE: Les pièges par défaut sont maintenant créés automatiquement
+      // dans db.createTheme() (après le COMMIT de la transaction principale)
 
       // Logger l'action
       await audit.logThemeCreated(
@@ -778,7 +771,7 @@ class ModalHandler {
           `⏱️ **Durée:** ${durationDays === 0 ? 'Illimitée' : `${durationDays} jours`}\n` +
           `🎭 **Rôle créé:** ${role} (ID: \`${role.id}\`)\n\n` +
           `💡 **Configuration par défaut:**\n` +
-          `- Probabilités: 40% collectibles, 40% missions, 20% pièges\n` +
+          `- Probabilités: 50% collectibles, 25% missions, 15% pièges, 10% super bonus\n` +
           `- Items requis: Sera calculé automatiquement selon les collectibles ajoutés\n\n` +
           `⚠️ **Important:** Ajoute au moins un collectible pour que les joueurs puissent participer !`,
         components: [row],
@@ -1392,15 +1385,17 @@ class ModalHandler {
 
       // Ajouter la mission
       await db.addMission(
-        theme.id,
+        interaction.guildId,  // guildId en premier
+        theme.id,             // themeId
         missionId,
         name,
         missionType,
         description,
         JSON.stringify(validationData),
         timeout,
-        null, // image_url
-        null  // announcement_message
+        null,                 // image_url
+        'random-collectible', // reward_type
+        null                  // reward_data
       );
 
       // Logger l'action
@@ -1460,9 +1455,6 @@ class ModalHandler {
       } else if (trapType === 'public-shame') {
         const message = interaction.fields.getTextInputValue('trap_shame_message');
         typeData = { shame_message: message, shame_channel_id: null };
-      } else if (trapType === 'points-malus') {
-        const points = parseInt(interaction.fields.getTextInputValue('trap_malus_points'));
-        typeData = { malus_points: points };
       }
 
       // Ajouter le piège
@@ -1657,6 +1649,7 @@ class ModalHandler {
       }
 
       // Ajouter la question (sans mauvaises réponses - le joueur peut essayer autant de fois qu'il veut)
+      // mission_id en dernier argument pour lier la question à cette mission spécifique
       await db.addQuizQuestion(
         interaction.guildId,
         mission.theme_id,
@@ -1664,7 +1657,8 @@ class ModalHandler {
         correctAnswer,
         [], // Pas de mauvaises réponses prédéfinies
         hint,
-        finalDifficulty
+        finalDifficulty,
+        mission.id // mission_id pour quiz indépendants
       );
 
       // Logger l'action

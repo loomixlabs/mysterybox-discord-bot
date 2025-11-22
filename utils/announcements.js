@@ -140,13 +140,8 @@ class AnnouncementSystem {
     });
   }
 
-  async announceTrapCurse(client, guildId, userName, trapName, trapEffect) {
-    return this.sendAnnouncement(client, guildId, 'trap_curse', {
-      userName,
-      trapName,
-      trapEffect
-    });
-  }
+  // Méthode obsolète - remplacée par announceTrapEmptyBox et announceTrapLoseAllCollectibles
+  // async announceTrapCurse - SUPPRIMÉ
 
   async announceTrapEmptyBox(client, guildId, userName, trapName) {
     return this.sendAnnouncement(client, guildId, 'trap_empty_box', {
@@ -274,14 +269,8 @@ class AnnouncementSystem {
     });
   }
 
-  async announceTrapMalusPointsTriggered(client, guildId, userName, trapName, malusPoints) {
-    return this.sendAnnouncement(client, guildId, 'trap_malus_points', {
-      userName,
-      trapName,
-      malusPoints,
-      points: malusPoints // Alias pour compatibilité
-    });
-  }
+  // Méthode obsolète - supprimée car type trap_malus_points n'existe plus
+  // async announceTrapMalusPointsTriggered - SUPPRIMÉ
 
   /**
    * Annoncer un super bonus légendaire obtenu

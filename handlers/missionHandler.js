@@ -233,11 +233,36 @@ class MissionHandler {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      const coFounderRoleIds = process.env.CO_FOUNDER_ROLE_ID?.split(',') || [];
-      const mentions = coFounderRoleIds.map(id => `<@&${id.trim()}>`).join(' ');
+      // Récupérer les préférences de notification
+      const notifySettings = await db.getMissionNotificationSettings(interaction.guildId);
+
+      // Construire les mentions en fonction des préférences
+      const mentionParts = [];
+
+      // Mention des co-fondateurs (rôles)
+      if (notifySettings.cofoundersMention) {
+        const coFounderRoleIds = process.env.CO_FOUNDER_ROLE_ID?.split(',') || [];
+        mentionParts.push(...coFounderRoleIds.map(id => `<@&${id.trim()}>`));
+      }
+
+      // Mention du propriétaire
+      if (notifySettings.ownerMention) {
+        mentionParts.push(`<@${interaction.guild.ownerId}>`);
+      }
+
+      // Mention des super-admins
+      if (notifySettings.superAdminsMention) {
+        const { SUPER_ADMINS } = require('../utils/permissions');
+        mentionParts.push(...SUPER_ADMINS.map(id => `<@${id}>`));
+      }
+
+      const mentions = mentionParts.join(' ');
+      const contentText = mentions
+        ? `🔔 ${mentions} Mission en attente de validation !`
+        : `🔔 Mission en attente de validation !`;
 
       await interaction.channel.send({
-        content: `🔔 ${mentions} Mission en attente de validation !`,
+        content: contentText,
         embeds: [new EmbedBuilder()
           .setTitle('📋 Preuve soumise')
           .setDescription(`**Joueur:** <@${interaction.user.id}>\n**Mission:** ${mission.name}`)
@@ -942,8 +967,8 @@ class MissionHandler {
         });
       }
 
-      // Récupérer toutes les questions existantes
-      const questions = await db.getQuizQuestionsByTheme(interaction.guildId, mission.theme_id);
+      // Récupérer toutes les questions de cette mission spécifique
+      const questions = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
 
       // Pagination (20 questions par page pour rester sous la limite de 25 fields)
       const questionsPerPage = 20;
@@ -1317,17 +1342,30 @@ class MissionHandler {
       await db.deleteMissionKeyword(interaction.guildId, keywordId);
 
       await interaction.update({
-        content: '✅ **Mot-clé supprimé avec succès !**',
+        content: '✅ **Mot-clé supprimé avec succès !**\n\n_Retour automatique..._',
         components: []
       });
 
       // Retourner automatiquement à la liste des mots-clés après 1.5 secondes
+      // Note: try-catch silencieux car l'interaction peut être expirée
       setTimeout(async () => {
-        await this.handleKeywordEdit({
-          ...interaction,
-          customId: `mission_keyword_edit_${missionId}`,
-          reply: interaction.followUp.bind(interaction)
-        });
+        try {
+          await interaction.editReply({
+            content: null,
+            embeds: [],
+            components: []
+          });
+          // Forcer le rafraîchissement via editReply plutôt qu'un faux handleKeywordEdit
+          await this.handleKeywordEdit({
+            ...interaction,
+            customId: `mission_keyword_edit_${missionId}`,
+            replied: true,
+            deferred: true
+          });
+        } catch (err) {
+          // Silencieux - l'interaction peut avoir expiré, ce n'est pas grave
+          console.log('ℹ️ Auto-refresh ignoré (interaction expirée)');
+        }
       }, 1500);
 
     } catch (error) {
@@ -1648,8 +1686,8 @@ class MissionHandler {
         });
       }
 
-      // Récupérer toutes les questions de ce thème
-      const questions = await db.getQuizQuestionsByTheme(interaction.guildId, mission.theme_id);
+      // Récupérer toutes les questions de cette mission spécifique
+      const questions = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
 
       if (questions.length === 0) {
         return interaction.reply({

@@ -2,6 +2,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder
 const db = require('../utils/database-pg');
 const BotRoleManager = require('../utils/botRoleManager');
 const { getLoomixFooter } = require('../utils/footerHelper');
+const { isSuperAdmin } = require('../utils/permissions');
 
 // Palette de couleurs 2025 avec emojis colorés
 const COLOR_PALETTES = {
@@ -124,7 +125,7 @@ class ServerConfigHandler {
       .setFooter(await getLoomixFooter(interaction.guildId))
       .setTimestamp();
 
-    const row = new ActionRowBuilder().addComponents(
+    const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('server_config_branding')
         .setLabel('Branding')
@@ -136,10 +137,18 @@ class ServerConfigHandler {
         .setEmoji('📝')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId('server_config_notifications')
+        .setLabel('Notifications')
+        .setEmoji('🔔')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId('server_config_modules')
         .setLabel('Modules')
         .setEmoji('🔧')
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('server_config_close')
         .setLabel('Fermer')
@@ -149,7 +158,7 @@ class ServerConfigHandler {
 
     const payload = {
       embeds: [embed],
-      components: [row]
+      components: [row1, row2]
     };
 
     // Si appelé depuis un bouton, utiliser update(), sinon editReply()
@@ -357,6 +366,151 @@ class ServerConfigHandler {
   }
 
   /**
+   * Afficher le menu des notifications missions
+   * Les super admins peuvent tout modifier
+   * Le propriétaire peut modifier ses paramètres et ceux des co-fondateurs (roles /setup)
+   */
+  async showNotificationsMenu(interaction) {
+    const branding = await db.getGuildBranding(interaction.guildId);
+    const settings = await db.getMissionNotificationSettings(interaction.guildId);
+    const userIsSuperAdmin = isSuperAdmin(interaction.user.id);
+
+    // Helper pour afficher l'état d'un toggle
+    const toggle = (enabled) => enabled ? '✅' : '⬜';
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔔 NOTIFICATIONS MISSIONS')
+      .setDescription(
+        '**Configurez qui reçoit les notifications lors des threads de mission**\n\n' +
+        '📌 **Thread** = Ajouté automatiquement au thread\n' +
+        '📢 **Mention** = Reçoit une notification @mention\n\n' +
+        (userIsSuperAdmin
+          ? '👑 *En tant que Super Admin, vous pouvez tout modifier*'
+          : '🔒 *En tant que propriétaire, vous pouvez modifier vos paramètres et ceux des rôles configurés*')
+      )
+      .addFields(
+        {
+          name: '👑 Super Admins',
+          value:
+            `> ${toggle(settings.superAdminsThread)} Ajout au thread\n` +
+            `> ${toggle(settings.superAdminsMention)} Mention (@)`,
+          inline: true
+        },
+        {
+          name: '🏠 Propriétaire du serveur',
+          value:
+            `> ${toggle(settings.ownerThread)} Ajout au thread\n` +
+            `> ${toggle(settings.ownerMention)} Mention (@)`,
+          inline: true
+        },
+        {
+          name: '🎭 Co-fondateurs (rôles /setup)',
+          value:
+            `> ${toggle(settings.cofoundersThread)} Ajout au thread\n` +
+            `> ${toggle(settings.cofoundersMention)} Mention (@)`,
+          inline: true
+        }
+      )
+      .setColor(branding.secondary_color)
+      .setFooter(await getLoomixFooter(interaction.guildId));
+
+    // Boutons pour les Super Admins (uniquement si super admin)
+    const rows = [];
+
+    if (userIsSuperAdmin) {
+      rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('toggle_notify_super_admins_thread')
+          .setLabel('Super Admins - Thread')
+          .setEmoji(settings.superAdminsThread ? '✅' : '⬜')
+          .setStyle(settings.superAdminsThread ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('toggle_notify_super_admins_mention')
+          .setLabel('Super Admins - Mention')
+          .setEmoji(settings.superAdminsMention ? '✅' : '⬜')
+          .setStyle(settings.superAdminsMention ? ButtonStyle.Success : ButtonStyle.Secondary)
+      ));
+    }
+
+    // Boutons pour le Propriétaire
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('toggle_notify_owner_thread')
+        .setLabel('Propriétaire - Thread')
+        .setEmoji(settings.ownerThread ? '✅' : '⬜')
+        .setStyle(settings.ownerThread ? ButtonStyle.Success : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('toggle_notify_owner_mention')
+        .setLabel('Propriétaire - Mention')
+        .setEmoji(settings.ownerMention ? '✅' : '⬜')
+        .setStyle(settings.ownerMention ? ButtonStyle.Success : ButtonStyle.Secondary)
+    ));
+
+    // Boutons pour les Co-fondateurs
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('toggle_notify_cofounders_thread')
+        .setLabel('Co-fondateurs - Thread')
+        .setEmoji(settings.cofoundersThread ? '✅' : '⬜')
+        .setStyle(settings.cofoundersThread ? ButtonStyle.Success : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('toggle_notify_cofounders_mention')
+        .setLabel('Co-fondateurs - Mention')
+        .setEmoji(settings.cofoundersMention ? '✅' : '⬜')
+        .setStyle(settings.cofoundersMention ? ButtonStyle.Success : ButtonStyle.Secondary)
+    ));
+
+    // Bouton retour
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('server_config_back')
+        .setLabel('Retour')
+        .setEmoji('🔙')
+        .setStyle(ButtonStyle.Secondary)
+    ));
+
+    await interaction.update({
+      embeds: [embed],
+      components: rows
+    });
+  }
+
+  /**
+   * Gérer le toggle d'une notification
+   */
+  async handleNotificationToggle(interaction, settingName) {
+    const userIsSuperAdmin = isSuperAdmin(interaction.user.id);
+
+    // Vérifier les permissions
+    if (settingName.startsWith('notify_super_admins') && !userIsSuperAdmin) {
+      return interaction.reply({
+        content: '🔒 Seuls les Super Admins peuvent modifier ces paramètres.',
+        flags: 64
+      });
+    }
+
+    // Récupérer la valeur actuelle
+    const settings = await db.getMissionNotificationSettings(interaction.guildId);
+    const settingMap = {
+      'notify_super_admins_thread': 'superAdminsThread',
+      'notify_super_admins_mention': 'superAdminsMention',
+      'notify_owner_thread': 'ownerThread',
+      'notify_owner_mention': 'ownerMention',
+      'notify_cofounders_thread': 'cofoundersThread',
+      'notify_cofounders_mention': 'cofoundersMention'
+    };
+
+    const currentValue = settings[settingMap[settingName]];
+    const newValue = !currentValue;
+
+    // Mettre à jour
+    await db.updateMissionNotificationSetting(interaction.guildId, settingName, newValue);
+
+    // Rafraîchir le menu
+    await this.showNotificationsMenu(interaction);
+  }
+
+  /**
    * Gérer les interactions avec les boutons
    */
   async handleButtonInteraction(interaction) {
@@ -371,6 +525,14 @@ class ServerConfigHandler {
       }
       else if (customId === 'server_config_modules') {
         await this.showModulesMenu(interaction);
+      }
+      else if (customId === 'server_config_notifications') {
+        await this.showNotificationsMenu(interaction);
+      }
+      // Toggle notifications
+      else if (customId.startsWith('toggle_notify_')) {
+        const settingName = customId.replace('toggle_', '');
+        await this.handleNotificationToggle(interaction, settingName);
       }
       else if (customId === 'server_config_back') {
         await this.showMainMenu(interaction, true);

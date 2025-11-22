@@ -245,7 +245,12 @@ class DatabaseWrapper {
       // - Mission "Quiz": Ajouter des questions en rapport avec le thème
       console.log(`✅ Missions templates créées (vides) - l'admin devra ajouter le contenu`);
 
-      // Créer les pièges par défaut (5 pièges génériques)
+      // COMMIT la transaction principale AVANT de créer pièges/templates
+      // (pour éviter qu'une erreur dans les pièges ne rollback le thème)
+      await this.query('COMMIT');
+      console.log(`✅ Transaction COMMIT - Thème ${theme.name} créé avec succès`);
+
+      // Créer les pièges par défaut (EN DEHORS de la transaction)
       try {
         const { createDefaultTrapsForTheme } = require('./trapDefaults');
         await createDefaultTrapsForTheme(guildId, theme.id);
@@ -265,7 +270,6 @@ class DatabaseWrapper {
         }
       }
 
-      await this.query('COMMIT');
       return theme;
     } catch (error) {
       await this.query('ROLLBACK');
@@ -468,7 +472,7 @@ class DatabaseWrapper {
   }
 
   /**
-   * Récupérer toutes les questions de quiz pour un thème
+   * Récupérer toutes les questions de quiz pour un thème (LEGACY - utiliser getQuizQuestionsByMission)
    */
   async getQuizQuestionsByTheme(guildId, themeId) {
     guildId = this._getGuildId(guildId);
@@ -479,7 +483,18 @@ class DatabaseWrapper {
   }
 
   /**
-   * Récupérer une question de quiz aléatoire pour un thème
+   * Récupérer toutes les questions de quiz pour une mission spécifique
+   */
+  async getQuizQuestionsByMission(guildId, missionId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryAll(
+      'SELECT * FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2',
+      [guildId, missionId]
+    );
+  }
+
+  /**
+   * Récupérer une question de quiz aléatoire pour un thème (LEGACY)
    */
   async getRandomQuizQuestion(guildId, themeId) {
     guildId = this._getGuildId(guildId);
@@ -493,15 +508,29 @@ class DatabaseWrapper {
   }
 
   /**
-   * Ajouter une question de quiz
+   * Récupérer une question de quiz aléatoire pour une mission spécifique
    */
-  async addQuizQuestion(guildId, themeId, questionText, correctAnswer, wrongAnswers = [], hint = null, difficulty = 'medium') {
+  async getRandomQuizQuestionByMission(guildId, missionId) {
     guildId = this._getGuildId(guildId);
     return this.queryOne(
-      `INSERT INTO quiz_questions (guild_id, theme_id, question_text, correct_answer, wrong_answers, hint, difficulty)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `SELECT * FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2
+       ORDER BY RANDOM()
+       LIMIT 1`,
+      [guildId, missionId]
+    );
+  }
+
+  /**
+   * Ajouter une question de quiz (LEGACY sans mission_id)
+   */
+  async addQuizQuestion(guildId, themeId, questionText, correctAnswer, wrongAnswers = [], hint = null, difficulty = 'medium', missionId = null) {
+    guildId = this._getGuildId(guildId);
+    return this.queryOne(
+      `INSERT INTO quiz_questions (guild_id, theme_id, question_text, correct_answer, wrong_answers, hint, difficulty, mission_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [guildId, themeId, questionText, correctAnswer, wrongAnswers, hint, difficulty]
+      [guildId, themeId, questionText, correctAnswer, wrongAnswers, hint, difficulty, missionId]
     );
   }
 
@@ -581,6 +610,22 @@ class DatabaseWrapper {
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
       [guildId, missionId, keyword, channelId, difficulty]
+    );
+  }
+
+  /**
+   * Ajouter une mission
+   */
+  async addMission(guildId, themeId, missionId, name, type, description, validationData, timeout, imageUrl = null, rewardType = 'random-collectible', rewardData = null) {
+    guildId = this._getGuildId(guildId);
+    // Déterminer le type de validation selon le type de mission
+    const validationType = (type === 'quiz' || type === 'keyword-message') ? 'auto' : 'manual';
+
+    return this.queryOne(
+      `INSERT INTO missions (guild_id, theme_id, mission_id, name, type, description, validation_type, validation_data, timeout, image_url, reward_type, reward_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [guildId, themeId, missionId, name, type, description, validationType, validationData, timeout, imageUrl, rewardType, rewardData]
     );
   }
 
@@ -1558,31 +1603,51 @@ class DatabaseWrapper {
 
   /**
    * Récupérer un template d'annonce
+   * Stratégie: Cherche d'abord un template lié au thème actif, sinon fallback vers template global
    */
   async getAnnouncementTemplate(type, guildId) {
     guildId = this._getGuildId(guildId);
+
+    // 1. Récupérer le thème actif pour ce serveur
+    const activeTheme = await this.queryOne(
+      `SELECT id FROM themes WHERE guild_id = $1 AND is_active = TRUE`,
+      [guildId]
+    );
+
+    // 2. Si thème actif, chercher template spécifique au thème
+    if (activeTheme) {
+      const themeTemplate = await this.queryOne(
+        `SELECT * FROM announcement_templates WHERE guild_id = $1 AND type = $2 AND theme_id = $3`,
+        [guildId, type, activeTheme.id]
+      );
+      if (themeTemplate) return themeTemplate;
+    }
+
+    // 3. Fallback vers template global (theme_id IS NULL)
     return this.queryOne(
-      `SELECT * FROM announcement_templates WHERE guild_id = $1 AND type = $2`,
+      `SELECT * FROM announcement_templates WHERE guild_id = $1 AND type = $2 AND theme_id IS NULL`,
       [guildId, type]
     );
   }
 
   /**
-   * Mettre à jour un template d'annonce
+   * Mettre à jour un template d'annonce global (theme_id = NULL)
    */
   async updateAnnouncementTemplate(type, updates, guildId) {
     guildId = this._getGuildId(guildId);
     return this.query(
-      `INSERT INTO announcement_templates (guild_id, type, title, description, color, footer_text, image_url, thumbnail_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (guild_id, type) DO UPDATE
-         SET title = EXCLUDED.title,
-             description = EXCLUDED.description,
-             color = EXCLUDED.color,
-             footer_text = EXCLUDED.footer_text,
-             image_url = EXCLUDED.image_url,
-             thumbnail_url = EXCLUDED.thumbnail_url,
-             updated_at = NOW()`,
+      `INSERT INTO announcement_templates (guild_id, type, title, description, color, footer_text, image_url, thumbnail_url, theme_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)
+       ON CONFLICT (guild_id, type, theme_id)
+       WHERE theme_id IS NULL
+       DO UPDATE SET
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         color = EXCLUDED.color,
+         footer_text = EXCLUDED.footer_text,
+         image_url = EXCLUDED.image_url,
+         thumbnail_url = EXCLUDED.thumbnail_url,
+         updated_at = NOW()`,
       [
         guildId,
         type,
@@ -1592,6 +1657,37 @@ class DatabaseWrapper {
         updates.footer_text || 'Système d\'annonces',
         updates.image_url || null,
         updates.thumbnail_url || null
+      ]
+    );
+  }
+
+  /**
+   * Mettre à jour un template d'annonce pour un thème spécifique
+   */
+  async updateAnnouncementTemplateForTheme(type, updates, guildId, themeId) {
+    guildId = this._getGuildId(guildId);
+    return this.query(
+      `INSERT INTO announcement_templates (guild_id, type, title, description, color, footer_text, image_url, thumbnail_url, theme_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (guild_id, type, theme_id)
+       DO UPDATE SET
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         color = EXCLUDED.color,
+         footer_text = EXCLUDED.footer_text,
+         image_url = EXCLUDED.image_url,
+         thumbnail_url = EXCLUDED.thumbnail_url,
+         updated_at = NOW()`,
+      [
+        guildId,
+        type,
+        updates.title,
+        updates.description,
+        updates.color || '#3498db',
+        updates.footer_text || 'Système d\'annonces',
+        updates.image_url || null,
+        updates.thumbnail_url || null,
+        themeId
       ]
     );
   }
@@ -1790,6 +1886,70 @@ class DatabaseWrapper {
     }
 
     return this.query('SELECT * FROM colors ORDER BY category, name');
+  }
+
+  // ==================== MISSION NOTIFICATIONS ====================
+
+  /**
+   * Récupérer les préférences de notification missions d'une guild
+   * Auto-initialise avec les valeurs par défaut si nécessaire
+   */
+  async getMissionNotificationSettings(guildId) {
+    guildId = this._getGuildId(guildId);
+
+    const config = await this.queryOne(
+      `SELECT
+        notify_super_admins_thread,
+        notify_super_admins_mention,
+        notify_owner_thread,
+        notify_owner_mention,
+        notify_cofounders_thread,
+        notify_cofounders_mention
+      FROM guild_config
+      WHERE guild_id = $1`,
+      [guildId]
+    );
+
+    // Retourner les valeurs ou les valeurs par défaut
+    return {
+      superAdminsThread: config?.notify_super_admins_thread ?? true,
+      superAdminsMention: config?.notify_super_admins_mention ?? false,
+      ownerThread: config?.notify_owner_thread ?? true,
+      ownerMention: config?.notify_owner_mention ?? false,
+      cofoundersThread: config?.notify_cofounders_thread ?? true,
+      cofoundersMention: config?.notify_cofounders_mention ?? true
+    };
+  }
+
+  /**
+   * Mettre à jour une préférence de notification mission
+   * @param {string} guildId - ID du serveur
+   * @param {string} setting - Nom du setting (ex: 'notify_super_admins_thread')
+   * @param {boolean} value - Nouvelle valeur
+   */
+  async updateMissionNotificationSetting(guildId, setting, value) {
+    guildId = this._getGuildId(guildId);
+
+    // Vérifier que le setting est valide
+    const validSettings = [
+      'notify_super_admins_thread',
+      'notify_super_admins_mention',
+      'notify_owner_thread',
+      'notify_owner_mention',
+      'notify_cofounders_thread',
+      'notify_cofounders_mention'
+    ];
+
+    if (!validSettings.includes(setting)) {
+      throw new Error(`Invalid notification setting: ${setting}`);
+    }
+
+    await this.query(
+      `UPDATE guild_config SET ${setting} = $1 WHERE guild_id = $2`,
+      [value, guildId]
+    );
+
+    return { [setting]: value };
   }
 
   // ==================== SUPER BONUS INSTALLATION ====================

@@ -45,15 +45,6 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
 
   // Pièges
   {
-    type: 'trap_curse',
-    title: '😈 MALÉDICTION ACTIVÉE !',
-    description: '**{userName}** a déclenché **{trapName}** !\n\n⚠️ **Effet:** {trapEffect}\n\nSois prudent la prochaine fois !',
-    color: '#9b59b6',
-    footer_text: 'La malédiction est active',
-    image_url: null,
-    thumbnail_url: null
-  },
-  {
     type: 'trap_cooldown',
     title: '⏱️ PIÈGE TEMPOREL !',
     description: '**{userName}** est tombé dans **{trapName}** !\n\n🔒 Tu ne peux plus ouvrir de boîtes pendant **{duration} minutes**.\n\nUtilise ce temps pour planifier ta prochaine stratégie !',
@@ -81,20 +72,20 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     thumbnail_url: null
   },
   {
-    type: 'trap_malus_points',
-    title: '⚠️ PIÈGE MAUDIT !',
-    description: '**{userName}** est tombé dans **{trapName}** !\n\n👻 **+{points} points de malédiction** ajoutés !\n\nCes points pourraient t\'affecter négativement...',
-    color: '#c0392b',
-    footer_text: 'Points de malédiction ajoutés',
-    image_url: null,
-    thumbnail_url: null
-  },
-  {
     type: 'trap_empty_box',
     title: '📦 BOÎTE VIDE !',
     description: '**{userName}** a ouvert **{trapName}**... et il n\'y avait RIEN dedans ! 😂\n\n🤷 Absolument rien. Pas de collectible, pas de mission, juste le néant cosmique.\n\n💡 Au moins, rien n\'a été perdu !',
     color: '#95a5a6',
     footer_text: 'Mieux vaut en rire ! 🤷',
+    image_url: null,
+    thumbnail_url: null
+  },
+  {
+    type: 'trap_lose_all_collectibles',
+    title: '💀 PIÈGE DÉVASTATEUR !',
+    description: '**{userName}** est tombé dans **{trapName}** !\n\n😱 **CATASTROPHE !** Tu as perdu **TOUS TES COLLECTIBLES** !\n\nUn moment de malchance absolue...',
+    color: '#c0392b',
+    footer_text: 'Tous les collectibles ont été perdus',
     image_url: null,
     thumbnail_url: null
   },
@@ -173,6 +164,17 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     footer_text: 'Fin du thème approche',
     image_url: null,
     thumbnail_url: null
+  },
+
+  // Super Bonus
+  {
+    type: 'legendary_super_bonus',
+    title: '🎰 SUPER BONUS OBTENU !',
+    description: '**{userName}** a obtenu un **SUPER BONUS** exceptionnel !\n\n{bonusIcon} **{bonusName}**\n\n🎉 Félicitations pour cette chance incroyable !',
+    color: '#ff00ff',
+    footer_text: 'Système de Super Bonus',
+    image_url: null,
+    thumbnail_url: null
   }
 ];
 
@@ -184,12 +186,11 @@ const DEFAULT_ANNOUNCEMENT_TOGGLES = {
   collection_completed: true,
   collection_traded: true,
   collection_lost: true,
-  trap_curse: true,
   trap_cooldown: true,
   trap_lose_collectible: true,
   trap_public_shame: true,
-  trap_malus_points: true,
   trap_empty_box: true,
+  trap_lose_all_collectibles: true,
   mission_word_guessed: true,
   mission_started: true,
   mission_completed: true,
@@ -197,7 +198,8 @@ const DEFAULT_ANNOUNCEMENT_TOGGLES = {
   mission_approved: true,
   mission_rejected: true,
   theme_expired: true,
-  theme_expiring_soon: true
+  theme_expiring_soon: true,
+  legendary_super_bonus: true
 };
 
 /**

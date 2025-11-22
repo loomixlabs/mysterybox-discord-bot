@@ -839,20 +839,27 @@ class MysteryBoxHandler {
     // Ajouter le joueur
     await thread.members.add(interaction.user.id);
 
-    // Ajouter les super-admins (accès tous serveurs)
-    for (const adminId of SUPER_ADMINS) {
-      try {
-        await thread.members.add(adminId);
-      } catch (e) {
-        // Ignore si le super-admin n'est pas sur le serveur
+    // Récupérer les préférences de notification
+    const notifySettings = await db.getMissionNotificationSettings(interaction.guildId);
+
+    // Ajouter les super-admins (si activé)
+    if (notifySettings.superAdminsThread) {
+      for (const adminId of SUPER_ADMINS) {
+        try {
+          await thread.members.add(adminId);
+        } catch (e) {
+          // Ignore si le super-admin n'est pas sur le serveur
+        }
       }
     }
 
-    // Ajouter le propriétaire du serveur
-    try {
-      await thread.members.add(interaction.guild.ownerId);
-    } catch (e) {
-      console.warn(`⚠️ Impossible d'ajouter le propriétaire au thread`);
+    // Ajouter le propriétaire du serveur (si activé)
+    if (notifySettings.ownerThread) {
+      try {
+        await thread.members.add(interaction.guild.ownerId);
+      } catch (e) {
+        console.warn(`⚠️ Impossible d'ajouter le propriétaire au thread`);
+      }
     }
 
     // Message de révélation dans le salon public
@@ -1006,10 +1013,6 @@ class MysteryBoxHandler {
 
       case 'public-shame':
         await this.applyTrapShame(interaction, trap, player);
-        break;
-
-      case 'points-malus':
-        await this.applyTrapMalus(interaction, trap, player);
         break;
 
       case 'empty-box':
@@ -1473,17 +1476,19 @@ class MysteryBoxHandler {
     // Attribuer le rôle final (par ID Discord, pas par nom)
     if (theme.final_role_discord_id) {
       try {
-        const finalRole = interaction.guild.roles.cache.get(theme.final_role_discord_id);
+        // IMPORTANT: Utiliser fetch() au lieu de cache.get() pour garantir la récupération du rôle
+        // car le cache peut ne pas contenir le rôle si le bot vient de redémarrer
+        const finalRole = await interaction.guild.roles.fetch(theme.final_role_discord_id);
 
         if (finalRole) {
           const member = await interaction.guild.members.fetch(interaction.user.id);
           await member.roles.add(finalRole);
-          console.log(`✅ Rôle "${finalRole.name}" attribué à ${interaction.user.tag}`);
+          console.log(`✅ Rôle "${finalRole.name}" (ID: ${finalRole.id}) attribué à ${interaction.user.tag}`);
         } else {
-          console.error(`❌ Rôle ${theme.final_role_discord_id} introuvable dans le serveur`);
+          console.error(`❌ Rôle avec ID ${theme.final_role_discord_id} introuvable dans le serveur ${interaction.guildId}`);
         }
       } catch (error) {
-        console.error('❌ Erreur lors de l\'attribution du rôle:', error);
+        console.error(`❌ Erreur lors de l'attribution du rôle (ID: ${theme.final_role_discord_id}):`, error);
       }
     } else {
       console.log('⚠️  Aucun rôle configuré pour ce thème');

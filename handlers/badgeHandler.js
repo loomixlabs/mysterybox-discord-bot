@@ -303,7 +303,7 @@ async function checkSuperBonusUsageBadges(guildId, playerId, bonusId, client = n
       SELECT COUNT(*) as count
       FROM bonus_usage_history
       WHERE guild_id = $1
-        AND player_id = $2
+        AND user_id = $2
         AND bonus_id IN (
           SELECT id FROM super_bonuses WHERE bonus_id = $3
         )
