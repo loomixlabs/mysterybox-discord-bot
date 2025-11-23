@@ -7,6 +7,7 @@ const giveUniqueHandler = require('./giveUniqueHandler');
 const trapAdminHandler = require('./trapAdminHandler');
 const probabilityHandler = require('./probabilityHandler');
 const superBonusHandler = require('./superBonusHandler');
+const progressionRoleAdminHandler = require('./progressionRoleAdminHandler');
 const { canAccessAdminPanel } = require('../utils/permissions');
 
 /**
@@ -69,7 +70,7 @@ class AdminPanelHandler {
     }
 
     // SOUS-MENU PARAMÉTRAGE
-    else if (customId === 'admin_themes') {
+    else if (customId === 'admin_themes' || customId === 'theme_admin_main') {
       await this.showThemesMenu(interaction);
     } else if (customId === 'admin_theme_config') {
       await this.showThemeConfigMenu(interaction);
@@ -133,6 +134,16 @@ class AdminPanelHandler {
     // Gestion des probabilités (délégation vers probabilityHandler)
     else if (customId === 'admin_probabilities' || customId.startsWith('probability_')) {
       return probabilityHandler.handleInteraction(interaction);
+    }
+
+    // Gestion des rôles de progression (délégation vers progressionRoleAdminHandler)
+    else if (
+      customId === 'admin_progression_roles' ||
+      customId.startsWith('progression_role') ||
+      customId === 'modal_add_progression_role' ||
+      customId.startsWith('modal_edit_progression_role:')
+    ) {
+      return progressionRoleAdminHandler.handleInteraction(interaction);
     }
 
     // Gestion des campagnes (délégation vers campaignAdminHandler)
@@ -565,6 +576,11 @@ class AdminPanelHandler {
       return this.handleMissionTypeSelection(interaction);
     }
 
+    // Rôles de Progression - Déléguer à progressionRoleAdminHandler (qui fera son propre defer)
+    if (customId === 'progression_role_select_edit' || customId === 'progression_role_select_delete') {
+      return progressionRoleAdminHandler.handleInteraction(interaction);
+    }
+
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT (sauf pour les délégations ci-dessus)
     await interaction.deferUpdate();
 
@@ -897,6 +913,15 @@ class AdminPanelHandler {
             .setStyle(ButtonStyle.Primary)
         );
       }
+
+      // Bouton Rôles de Progression (nécessite un thème actif)
+      row1Buttons.push(
+        new ButtonBuilder()
+          .setCustomId('admin_progression_roles')
+          .setLabel('🏅 Rôles de Progression')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(!activeTheme)
+      );
 
       const row1 = new ActionRowBuilder().addComponents(...row1Buttons);
       components.push(row1);

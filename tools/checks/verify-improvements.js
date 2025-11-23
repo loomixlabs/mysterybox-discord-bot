@@ -47,14 +47,14 @@ async function verifyImprovements() {
     const traps = await db.getTrapsByTheme(guildId, themeId);
     console.log(`   📊 Total pièges: ${traps.length}`);
 
-    const expectedTraps = ['cooldown', 'lose-collectible', 'public-shame', 'points-malus', 'empty-box'];
+    const expectedTraps = ['cooldown', 'lose-collectible', 'public-shame', 'empty-box'];
     const existingTrapTypes = traps.map(t => t.type);
     const missingTraps = expectedTraps.filter(t => !existingTrapTypes.includes(t));
 
     if (missingTraps.length > 0) {
       console.log(`   ⚠️ Types de pièges manquants: ${missingTraps.join(', ')}`);
     } else {
-      console.log('   ✅ Tous les 5 types de pièges par défaut existent');
+      console.log('   ✅ Tous les 4 types de pièges par défaut existent');
     }
 
     // Détails par piège

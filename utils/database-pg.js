@@ -177,8 +177,15 @@ class DatabaseWrapper {
         [guildId]
       );
 
-      // Si c'est le premier thème du serveur, l'activer automatiquement
-      const isActive = existingThemes.length === 0;
+      // Vérifier s'il existe un thème ACTIF pour ce serveur
+      const existingActiveTheme = await this.queryOne(
+        'SELECT id FROM themes WHERE guild_id = $1 AND is_active = TRUE',
+        [guildId]
+      );
+
+      // Activer le nouveau thème uniquement s'il n'y a pas de thème déjà actif
+      // (même comportement que l'import de thème)
+      const isActive = !existingActiveTheme;
 
       // Insérer le thème avec activated_at si c'est le premier (pour démarrer le décompte)
       const theme = await this.queryOne(

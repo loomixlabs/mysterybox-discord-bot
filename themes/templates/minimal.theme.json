@@ -1,0 +1,70 @@
+{
+  "version": "1.0.0",
+  "format_version": "2025.1",
+  "metadata": {
+    "name": "Thème Minimal",
+    "description": "Template minimal fonctionnel avec le strict minimum requis"
+  },
+  "theme": {
+    "theme_id": "minimal_theme",
+    "name": "Thème Minimal",
+    "duration_days": 30,
+    "required_items": 5,
+    "final_role": {
+      "name": "Champion",
+      "color": "#FFD700"
+    }
+  },
+  "theme_config": {
+    "rarity_probabilities": {
+      "legendary": 10,
+      "epic": 20,
+      "rare": 30,
+      "common": 40
+    },
+    "progression_roles": [
+      { "name": "Niveau 1", "color": "#3498DB", "required_items": 2, "percentage": 40 }
+    ]
+  },
+  "collectibles": [
+    { "collectible_id": "item_legendary", "name": "Item Légendaire", "rarity": "legendary", "reveal_message": "Wow ! Un légendaire !" },
+    { "collectible_id": "item_epic", "name": "Item Épique", "rarity": "epic", "reveal_message": "Super ! Un épique !" },
+    { "collectible_id": "item_rare", "name": "Item Rare", "rarity": "rare", "reveal_message": "Cool ! Un rare !" },
+    { "collectible_id": "item_common_1", "name": "Item Commun 1", "rarity": "common", "reveal_message": "Un item commun !" },
+    { "collectible_id": "item_common_2", "name": "Item Commun 2", "rarity": "common", "reveal_message": "Un autre item !" }
+  ],
+  "traps": [
+    { "trap_id": "freeze", "name": "Gel", "effect_type": "freeze", "effect_duration": 300, "reveal_message": "Vous êtes gelé 5 min !" }
+  ],
+  "missions": {
+    "quiz": [
+      {
+        "mission_id": "quiz_simple",
+        "name": "Quiz Simple",
+        "description": "Répondez à la question !",
+        "timeout": 60,
+        "max_attempts": 3,
+        "reward_type": "random-collectible",
+        "questions": [
+          { "question": "1 + 1 = ?", "answers": ["2", "3", "4", "5"], "correct_index": 0, "difficulty": "easy" }
+        ]
+      }
+    ],
+    "keyword": [
+      {
+        "mission_id": "mot_simple",
+        "name": "Mot Simple",
+        "description": "Devinez le mot !",
+        "timeout": 60,
+        "reward_type": "random-collectible",
+        "keywords": [
+          { "keyword": "bonjour", "difficulty": "easy" }
+        ]
+      }
+    ]
+  },
+  "settings": {
+    "auto_create_roles": true,
+    "auto_install_super_bonuses": true
+  }
+}

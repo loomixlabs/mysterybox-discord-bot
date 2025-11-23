@@ -51,21 +51,6 @@ const DEFAULT_TRAPS = [
     notif_footer: 'Ta maladresse a été annoncée publiquement'
   },
   {
-    trap_id: 'trap-malus-points',
-    name: 'Piège Maudit',
-    type: 'points-malus',
-    description: 'Un piège qui ajoute des points de malédiction à votre score.',
-    image_url: 'https://i.imgur.com/placeholder-trap-malus.png',
-    cooldown_duration: 0,
-    malus_points: 10,
-    shame_message: '⚠️ Tu es tombé dans un piège maudit ! +{points} points de malédiction.',
-    removes_collectible: false,
-    notif_title: '⚠️ Piège Maudit !',
-    notif_description: '**Malédiction !** Tu as déclenché un piège maudit !\n\n👻 **+{points} points de malédiction** ajoutés à ton score.\n\n⚠️ Les points de malédiction pourraient t\'affecter négativement !',
-    notif_color: '#c0392b',
-    notif_footer: 'Les points de malédiction ont été ajoutés'
-  },
-  {
     trap_id: 'trap-empty-box',
     name: 'La Boîte Vide',
     type: 'empty-box',
@@ -182,7 +167,7 @@ async function markExistingTrapsAsDefault(guildId, themeId) {
        SET is_default = TRUE
        WHERE guild_id = $1
          AND theme_id = $2
-         AND type IN ('cooldown', 'lose-collectible', 'public-shame', 'points-malus', 'empty-box')
+         AND type IN ('cooldown', 'lose-collectible', 'public-shame', 'empty-box')
          AND is_default = FALSE`,
       [guildId, themeId]
     );

@@ -7,7 +7,131 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### 🐛 Fixed
+
+- **[Progression Roles - Admin Panel]**: Message amélioré pour les rôles en attente de création (lazy creation)
+  - **Contexte**: Les rôles importés depuis un thème utilisent un système de "lazy creation"
+  - **Fichier**: `handlers/progressionRoleAdminHandler.js` (lignes 466-532)
+  - **Fix**: Message informatif au lieu d'un message d'erreur
+  - **Messages possibles**:
+    - "🏷️ Rôle Discord mis à jour" (si le rôle existe déjà)
+    - "⏳ Rôle Discord sera créé quand un joueur atteindra ce palier" (lazy creation)
+
+- **[Progression Roles - Admin Panel]**: UX améliorée pour les sélecteurs de rôles
+  - **Bouton "Annuler"**: Renommé en "◀️ Retour" et redirige vers le menu "Rôles de Progression"
+  - **Fichier**: `handlers/progressionRoleAdminHandler.js` (lignes 354-359, 558-563)
+  - **Refresh automatique**: Le sélecteur de rôles se rafraîchit après validation du modal d'édition
+
+- **[Setup - Import Thème]**: 4 bugs de routing corrigés
+  - **Bouton "Ajouter un autre thème"**: "échec de l'interaction" car `deferUpdate()` manquant
+    - Fichier: `events/interactionCreate.js` (ligne 249)
+    - Fix: Ajout de `await interaction.deferUpdate()` avant `showThemeSelection()`
+  - **Bouton "Gérer les Thèmes"**: Non routé vers `adminPanelHandler`
+    - Fichiers: `events/interactionCreate.js` (ligne 252), `handlers/adminPanelHandler.js` (ligne 73)
+    - Fix: Ajout du routing pour `theme_admin_main` vers `showThemesMenu()`
+
+- **[Progression Roles - Admin Panel]**: 4 bugs de routing corrigés
+  - **Modal "Ajouter un rôle"**: `handleModalSubmit is not a function`
+    - Fichier: `handlers/progressionRoleAdminHandler.js` (lignes 55-66)
+    - Fix: Ajout de la méthode `handleModalSubmit()` pour router les modals
+  - **Bouton "Ajouter un rôle"**: Timeout possible avant ouverture du modal
+    - Fichier: `handlers/progressionRoleAdminHandler.js` (ligne 185)
+    - Cause: Requête DB inutile (`getActiveTheme`) avant `showModal()`
+    - Fix: Suppression de la requête DB (la variable n'était pas utilisée)
+  - **Bouton suppression confirmation**: Non routé (utilisait `progression_role_` singulier)
+    - Fichier: `events/interactionCreate.js` (ligne 257)
+    - Fix: Extension du routing pour inclure `progression_role_` ET `progression_roles_`
+  - **Select menu routing**: Ajout du routing pour `progression_role_select_*`
+    - Fichier: `events/interactionCreate.js` (ligne 374)
+
+- **[Setup - Import Thème]**: 2 bugs corrigés dans le flow après import
+  - **Bouton "Terminer"**: Affichait les infos du thème actif (Monopoly) au lieu d'un message générique
+    - Fichiers: `handlers/setupThemeHandler.js`, `events/interactionCreate.js`
+    - Fix: Nouveau bouton `setup_theme_done` avec message contextuel au lieu de `setup_finish`
+  - **Création manuelle auto-activation**: Un thème créé manuellement s'activait même si un autre thème était actif
+    - Fichier: `utils/database-pg.js` (lignes 180-188)
+    - Fix: Vérification de l'existence d'un thème ACTIF (pas juste s'il existe des thèmes)
+
+- **[Progression Roles - Admin Panel]**: 4 bugs critiques corrigés
+  - **Bug suppression**: Double `deferUpdate()` causant "échec de l'interaction" lors de la confirmation
+    - Fichier: `handlers/progressionRoleAdminHandler.js` (ligne 565)
+    - Fix: Passage de `skipDefer=true` à `showProgressionRolesMenu()`
+  - **Bug édition modal**: Champ pourcentage manquant + rôle Discord non mis à jour
+    - Fichier: `handlers/progressionRoleAdminHandler.js` (lignes 381-400, 416-508)
+    - Fix: Ajout du champ `role_percentage` au modal + mise à jour Discord role via `.edit()`
+  - **Validation renforcée**: Vérification des conflits de pourcentage lors de l'édition
+  - **Bug bouton "Modifier"**: Le select menu s'affichait et le modal fonctionnait, mais la confirmation n'apparaissait pas (message "réfléchit..." restait)
+    - Fichier: `events/interactionCreate.js` (lignes 293-306)
+    - Cause: Le modal `modal_edit_progression_role:*` était capturé par `modal_edit_*` et routé vers `ServerConfigHandler` au lieu de `progressionRoleAdminHandler`
+    - Fix: Déplacement de la condition spécifique `modal_edit_progression_role:*` AVANT la condition générique `modal_edit_*`
+
+- **[Themes JSON]**: Suppression des `progression_roles` à 100% dans tous les fichiers thème
+  - Fichiers modifiés: 6 fichiers `.theme.json`
+    - `themes/presets/monopoly.theme.json`
+    - `themes/presets/pokemon.theme.json`
+    - `themes/presets/harry-potter.theme.json`
+    - `themes/presets/blanche-neige.theme.json`
+    - `themes/templates/base.theme.json`
+    - `themes/templates/minimal.theme.json`
+  - Raison: 100% = rôle final (géré séparément), évite double attribution de rôle
+
+### 📈 Improved
+
+- **[Setup - Import Thème]**: Récapitulatif détaillé après import d'un thème
+  - Fichier: `handlers/setupThemeHandler.js` (lignes 287-379)
+  - Affiche maintenant toutes les informations du thème importé:
+    - Description du thème avec emoji correspondant
+    - Collectibles par rareté (Légendaire, Épique, Rare, Commun)
+    - Détail des missions (mots-clés, questions quiz)
+    - Pièges créés
+    - Rôles de progression configurés avec pourcentages
+    - Rôle final créé/existant
+    - Configuration (difficulté, durée, items requis)
+    - Statut d'activation clair (activé ou non + raison)
+    - Prochaines étapes contextuelles
+  - Permet de différencier clairement le thème importé vs le thème actif
+
 ### ✨ Added
+
+- **[Setup - Import Thème]**: Nouveau bouton "Ajouter un autre thème"
+  - Fichiers: `handlers/setupThemeHandler.js`, `events/interactionCreate.js`
+  - Permet de retourner rapidement au sélecteur de thèmes préconfigurés après un import
+  - Améliore l'UX pour les serveurs souhaitant importer plusieurs thèmes
+
+- **[Progression Roles]**: Nouveau système d'attribution automatique de rôles intermédiaires
+  - Attribution automatique de rôles Discord à 25%, 50%, 75% de progression
+  - **Création immédiate**: Les rôles Discord sont créés instantanément lors de l'ajout (pas à la première attribution)
+  - **Suppression complète**: La suppression d'un rôle de progression supprime aussi le rôle Discord associé
+  - Configuration complète via le panel admin (🏅 Rôles de Progression)
+  - **Affichage du rôle final**: Le panel affiche maintenant le rôle final (100%) configuré dans le thème
+  - **Bouton déplacé**: De "⚙️ Paramètres" vers "🎨 Gérer les Thèmes" (plus cohérent)
+  - **Info après création thème**: Message informatif indiquant que les rôles de progression sont optionnels
+  - Compatible avec le système d'import/export de thèmes
+  - **Architecture multi-serveur**: Isolation complète par `guild_id`
+  - **Fichiers créés**:
+    - `handlers/progressionRoleHandler.js` - Logique d'attribution automatique
+    - `handlers/progressionRoleAdminHandler.js` - Interface admin (ajouter/modifier/supprimer)
+    - `scripts/run-add-progression-roles-migration.js` - Script de migration
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js` - Routage vers progressionRoleAdminHandler + bouton
+    - `handlers/mysteryBoxHandler.js` - Appel après attribution collectible
+    - `handlers/missionHandler.js` - Appel après récompense mission
+    - `utils/themeExporter.js` - Export des progression_roles
+    - `utils/themeImporter.js` - Import des progression_roles
+  - **Migration DB** (2 colonnes):
+    - `theme_config.progression_roles` (JSONB) - Définition des rôles
+    - `player_progress.achieved_progression_roles` (INTEGER[]) - Seuils atteints
+  - **Format JSON des rôles**:
+    ```json
+    {
+      "name": "Apprenti Collectionneur",
+      "color": "#3498db",
+      "required_items": 5,
+      "percentage": 25,
+      "hoist": false,
+      "mentionable": false
+    }
+    ```
 
 - **[Server Config]**: Nouveau menu "Notifications Missions" dans `/server-config`
   - Configuration granulaire des notifications lors des threads de mission
@@ -47,6 +171,16 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   - Script: `scripts/add-legendary-super-bonus-announcement.js`
 
 ### 🐛 Fixed
+
+- **[Progression Roles]**: Correction du routage des interactions dans le panel admin
+  - **Erreur**: "Échec de l'interaction" sur tous les boutons du menu Rôles de Progression
+  - **Cause**: Les boutons, modals et select menus `progression_roles_*` n'étaient pas routés dans `interactionCreate.js`
+  - **Solution**:
+    1. Import de `progressionRoleAdminHandler` (ligne 11)
+    2. Routage des boutons `progression_roles_*` (lignes 238-241)
+    3. Routage des modals `modal_add_progression_role` et `modal_edit_progression_role:*` (lignes 285-288)
+    4. Routage des select menus `progression_role_select_*` (lignes 355-358)
+  - **Fichier modifié**: `events/interactionCreate.js`
 
 - **[Mission Creation]**: Correction du bug empêchant la création de quiz/missions mot-clé
   - **Erreur**: "Une erreur est survenue" lors du choix du type de mission

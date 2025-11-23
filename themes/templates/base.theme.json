@@ -1,0 +1,232 @@
+{
+  "$comment": "Template de base pour créer un nouveau thème - Remplissez tous les champs marqués [REQUIS]",
+  "version": "1.0.0",
+  "format_version": "2025.1",
+
+  "metadata": {
+    "name": "[REQUIS] Nom de votre thème",
+    "description": "[REQUIS] Description détaillée du thème (max 500 caractères)",
+    "author": "[OPTIONNEL] Votre nom ou organisation",
+    "created_at": "[AUTO] Date de création",
+    "tags": ["tag1", "tag2", "tag3"],
+    "preview_image": "[OPTIONNEL] URL de l'image de prévisualisation",
+    "language": "fr",
+    "difficulty": "medium"
+  },
+
+  "theme": {
+    "theme_id": "[REQUIS] identifiant_unique_snake_case",
+    "name": "[REQUIS] Nom Affiché du Thème",
+    "duration_days": 30,
+    "required_items": 20,
+    "final_role": {
+      "name": "[REQUIS] Nom du Rôle Final",
+      "color": "#FFD700",
+      "hoist": true,
+      "mentionable": true
+    }
+  },
+
+  "theme_config": {
+    "mystery_box_probability": 0.25,
+    "super_bonus_probability": 0.50,
+    "trap_probability": 0.15,
+    "rarity_probabilities": {
+      "legendary": 5,
+      "epic": 15,
+      "rare": 30,
+      "common": 50
+    },
+    "progression_roles": [
+      {
+        "name": "[REQUIS] Rôle 25%",
+        "color": "#3498DB",
+        "required_items": 5,
+        "percentage": 25,
+        "hoist": false,
+        "mentionable": false
+      },
+      {
+        "name": "[REQUIS] Rôle 50%",
+        "color": "#9B59B6",
+        "required_items": 10,
+        "percentage": 50,
+        "hoist": false,
+        "mentionable": false
+      },
+      {
+        "name": "[REQUIS] Rôle 75%",
+        "color": "#F39C12",
+        "required_items": 15,
+        "percentage": 75,
+        "hoist": false,
+        "mentionable": false
+      }
+    ],
+    "mystery_box_image": "[OPTIONNEL] URL image mystery box",
+    "mystery_box_title": "Mystery Box",
+    "mystery_box_description": "Clique pour découvrir ce qui se cache à l'intérieur !",
+    "mystery_box_celebration_gif": "[OPTIONNEL] URL GIF de célébration",
+    "mystery_box_celebration_emojis": "🎉,✨,🎊,💫"
+  },
+
+  "collectibles": [
+    {
+      "$comment": "LÉGENDAIRES (5% de chance) - 1-2 items recommandés",
+      "collectible_id": "legendary_item_1",
+      "name": "[REQUIS] Nom Item Légendaire",
+      "rarity": "legendary",
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand trouvé",
+      "description": "[OPTIONNEL] Description de l'item"
+    },
+    {
+      "$comment": "ÉPIQUES (15% de chance) - 3-5 items recommandés",
+      "collectible_id": "epic_item_1",
+      "name": "[REQUIS] Nom Item Épique",
+      "rarity": "epic",
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand trouvé"
+    },
+    {
+      "$comment": "RARES (30% de chance) - 5-7 items recommandés",
+      "collectible_id": "rare_item_1",
+      "name": "[REQUIS] Nom Item Rare",
+      "rarity": "rare",
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand trouvé"
+    },
+    {
+      "$comment": "COMMUNS (50% de chance) - 8-10 items recommandés",
+      "collectible_id": "common_item_1",
+      "name": "[REQUIS] Nom Item Commun",
+      "rarity": "common",
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand trouvé"
+    }
+  ],
+
+  "traps": [
+    {
+      "$comment": "Types disponibles: freeze, lose_item, cooldown_increase, mystery_box_block",
+      "trap_id": "trap_freeze",
+      "name": "[REQUIS] Nom du Piège Freeze",
+      "effect_type": "freeze",
+      "effect_duration": 1800,
+      "effect_value": null,
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand déclenché",
+      "probability_weight": 1
+    },
+    {
+      "trap_id": "trap_lose_item",
+      "name": "[REQUIS] Nom du Piège Perte Item",
+      "effect_type": "lose_item",
+      "effect_duration": null,
+      "effect_value": 1,
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand déclenché",
+      "probability_weight": 1
+    },
+    {
+      "trap_id": "trap_cooldown",
+      "name": "[REQUIS] Nom du Piège Cooldown",
+      "effect_type": "cooldown_increase",
+      "effect_duration": 3600,
+      "effect_value": 1.5,
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand déclenché",
+      "probability_weight": 1
+    },
+    {
+      "trap_id": "trap_block",
+      "name": "[REQUIS] Nom du Piège Block",
+      "effect_type": "mystery_box_block",
+      "effect_duration": 600,
+      "effect_value": null,
+      "image_url": "[OPTIONNEL] URL image",
+      "reveal_message": "[REQUIS] Message affiché quand déclenché",
+      "probability_weight": 1
+    }
+  ],
+
+  "missions": {
+    "quiz": [
+      {
+        "mission_id": "quiz_1",
+        "name": "[REQUIS] Nom du Quiz",
+        "description": "[REQUIS] Description de la mission",
+        "timeout": 60,
+        "max_attempts": 3,
+        "reward_type": "random-collectible",
+        "image_url": "[OPTIONNEL] URL image",
+        "questions": [
+          {
+            "question": "[REQUIS] Texte de la question ?",
+            "answers": ["[Bonne réponse]", "Mauvaise 1", "Mauvaise 2", "Mauvaise 3"],
+            "correct_index": 0,
+            "difficulty": "easy"
+          },
+          {
+            "question": "[REQUIS] Autre question ?",
+            "answers": ["[Bonne réponse]", "Mauvaise 1", "Mauvaise 2", "Mauvaise 3"],
+            "correct_index": 0,
+            "difficulty": "medium"
+          }
+        ]
+      }
+    ],
+    "keyword": [
+      {
+        "mission_id": "keyword_1",
+        "name": "[REQUIS] Nom de la Mission Mot",
+        "description": "[REQUIS] Description de la mission",
+        "timeout": 90,
+        "reward_type": "random-collectible",
+        "image_url": "[OPTIONNEL] URL image",
+        "keywords": [
+          { "keyword": "mot1", "difficulty": "easy" },
+          { "keyword": "mot2", "difficulty": "medium" },
+          { "keyword": "mot3", "difficulty": "hard" }
+        ]
+      }
+    ]
+  },
+
+  "theme_messages": {
+    "mystery_box_title": "Mystery Box",
+    "mystery_box_description": "Que contient cette boîte mystérieuse ?",
+    "mystery_box_button_label": "Ouvrir",
+    "collectible_found_title": "Nouvel Item !",
+    "collectible_found_footer": "Progression: {progress}%",
+    "trap_triggered_title": "Piège !",
+    "trap_blocked_title": "Piège Bloqué !",
+    "mission_started_title": "Mission Lancée !",
+    "mission_completed_title": "Mission Réussie !",
+    "mission_failed_title": "Mission Échouée",
+    "role_unlocked_title": "Rôle Débloqué !"
+  },
+
+  "announcement_templates": {
+    "collectible_found": "**{player}** a trouvé **{item}** ({rarity}) !\n\n{reveal_message}\n\nProgression: {progress}%",
+    "trap_triggered": "**{player}** a déclenché un piège !\n\n**{trap_name}**\n{reveal_message}",
+    "trap_blocked": "**{player}** a bloqué un piège grâce à **{bonus_name}** !\n\nPiège évité: {trap_name}",
+    "mission_started": "**{player}** a lancé la mission **{mission_name}** !",
+    "mission_completed": "**{player}** a complété la mission **{mission_name}** !\n\nRécompense: {reward}",
+    "mission_failed": "**{player}** a échoué la mission **{mission_name}**",
+    "role_unlocked": "**{player}** a débloqué le rôle **{role}** !\n\n{items_collected}/{items_required} items",
+    "super_bonus_activated": "**{player}** a activé **{bonus_name}** !\n\n{description}",
+    "theme_expiring_soon": "Fin de partie approche ! Plus que {days} jours !",
+    "theme_expired": "Partie Terminée ! Merci à tous les joueurs !"
+  },
+
+  "settings": {
+    "auto_create_roles": true,
+    "auto_install_super_bonuses": true,
+    "auto_create_announcement_settings": true,
+    "activate_theme_after_import": false,
+    "enable_trap_system": true,
+    "enable_mission_system": true,
+    "enable_super_bonus_system": true
+  }
+}

@@ -8,6 +8,7 @@ const superAdminHandler = require('../handlers/superAdminHandler');
 const setupHandler = require('../handlers/setupHandler');
 const profileHandler = require('../handlers/profileHandler');
 const ServerConfigHandler = require('../handlers/serverConfigHandler');
+const progressionRoleAdminHandler = require('../handlers/progressionRoleAdminHandler');
 
 // Pour le tracking des connexions et badges Engagement
 const db = require('../utils/database-pg');
@@ -93,7 +94,9 @@ module.exports = {
         }
 
         // Boutons de configuration serveur (server_config_*)
-        else if (customId.startsWith('server_config_') || customId.startsWith('edit_') || customId === 'show_role_tutorial') {
+        // Note: edit_bot_, edit_primary_, edit_secondary_, edit_footer_, edit_language, edit_timezone sont pour ServerConfigHandler
+        // edit_announcement_templates, edit_template_* sont pour adminPanelHandler (ligne 199)
+        else if (customId.startsWith('server_config_') || customId.startsWith('edit_bot_') || customId.startsWith('edit_primary_') || customId.startsWith('edit_secondary_') || customId.startsWith('edit_footer_') || customId === 'edit_language' || customId === 'edit_timezone' || customId === 'show_role_tutorial') {
           const handler = new ServerConfigHandler();
           await handler.handleButtonInteraction(interaction);
         }
@@ -221,6 +224,39 @@ module.exports = {
         else if (customId === 'setup_finish') {
           await setupHandler.handleFinish(interaction);
         }
+        // Boutons Setup - Thèmes préconfigurés
+        else if (customId.startsWith('setup_import_theme:')) {
+          const themeId = customId.split(':')[1];
+          await setupHandler.handleThemeImport(interaction, themeId);
+        }
+        else if (customId === 'setup_theme_back') {
+          await setupHandler.handleThemeBack(interaction);
+        }
+        else if (customId === 'setup_skip_theme') {
+          await setupHandler.handleSkipTheme(interaction);
+        }
+        else if (customId === 'setup_theme_done') {
+          // Simple bouton "Compris" après import de thème - efface juste les composants
+          await interaction.deferUpdate();
+          await interaction.editReply({
+            content: '✅ **Thème importé avec succès !**\n\nVous pouvez maintenant utiliser `/admin-panel` pour gérer vos thèmes et configurer votre serveur.',
+            embeds: [],
+            components: []
+          });
+        }
+        else if (customId === 'setup_add_another_theme') {
+          // Bouton "Ajouter un autre thème" - renvoie vers le sélecteur de thèmes préconfigurés
+          await interaction.deferUpdate();
+          await setupHandler.showThemeSelection(interaction);
+        }
+        else if (customId === 'theme_admin_main') {
+          // Bouton "Gérer les Thèmes" - renvoie vers le menu thèmes du panneau admin
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
+        // Boutons Progression Roles Admin (gère progression_roles_ ET progression_role_)
+        else if (customId.startsWith('progression_roles_') || customId.startsWith('progression_role_')) {
+          await progressionRoleAdminHandler.handleInteraction(interaction);
+        }
 
         else {
           console.warn(`⚠️  Bouton non géré: ${customId}`);
@@ -254,8 +290,12 @@ module.exports = {
     // Gérer les modals
     else if (interaction.isModalSubmit()) {
       try {
+        // Modals Progression Roles Admin (AVANT modal_edit_ car plus spécifique)
+        if (interaction.customId === 'modal_add_progression_role' || interaction.customId.startsWith('modal_edit_progression_role:')) {
+          await progressionRoleAdminHandler.handleModalSubmit(interaction);
+        }
         // Modals de server-config
-        if (interaction.customId.startsWith('modal_edit_')) {
+        else if (interaction.customId.startsWith('modal_edit_')) {
           const handler = new ServerConfigHandler();
           await handler.handleModalSubmit(interaction);
         }
@@ -322,9 +362,17 @@ module.exports = {
             interaction.customId.startsWith('super_bonus_')) {
           await adminPanelHandler.handleSelectMenu(interaction);
         }
+        // Select menu Setup - Sélection de thème préconfigurés
+        else if (interaction.customId === 'setup_theme_select') {
+          await setupHandler.handleThemeSelect(interaction);
+        }
         // Select menus Super-Admin
         else if (interaction.customId.startsWith('superadmin_')) {
           await handleSuperAdminSelect(interaction);
+        }
+        // Select menus Progression Roles Admin
+        else if (interaction.customId.startsWith('progression_role_select_')) {
+          await progressionRoleAdminHandler.handleInteraction(interaction);
         }
         else {
           console.warn(`⚠️ Select menu non géré: ${interaction.customId}`);

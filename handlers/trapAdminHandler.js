@@ -46,7 +46,8 @@ class TrapAdminHandler {
         `⏱️ **Cooldown** - Empêche l'ouverture de boîtes pendant X minutes\n` +
         `💀 **Perte collectible** - Fait perdre un collectible aléatoire\n` +
         `😱 **Shame public** - Message de honte dans un salon\n` +
-        `➖ **Malus points** - Ajoute des points de malédiction`
+        `📦 **Coffre vide** - Le joueur n'obtient rien\n` +
+        `☠️ **Perte totale** - Fait perdre TOUS les collectibles`
       )
       .setColor('#e74c3c')
       .setFooter({ text: `Thème: ${theme.name}`, iconURL: interaction.guild.iconURL() })
@@ -58,7 +59,8 @@ class TrapAdminHandler {
         'cooldown': '⏱️ Cooldown',
         'lose-collectible': '💀 Perte collectible',
         'public-shame': '😱 Shame public',
-        'points-malus': '➖ Malus points'
+        'empty-box': '📦 Coffre vide',
+        'lose-all-collectibles': '☠️ Perte totale'
       };
 
       // Grouper par type
@@ -83,8 +85,6 @@ class TrapAdminHandler {
           // Ajouter les détails selon le type
           if (trap.type === 'cooldown' && trap.cooldown_duration) {
             details += `\n└─ Durée: ${trap.cooldown_duration} min`;
-          } else if (trap.type === 'points-malus' && trap.malus_points) {
-            details += `\n└─ Points: ${trap.malus_points}`;
           } else if (trap.type === 'public-shame' && trap.shame_message) {
             details += `\n└─ ${trap.shame_message.substring(0, 50)}${trap.shame_message.length > 50 ? '...' : ''}`;
           }
@@ -128,7 +128,8 @@ class TrapAdminHandler {
               'cooldown': '⏱️',
               'lose-collectible': '💀',
               'public-shame': '😱',
-              'points-malus': '➖'
+              'empty-box': '📦',
+              'lose-all-collectibles': '☠️'
             };
 
             return {
@@ -297,8 +298,10 @@ class TrapAdminHandler {
         `└─ Fait perdre un collectible aléatoire au joueur\n\n` +
         `😱 **Shame public**\n` +
         `└─ Annonce publiquement que le joueur est tombé dans un piège\n\n` +
-        `➖ **Malus de points**\n` +
-        `└─ Ajoute des points de malédiction au joueur`
+        `📦 **Coffre vide**\n` +
+        `└─ Le joueur n'obtient rien de sa mystery box\n\n` +
+        `☠️ **Perte totale**\n` +
+        `└─ Fait perdre TOUS les collectibles du joueur`
       )
       .setColor('#e74c3c');
 
@@ -325,10 +328,16 @@ class TrapAdminHandler {
           emoji: '😱'
         },
         {
-          label: 'Malus de points',
-          value: 'points-malus',
-          description: 'Ajoute des points de malédiction',
-          emoji: '➖'
+          label: 'Coffre vide',
+          value: 'empty-box',
+          description: 'Le joueur n\'obtient rien de la mystery box',
+          emoji: '📦'
+        },
+        {
+          label: 'Perte totale',
+          value: 'lose-all-collectibles',
+          description: 'Fait perdre TOUS les collectibles',
+          emoji: '☠️'
         }
       );
 
@@ -455,7 +464,8 @@ class TrapAdminHandler {
         'cooldown': '#f39c12',
         'lose-collectible': '#e74c3c',
         'public-shame': '#9b59b6',
-        'points-malus': '#c0392b'
+        'empty-box': '#95a5a6',
+        'lose-all-collectibles': '#c0392b'
       };
       const notifColor = defaultColors[trapType] || '#e74c3c';
 
@@ -464,7 +474,8 @@ class TrapAdminHandler {
         'cooldown': 'Le piège se désactivera automatiquement',
         'lose-collectible': 'L\'objet a été retiré de ta collection',
         'public-shame': 'Ta maladresse a été annoncée publiquement',
-        'points-malus': 'Les points de malédiction ont été ajoutés'
+        'empty-box': 'Pas de chance, le coffre était vide',
+        'lose-all-collectibles': 'Tous tes collectibles ont été perdus'
       };
       const notifFooter = defaultFooters[trapType] || 'Tu as déclenché un piège';
 
@@ -497,9 +508,6 @@ class TrapAdminHandler {
       else if (trapType === 'public-shame') {
         typeData.shame_message = `🤡 {user} est tombé dans un piège !`; // Message par défaut
         typeData.shame_channel_id = process.env.ANNOUNCE_CHANNEL_ID || null;
-      }
-      else if (trapType === 'points-malus') {
-        typeData.malus_points = 10; // 10 points par défaut
       }
 
       // Insérer le piège dans la base de données avec les champs de notification
@@ -746,11 +754,15 @@ class TrapAdminHandler {
       .setMinLength(10)
       .setMaxLength(500);
 
+    // Valeurs par défaut pour éviter l'erreur minLength si les champs sont vides en DB
+    const defaultNotifTitle = trap.notif_title || '⚠️ Piège activé !';
+    const defaultNotifDesc = trap.notif_description || 'Vous avez déclenché un piège ! Effet: ' + trap.name;
+
     const notifTitleInput = new TextInputBuilder()
       .setCustomId('trap_notif_title')
       .setLabel('Titre notification joueur')
       .setStyle(TextInputStyle.Short)
-      .setValue((trap.notif_title || '').substring(0, 100))
+      .setValue(defaultNotifTitle.substring(0, 100))
       .setRequired(true)
       .setMinLength(3)
       .setMaxLength(100);
@@ -759,7 +771,7 @@ class TrapAdminHandler {
       .setCustomId('trap_notif_description')
       .setLabel('Description notif (vars dynamiques)')
       .setStyle(TextInputStyle.Paragraph)
-      .setValue((trap.notif_description || '').substring(0, 1000))
+      .setValue(defaultNotifDesc.substring(0, 1000))
       .setRequired(true)
       .setMinLength(10)
       .setMaxLength(1000);
@@ -795,18 +807,6 @@ class TrapAdminHandler {
         .setMaxLength(500);
 
       modal.addComponents(new ActionRowBuilder().addComponents(shameMessageInput));
-    }
-    else if (trap.type === 'points-malus') {
-      const malusPointsInput = new TextInputBuilder()
-        .setCustomId('trap_malus_points')
-        .setLabel('Points de malédiction')
-        .setStyle(TextInputStyle.Short)
-        .setValue(trap.malus_points?.toString() || '10')
-        .setRequired(true)
-        .setMinLength(1)
-        .setMaxLength(5);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(malusPointsInput));
     }
 
     return interaction.showModal(modal);
@@ -861,16 +861,6 @@ class TrapAdminHandler {
       else if (trap.type === 'public-shame') {
         const message = interaction.fields.getTextInputValue('trap_shame_message').trim();
         updateData.shame_message = message;
-      }
-      else if (trap.type === 'points-malus') {
-        const points = parseInt(interaction.fields.getTextInputValue('trap_malus_points'));
-        if (isNaN(points) || points < 1) {
-          return interaction.editReply({
-            content: '❌ Le nombre de points doit être un nombre positif.',
-            flags: 64
-          });
-        }
-        updateData.malus_points = points;
       }
 
       // Construire la requête UPDATE dynamiquement
@@ -1154,7 +1144,8 @@ class TrapAdminHandler {
       'cooldown': 'Cooldown',
       'lose-collectible': 'Perte de collectible',
       'public-shame': 'Shame public',
-      'points-malus': 'Malus de points'
+      'empty-box': 'Coffre vide',
+      'lose-all-collectibles': 'Perte totale'
     };
     return labels[type] || type;
   }
@@ -1167,7 +1158,8 @@ class TrapAdminHandler {
       'cooldown': '⏱️',
       'lose-collectible': '💀',
       'public-shame': '😱',
-      'points-malus': '➖'
+      'empty-box': '📦',
+      'lose-all-collectibles': '☠️'
     };
     return emojis[type] || '⚠️';
   }
@@ -1178,12 +1170,14 @@ class TrapAdminHandler {
   getTrapDetailsText(type, data) {
     if (type === 'cooldown' && data.cooldown_duration) {
       return `⏱️ **Durée:** ${data.cooldown_duration} minute${data.cooldown_duration > 1 ? 's' : ''}`;
-    } else if (type === 'points-malus' && data.malus_points) {
-      return `➖ **Points de malédiction:** ${data.malus_points}`;
     } else if (type === 'public-shame' && data.shame_message) {
       return `😱 **Message:**\n${data.shame_message}`;
     } else if (type === 'lose-collectible') {
       return `💀 **Effet:** Retire un collectible aléatoire du joueur`;
+    } else if (type === 'empty-box') {
+      return `📦 **Effet:** Le joueur n'obtient rien de la mystery box`;
+    } else if (type === 'lose-all-collectibles') {
+      return `☠️ **Effet:** Retire TOUS les collectibles du joueur`;
     }
     return '';
   }

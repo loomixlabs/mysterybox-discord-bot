@@ -52,7 +52,7 @@ async function showRoleConfiguration(interaction) {
   }
 
   const embed = new EmbedBuilder()
-    .setTitle('🛠️ Configuration Initiale - Étape 1/2')
+    .setTitle('🛠️ Configuration Initiale - Étape 1/3')
     .setDescription(
       '# Configuration des Rôles Admin\n\n' +
       rolesDescription + '\n\n' +
@@ -62,7 +62,7 @@ async function showRoleConfiguration(interaction) {
       '3️⃣ **Rôles configurés** → Accès selon votre sélection ci-dessous'
     )
     .setColor('#3498db')
-    .setFooter({ text: 'Sélectionnez les rôles puis cliquez sur "Valider"' })
+    .setFooter({ text: 'Étape 1: Rôles Admin → Étape 2: Thème → Étape 3: Checklist' })
     .setTimestamp();
 
   // Select menu pour les rôles (multi-select)
@@ -101,21 +101,16 @@ async function showRoleConfiguration(interaction) {
  */
 async function showPrerequisitesChecklist(interaction) {
   const embed = new EmbedBuilder()
-    .setTitle('🛠️ Configuration Initiale - Étape 2/2')
+    .setTitle('🛠️ Configuration Initiale - Étape 3/3')
     .setDescription(
       '# Checklist des Prérequis\n\n' +
-      '✅ **Rôles admin configurés** (Vous venez de le faire)\n\n' +
-      '**Maintenant, configurez votre serveur via `/admin-panel`:**\n\n' +
-      '## 📌 1. Créer un Thème (CRITIQUE)\n' +
-      '• Utilisez `/admin-panel` → **Thèmes** → **Créer un Thème**\n' +
-      '• Nom du thème (ex: "Monopoly Friends", "Pokémon", "Harry Potter")\n' +
-      '• Nombre d\'items requis pour compléter la collection (recommandé: 7)\n' +
-      '• Rôle de complétion (optionnel mais recommandé)\n' +
-      '• Date d\'expiration (optionnel)\n\n' +
-      '⚠️ **2 missions sont créées automatiquement mais VIDES:**\n' +
-      '• Mission "Mot Deviné" (keyword-message)\n' +
-      '• Mission "Quiz" (quiz)\n\n' +
-      '## 📝 2. Ajouter du Contenu aux Missions (CRITIQUE)\n' +
+      '✅ **Rôles admin configurés**\n' +
+      '✅ **Thème sélectionné** (si vous avez choisi un preset)\n\n' +
+      '**Finalisez la configuration via `/admin-panel`:**\n\n' +
+      '## 📌 1. Vérifier/Créer un Thème\n' +
+      '• Si vous avez importé un thème → Il est déjà actif !\n' +
+      '• Sinon → `/admin-panel` → **Thèmes** → **Créer un Thème**\n\n' +
+      '## 📝 2. Vérifier le Contenu (si thème personnalisé)\n' +
       '• **Mission "Mot Deviné":**\n' +
       '  → Ajoutez 3-5 mots-clés **spécifiques au thème**\n' +
       '  → Exemple thème Monopoly: "chance", "prison", "gare"\n' +
@@ -157,11 +152,15 @@ async function showPrerequisitesChecklist(interaction) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('setup_back_to_roles')
-      .setLabel('← Modifier les Rôles')
+      .setLabel('← Rôles')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('setup_theme_back')
+      .setLabel('← Thèmes')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId('setup_finish')
-      .setLabel('✅ Terminer la Configuration')
+      .setLabel('✅ Terminer')
       .setStyle(ButtonStyle.Success)
   );
 

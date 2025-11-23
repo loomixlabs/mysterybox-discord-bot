@@ -2,6 +2,7 @@ const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
 const badgeHandler = require('./badgeHandler');
+const progressionRoleHandler = require('./progressionRoleHandler');
 const audit = require('../utils/auditLogger');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
@@ -678,6 +679,25 @@ class MissionHandler {
         if (playerProgress.collected_count >= theme.required_items && !playerProgress.is_completed) {
           await this.handleCollectionComplete(interaction, player, theme);
         }
+
+        // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires
+        try {
+          const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
+            interaction.guild,
+            interaction.user.id,
+            interaction.guildId,
+            mission.theme_id,
+            playerProgress.collected_count
+          );
+          if (newProgressionRole) {
+            console.log(`🏅 [PROGRESSION] Nouveau rôle attribué via mission: ${newProgressionRole.name}`);
+            await interaction.channel.send({
+              content: `🎉 <@${interaction.user.id}> a atteint **${newProgressionRole.percentage}%** de la collection et obtient le rôle **${newProgressionRole.name}** !`
+            });
+          }
+        } catch (error) {
+          console.error('🔴 [PROGRESSION] Erreur check progression roles (mission):', error);
+        }
       } else {
         // Doublon
         const embed = new EmbedBuilder()
@@ -827,7 +847,26 @@ class MissionHandler {
 
         if (!alreadyHas) {
           await db.addCollectible(interaction.guildId, player.id, randomCollectible.id, 'mission');
-          await db.incrementProgress(interaction.guildId, player.id, progressData.theme_id);
+          const playerProgress = await db.incrementProgress(interaction.guildId, player.id, progressData.theme_id);
+
+          // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires (mission approuvée)
+          try {
+            const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
+              interaction.guild,
+              progressData.discord_id,  // Le joueur (pas l'admin qui approuve)
+              interaction.guildId,
+              progressData.theme_id,
+              playerProgress.collected_count
+            );
+            if (newProgressionRole) {
+              console.log(`🏅 [PROGRESSION] Nouveau rôle attribué via approbation mission: ${newProgressionRole.name}`);
+              await interaction.channel.send({
+                content: `🎉 <@${progressData.discord_id}> a atteint **${newProgressionRole.percentage}%** de la collection et obtient le rôle **${newProgressionRole.name}** !`
+              });
+            }
+          } catch (error) {
+            console.error('🔴 [PROGRESSION] Erreur check progression roles (approve):', error);
+          }
         }
 
         await interaction.channel.send({

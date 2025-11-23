@@ -773,7 +773,8 @@ class ModalHandler {
           `💡 **Configuration par défaut:**\n` +
           `- Probabilités: 50% collectibles, 25% missions, 15% pièges, 10% super bonus\n` +
           `- Items requis: Sera calculé automatiquement selon les collectibles ajoutés\n\n` +
-          `⚠️ **Important:** Ajoute au moins un collectible pour que les joueurs puissent participer !`,
+          `⚠️ **Important:** Ajoute au moins un collectible pour que les joueurs puissent participer !\n\n` +
+          `🏅 **Optionnel:** Tu peux configurer des **rôles de progression** intermédiaires (25%, 50%, 75%) via 🎨 Gérer les Thèmes → 🏅 Rôles de Progression.`,
         components: [row],
         embeds: []
       });

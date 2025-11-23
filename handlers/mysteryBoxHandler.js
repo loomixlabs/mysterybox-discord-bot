@@ -4,6 +4,7 @@ const announcements = require('../utils/announcements');
 const superBonusHandler = require('./superBonusHandler');
 const themeExpirationHandler = require('./themeExpirationHandler');
 const badgeHandler = require('./badgeHandler');
+const progressionRoleHandler = require('./progressionRoleHandler');
 const { SUPER_ADMINS } = require('../utils/permissions');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 
@@ -809,6 +810,27 @@ class MysteryBoxHandler {
       console.log(`🏆 [BADGES] Collectible badge tracking appelé pour player ${player.id}`);
     } catch (error) {
       console.error('🔴 [BADGES] Erreur tracking collectible:', error);
+    }
+
+    // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires
+    try {
+      const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
+        interaction.guild,
+        interaction.user.id,
+        interaction.guildId,
+        collectible.theme_id,
+        progress.collected_count
+      );
+      if (newProgressionRole) {
+        console.log(`🏅 [PROGRESSION] Nouveau rôle attribué: ${newProgressionRole.name}`);
+        // Envoyer une notification au joueur
+        await interaction.followUp({
+          content: `🎉 **Félicitations !** Tu as atteint **${newProgressionRole.percentage}%** de la collection et obtenu le rôle **${newProgressionRole.name}** !`,
+          flags: 64
+        });
+      }
+    } catch (error) {
+      console.error('🔴 [PROGRESSION] Erreur check progression roles:', error);
     }
   }
 

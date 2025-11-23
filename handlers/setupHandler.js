@@ -3,6 +3,7 @@ const setupCommand = require('../commands/admin/setup');
 const announcementTemplates = require('../utils/announcementTemplates');
 const BotRoleManager = require('../utils/botRoleManager');
 const db = require('../utils/database-pg');
+const setupThemeHandler = require('./setupThemeHandler');
 
 /**
  * Gérer la sélection des rôles admin
@@ -27,7 +28,7 @@ async function handleRoleSelect(interaction) {
 }
 
 /**
- * Valider les rôles et passer à l'étape 2
+ * Valider les rôles et passer à l'étape 2 (Sélection du thème)
  */
 async function handleValidateRoles(interaction) {
   await interaction.deferUpdate();
@@ -44,8 +45,8 @@ async function handleValidateRoles(interaction) {
     });
   }
 
-  // Passer à l'étape 2
-  await setupCommand.showPrerequisitesChecklist(interaction);
+  // Passer à l'étape 2 : Sélection du thème préconfigurés
+  await setupThemeHandler.showThemeSelection(interaction);
 }
 
 /**
@@ -62,11 +63,11 @@ async function handleResetRoles(interaction) {
 }
 
 /**
- * Passer directement au checklist (sans valider les rôles)
+ * Passer directement à la sélection de thème (sans valider les rôles)
  */
 async function handleSkipToChecklist(interaction) {
   await interaction.deferUpdate();
-  await setupCommand.showPrerequisitesChecklist(interaction);
+  await setupThemeHandler.showThemeSelection(interaction);
 }
 
 /**
@@ -91,6 +92,26 @@ async function handleFinish(interaction) {
     message += '⚠️ **Aucun rôle configuré:** Seul le propriétaire du serveur peut accéder à `/admin-panel`.\n\n';
   } else {
     message += `✅ **${currentRoles.length} rôle(s) configuré(s)** pour l'accès à l'admin panel.\n\n`;
+  }
+
+  // Afficher les informations sur le thème actif s'il y en a un
+  try {
+    const activeTheme = await db.getActiveTheme(interaction.guildId);
+    if (activeTheme) {
+      message += `🎨 **Thème actif:** ${activeTheme.name}\n`;
+      message += `   • Items requis: ${activeTheme.required_items}\n`;
+      message += `   • Durée: ${activeTheme.duration_days} jours\n`;
+
+      // Afficher le rôle de complétion
+      if (activeTheme.final_role_discord_id) {
+        message += `   • Rôle de complétion: <@&${activeTheme.final_role_discord_id}>\n`;
+      } else if (activeTheme.final_role_name) {
+        message += `   • Rôle de complétion: ${activeTheme.final_role_name}\n`;
+      }
+      message += '\n';
+    }
+  } catch (error) {
+    console.error('⚠️ Erreur lors de la récupération du thème actif:', error);
   }
 
   // Créer automatiquement les templates d'annonces par défaut
@@ -147,5 +168,11 @@ module.exports = {
   handleResetRoles,
   handleSkipToChecklist,
   handleBackToRoles,
-  handleFinish
+  handleFinish,
+  // Theme handlers (délégués à setupThemeHandler)
+  handleThemeSelect: setupThemeHandler.handleThemeSelect,
+  handleThemeImport: setupThemeHandler.handleThemeImport,
+  handleThemeBack: setupThemeHandler.handleThemeBack,
+  handleSkipTheme: setupThemeHandler.handleSkipTheme,
+  showThemeSelection: setupThemeHandler.showThemeSelection
 };
