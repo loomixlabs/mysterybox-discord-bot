@@ -93,10 +93,11 @@ module.exports = {
           await interaction.editReply(content);
         }
 
-        // Boutons de configuration serveur (server_config_*)
+        // Boutons de configuration serveur (server_config_*, toggle_notify_*)
         // Note: edit_bot_, edit_primary_, edit_secondary_, edit_footer_, edit_language, edit_timezone sont pour ServerConfigHandler
+        // Note: toggle_notify_* pour les notifications missions (thread/mention)
         // edit_announcement_templates, edit_template_* sont pour adminPanelHandler (ligne 199)
-        else if (customId.startsWith('server_config_') || customId.startsWith('edit_bot_') || customId.startsWith('edit_primary_') || customId.startsWith('edit_secondary_') || customId.startsWith('edit_footer_') || customId === 'edit_language' || customId === 'edit_timezone' || customId === 'show_role_tutorial') {
+        else if (customId.startsWith('server_config_') || customId.startsWith('toggle_notify_') || customId.startsWith('edit_bot_') || customId.startsWith('edit_primary_') || customId.startsWith('edit_secondary_') || customId.startsWith('edit_footer_') || customId === 'edit_language' || customId === 'edit_timezone' || customId === 'show_role_tutorial') {
           const handler = new ServerConfigHandler();
           await handler.handleButtonInteraction(interaction);
         }

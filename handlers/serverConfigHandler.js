@@ -469,10 +469,18 @@ class ServerConfigHandler {
         .setStyle(ButtonStyle.Secondary)
     ));
 
-    await interaction.update({
-      embeds: [embed],
-      components: rows
-    });
+    // Utiliser editReply si déjà déféré, sinon update
+    if (interaction.deferred) {
+      await interaction.editReply({
+        embeds: [embed],
+        components: rows
+      });
+    } else {
+      await interaction.update({
+        embeds: [embed],
+        components: rows
+      });
+    }
   }
 
   /**
@@ -481,13 +489,16 @@ class ServerConfigHandler {
   async handleNotificationToggle(interaction, settingName) {
     const userIsSuperAdmin = isSuperAdmin(interaction.user.id);
 
-    // Vérifier les permissions
+    // Vérifier les permissions AVANT de defer
     if (settingName.startsWith('notify_super_admins') && !userIsSuperAdmin) {
       return interaction.reply({
         content: '🔒 Seuls les Super Admins peuvent modifier ces paramètres.',
         flags: 64
       });
     }
+
+    // Defer IMMÉDIATEMENT pour éviter le timeout
+    await interaction.deferUpdate();
 
     // Récupérer la valeur actuelle
     const settings = await db.getMissionNotificationSettings(interaction.guildId);

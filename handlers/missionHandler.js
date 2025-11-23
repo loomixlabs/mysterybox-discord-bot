@@ -5,6 +5,7 @@ const badgeHandler = require('./badgeHandler');
 const progressionRoleHandler = require('./progressionRoleHandler');
 const audit = require('../utils/auditLogger');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
+const quizAnswerMatcher = require('../utils/quizAnswerMatcher');
 
 /**
  * Handler pour le système de missions V2
@@ -438,7 +439,7 @@ class MissionHandler {
     // Fetch a random quiz question from the database for this theme
     const quizQuestion = await db.getRandomQuizQuestion(interaction.guildId, mission.theme_id);
 
-    let question, answer, hint, difficulty;
+    let question, answer, hint, difficulty, alternatives;
 
     if (quizQuestion) {
       // Use question from database
@@ -446,6 +447,8 @@ class MissionHandler {
       answer = quizQuestion.correct_answer;
       hint = quizQuestion.hint;
       difficulty = quizQuestion.difficulty || 'medium';
+      // wrong_answers peut être utilisé comme réponses alternatives acceptées
+      alternatives = quizQuestion.wrong_answers || [];
 
       console.log(`✅ Quiz question loaded from database: ${question}`);
     } else {
@@ -456,6 +459,7 @@ class MissionHandler {
       answer = data.answer || 'Réponse par défaut';
       hint = null;
       difficulty = 'medium';
+      alternatives = data.alternatives || [];
     }
 
     // Convertir le timeout en unité appropriée pour l'affichage
@@ -507,15 +511,65 @@ class MissionHandler {
       if (missionCompleted) return; // Mission déjà complétée, ignorer
 
       attemptCount++;
-      const userAnswer = msg.content.trim().toLowerCase();
-      const correctAnswer = answer.toLowerCase();
+      const userAnswer = msg.content.trim();
 
-      if (userAnswer === correctAnswer) {
+      // Utiliser le matcher intelligent pour comparer les réponses
+      const matchResult = quizAnswerMatcher.matchAnswer(userAnswer, answer, alternatives);
+
+      if (matchResult.isCorrect) {
         // Bonne réponse !
         await msg.react('✅');
         missionCompleted = true;
         collector.stop('success');
         await this.completeMission(interaction, mission, player, progress, msg.url);
+      } else if (matchResult.isClose) {
+        // Réponse proche mais pas suffisante
+        await msg.react('🔶');
+
+        // Vérifier si le joueur a épuisé ses essais
+        if (hasMaxAttempts && attemptCount >= maxAttempts) {
+          // Tous les essais épuisés
+          await interaction.channel.send(`❌ **Si proche !** Tu as épuisé tous tes essais (${maxAttempts}).\n\n${matchResult.feedback || 'Tu étais très proche !'}\n\nLa bonne réponse était : **${answer}**\n\nLe thread se ferme dans 5 secondes...`);
+
+          collector.stop('failed');
+
+          await db.query(
+            `UPDATE mission_progress SET status = 'failed', updated_at = NOW()
+             WHERE id = $1`,
+            [progress.id]
+          );
+
+          // Annonce : mission échouée
+          await announcements.announceMissionFailed(
+            interaction.client,
+            interaction.guildId,
+            interaction.user.username,
+            mission.name,
+            `Échec au quiz (${maxAttempts} essais épuisés)`
+          );
+
+          // Fermer le thread après 5 secondes
+          setTimeout(async () => {
+            try {
+              await interaction.channel.setArchived(true);
+            } catch (error) {
+              console.warn('⚠️  Impossible d\'archiver le thread');
+            }
+          }, 5000);
+        } else {
+          // Il reste des essais - donner un indice
+          const remainingAttempts = hasMaxAttempts ? maxAttempts - attemptCount : null;
+
+          let retryMessage = `🔶 **${matchResult.feedback || 'Tu es très proche !'}**`;
+
+          if (hasMaxAttempts) {
+            retryMessage += `\n\n🎯 Essais restants : **${remainingAttempts}/${maxAttempts}**`;
+          }
+
+          retryMessage += '\n\n💡 Réessaye en envoyant ta réponse dans ce thread.';
+
+          await interaction.channel.send(retryMessage);
+        }
       } else {
         // Mauvaise réponse
         await msg.react('❌');

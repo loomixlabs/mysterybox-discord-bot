@@ -5,9 +5,37 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [1.8.0] - 2025-11-23
+
+### ✨ Added
+
+- **[Missions Quiz]**: Nouveau système de comparaison intelligente pour les quiz
+  - **Tolérance aux fautes de frappe**: Algorithme de Levenshtein avec seuil de 80% de similarité
+  - **Suppression automatique des articles français**: le, la, les, un, une, des, l', d', du, au, aux
+  - **Support des réponses multiples** (toutes requises) avec séparateurs flexibles
+  - **Nouveau feedback visuel**: 🔶 pour réponses "proches" (60-79% similarité)
+  - **Compatibilité**: 100% rétrocompatible
 
 ### 🐛 Fixed
+
+- **[Server Config - Bot Status]**: Le statut du bot ne persistait pas après redémarrage
+  - **Symptôme**: Après redémarrage, le statut revenait à la valeur par défaut malgré la configuration
+  - **Cause racine**: `ready.js` utilisait `client.guilds.cache.first()` qui retournait un serveur arbitraire
+    - Le bot étant sur 2 serveurs, le statut pouvait être chargé depuis le mauvais serveur
+    - Le statut est sauvegardé par `guild_id`, donc l'incohérence causait le reset
+  - **Fichier modifié**: `events/ready.js` (lignes 14-18)
+  - **Fix**: Utilisation de `process.env.GUILD_ID` pour charger le statut depuis le serveur principal configuré
+    - Fallback sur `client.guilds.cache.first()` si `GUILD_ID` non défini
+
+- **[Server Config - Notifications]**: Toggles de notifications missions non fonctionnels
+  - **Symptôme**: Cliquer sur les boutons de toggle affichait "Une erreur est survenue"
+  - **Cause racine**: Les boutons `toggle_notify_*` n'étaient pas routés vers `ServerConfigHandler`
+    - Ils tombaient dans le fallback `adminPanelHandler` qui essayait de les traiter comme des toggles d'annonces
+    - Erreur DB: `la colonne « trap_curse » de la relation « announcement_settings » n'existe pas`
+  - **Fichiers modifiés**:
+    - `events/interactionCreate.js` (ligne 100): Ajout de `toggle_notify_` au routing
+    - `handlers/serverConfigHandler.js` (lignes 493, 472-483): Ajout `deferUpdate()` + `editReply()`
+  - **Fix principal**: Routing `toggle_notify_*` → `ServerConfigHandler.handleButtonInteraction()`
 
 - **[Progression Roles - Admin Panel]**: Message amélioré pour les rôles en attente de création (lazy creation)
   - **Contexte**: Les rôles importés depuis un thème utilisent un système de "lazy creation"

@@ -12,8 +12,10 @@ module.exports = {
     console.log(`👥 Utilisateurs: ${client.users.cache.size}`);
 
     // Charger et définir le statut depuis la base de données
+    // Utiliser GUILD_ID depuis .env pour garantir la persistance du statut
     try {
-      const primaryGuild = client.guilds.cache.first();
+      const primaryGuildId = process.env.GUILD_ID;
+      const primaryGuild = primaryGuildId ? client.guilds.cache.get(primaryGuildId) : client.guilds.cache.first();
 
       if (primaryGuild) {
         const branding = await db.getGuildBranding(primaryGuild.id);
