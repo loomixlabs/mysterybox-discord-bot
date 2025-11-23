@@ -4,6 +4,7 @@ const announcementTemplates = require('../utils/announcementTemplates');
 const BotRoleManager = require('../utils/botRoleManager');
 const db = require('../utils/database-pg');
 const setupThemeHandler = require('./setupThemeHandler');
+const setupDiagnostic = require('../utils/setupDiagnostic');
 
 /**
  * Gérer la sélection des rôles admin
@@ -129,6 +130,9 @@ async function handleFinish(interaction) {
   }
 
   // Créer le rôle dédié au bot pour la personnalisation de couleur
+  let botRoleInfo = null;
+  let needsRolePositionWarning = true;
+
   try {
     const branding = await db.getGuildBranding(interaction.guildId);
     const botRole = await BotRoleManager.createOrGetBotRole(
@@ -137,26 +141,108 @@ async function handleFinish(interaction) {
       branding.primary_color
     );
 
+    botRoleInfo = { name: botRole.name, color: botRole.hexColor, position: botRole.position };
     console.log(`✅ Rôle bot créé/récupéré: ${botRole.name} (${botRole.id})`);
-    message += `✅ **Rôle bot créé:** ${botRole.name}\n` +
+
+    // Vérifier si le rôle est bien positionné (pas tout en bas)
+    if (botRole.position > 1) {
+      needsRolePositionWarning = false;
+    }
+
+    message += `✅ **Rôle couleur:** ${botRole.name}\n` +
                `   • Couleur: ${botRole.hexColor} ■\n` +
-               `   • Ce rôle permet de personnaliser la couleur du bot dans Discord\n\n` +
-               `⚠️  **Important:** Pour que la couleur soit visible, vous devez remonter ce rôle dans la hiérarchie.\n` +
-               `   → Utilisez \`/server-config\` puis consultez le tutoriel de positionnement du rôle.\n\n`;
+               `   • Ce rôle permet de personnaliser la couleur du bot dans Discord\n\n`;
   } catch (error) {
     console.error('❌ Erreur lors de la création du rôle bot:', error);
     message += '⚠️ **Erreur lors de la création du rôle bot** (non bloquant).\n\n';
   }
 
-  message += '**Prochaines étapes:**\n' +
-             '1. Utilisez `/admin-panel` pour créer votre premier thème\n' +
-             '2. Ajoutez du contenu aux missions (mots-clés + questions)\n' +
-             '3. Créez vos collectibles\n' +
-             '4. Configurez les canaux de give\n\n' +
-             '💡 Vous pouvez relancer `/setup` à tout moment pour modifier les rôles.';
+  // Afficher l'avertissement de positionnement seulement si nécessaire
+  if (needsRolePositionWarning) {
+    const botUsername = interaction.client.user.username;
+    message += '**🔴 Configuration détectée incorrecte**\n' +
+               '**Action requise:** Repositionnez les rôles du bot dans la hiérarchie.\n\n' +
+               '```\n' +
+               'Paramètres serveur → Rôles\n' +
+               '─────────────────────────────\n' +
+               '@Fondateur         ← peut rester ici\n' +
+               '@Administrateur    ← peut rester ici\n' +
+               '─────────────────────────────\n' +
+               `@${botUsername}    ← REMONTER ICI\n`;
+    if (botRoleInfo) {
+      message += `@${botRoleInfo.name.replace('🤖 ', '')} ← sous le principal\n`;
+    }
+    message += '─────────────────────────────\n' +
+               '@Rôles de complétion ← EN DESSOUS\n' +
+               '─────────────────────────────\n' +
+               '```\n' +
+               '> 💡 Vos rôles admin/fondateur peuvent rester au-dessus du bot.\n\n';
+  }
+
+  message += '**Prochaines étapes:**\n';
+  if (needsRolePositionWarning) {
+    message += '1. **Remontez les rôles du bot** dans la hiérarchie\n' +
+               '2. Utilisez `/admin-panel` pour créer votre premier thème\n' +
+               '3. Ajoutez du contenu aux missions (mots-clés + questions)\n' +
+               '4. Créez vos collectibles et configurez les canaux de give\n\n';
+  } else {
+    message += '1. Utilisez `/admin-panel` pour créer votre premier thème\n' +
+               '2. Ajoutez du contenu aux missions (mots-clés + questions)\n' +
+               '3. Créez vos collectibles et configurez les canaux de give\n\n';
+  }
+  message += '💡 Vous pouvez relancer `/setup` à tout moment pour modifier les rôles.';
 
   await interaction.editReply({
     content: message,
+    embeds: [],
+    components: []
+  });
+}
+
+/**
+ * Continuer le setup malgré les erreurs de hiérarchie/permissions
+ */
+async function handleContinueAnyway(interaction) {
+  await interaction.deferUpdate();
+  console.log(`⚠️ Setup: ${interaction.user.tag} continue malgré les erreurs sur ${interaction.guild.name}`);
+
+  // Passer à l'étape 1: Configuration des rôles
+  await setupCommand.showRoleConfiguration(interaction);
+}
+
+/**
+ * Lancer le diagnostic complet (équivalent à /check-setup)
+ */
+async function handleRunDiagnostic(interaction) {
+  await interaction.deferUpdate();
+
+  console.log(`🔍 Setup: Diagnostic complet demandé pour ${interaction.guild.name}`);
+
+  // Exécuter le diagnostic complet
+  const { combined, detailed } = await setupDiagnostic.runFullDiagnostic(interaction.guild);
+
+  await interaction.editReply({
+    embeds: [combined],
+    components: [] // Retirer les boutons après diagnostic
+  });
+
+  // Proposer de relancer /setup après lecture du diagnostic
+  await interaction.followUp({
+    content: '💡 **Pour continuer la configuration**, relancez `/setup` après avoir résolu les problèmes détectés.',
+    flags: 64 // EPHEMERAL
+  });
+}
+
+/**
+ * Annuler le setup
+ */
+async function handleCancel(interaction) {
+  await interaction.deferUpdate();
+
+  await interaction.editReply({
+    content: '❌ **Configuration annulée**\n\n' +
+             'Vous pouvez relancer `/setup` à tout moment.\n\n' +
+             '💡 Pour diagnostiquer les problèmes, utilisez `/check-setup`.',
     embeds: [],
     components: []
   });
@@ -169,6 +255,10 @@ module.exports = {
   handleSkipToChecklist,
   handleBackToRoles,
   handleFinish,
+  // Nouveaux handlers pour vérification hiérarchie
+  handleContinueAnyway,
+  handleRunDiagnostic,
+  handleCancel,
   // Theme handlers (délégués à setupThemeHandler)
   handleThemeSelect: setupThemeHandler.handleThemeSelect,
   handleThemeImport: setupThemeHandler.handleThemeImport,

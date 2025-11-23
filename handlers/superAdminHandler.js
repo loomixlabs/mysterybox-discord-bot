@@ -154,6 +154,7 @@ async function showGuildsList(interaction) {
 async function showGuildDetails(interaction, guildId) {
   const config = await GuildConfig.getConfig(guildId);
   const stats = await GuildConfig.getStats(guildId);
+  const subscriptionStatus = await GuildConfig.getSubscriptionStatus(guildId);
 
   if (!config) {
     return interaction.update({
@@ -164,12 +165,37 @@ async function showGuildDetails(interaction, guildId) {
   }
 
   const statusEmoji = config.is_active ? '✅' : '❌';
-  const trialBadge = config.is_trial ? '🆓 Essai gratuit' : '💎 Version complète';
+
+  // Déterminer le badge de subscription selon le statut
+  let subscriptionBadge = '';
+  let subscriptionColor = '#00FF00';
+
+  switch (subscriptionStatus.status) {
+    case 'premium':
+      subscriptionBadge = '💎 Version Premium';
+      subscriptionColor = '#9B59B6';
+      break;
+    case 'trial':
+      subscriptionBadge = `🆓 Essai (${subscriptionStatus.days_remaining}j restants)`;
+      subscriptionColor = '#F39C12';
+      break;
+    case 'trial_expired':
+      subscriptionBadge = '⏰ Essai Expiré';
+      subscriptionColor = '#E74C3C';
+      break;
+    case 'inactive':
+      subscriptionBadge = '❌ Inactif';
+      subscriptionColor = '#95A5A6';
+      break;
+    default:
+      subscriptionBadge = '❓ Non configuré';
+      subscriptionColor = '#7F8C8D';
+  }
 
   const embed = new EmbedBuilder()
     .setTitle(`${statusEmoji} ${config.guild_name}`)
     .setDescription(`**ID:** \`${config.guild_id}\`\n**Statut:** ${config.is_active ? 'Actif' : 'Inactif'}`)
-    .setColor(config.is_active ? '#00FF00' : '#FF0000')
+    .setColor(config.is_active ? subscriptionColor : '#FF0000')
     .addFields(
       { name: '📊 Statistiques', value: `\`\`\`
 Joueurs       : ${stats?.total_players || 0}
@@ -181,11 +207,11 @@ Collections   : ${stats?.total_collections || 0}
 Ajouté le     : ${new Date(config.added_at).toLocaleDateString('fr-FR')}
 Dernière act. : ${config.last_activity ? new Date(config.last_activity).toLocaleDateString('fr-FR') : 'Jamais'}
 \`\`\``, inline: true },
-      { name: '⚙️ Configuration', value: `${trialBadge}\n${config.max_players ? `Limite: ${config.max_players} joueurs` : 'Illimité'}`, inline: false }
+      { name: '💳 Subscription', value: `${subscriptionBadge}\n${config.max_players ? `Limite: ${config.max_players} joueurs` : '∞ Illimité'}${subscriptionStatus.expires_at ? `\nExpire: ${new Date(subscriptionStatus.expires_at).toLocaleDateString('fr-FR')}` : ''}`, inline: false }
     );
 
   if (config.notes) {
-    embed.addFields({ name: '📝 Notes', value: config.notes, inline: false });
+    embed.addFields({ name: '📝 Notes', value: config.notes.substring(0, 1024), inline: false });
   }
 
   const row1 = new ActionRowBuilder()
@@ -208,7 +234,44 @@ Dernière act. : ${config.last_activity ? new Date(config.last_activity).toLocal
         .setStyle(ButtonStyle.Danger)
     );
 
-  const row2 = new ActionRowBuilder()
+  // Rangée 2: Gestion Trial/Premium
+  const row2 = new ActionRowBuilder();
+
+  if (subscriptionStatus.status === 'trial' || subscriptionStatus.status === 'trial_expired') {
+    // Si en essai ou essai expiré: proposer conversion premium ou prolongation
+    row2.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`superadmin_convert_premium_${guildId}`)
+        .setLabel('💎 Convertir Premium')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`superadmin_extend_trial_${guildId}`)
+        .setLabel('⏰ Prolonger Essai')
+        .setStyle(ButtonStyle.Primary)
+    );
+  } else if (subscriptionStatus.status === 'premium') {
+    // Si premium: proposer de repasser en essai (rare mais utile)
+    row2.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`superadmin_start_trial_${guildId}`)
+        .setLabel('🆓 Passer en Essai')
+        .setStyle(ButtonStyle.Secondary)
+    );
+  } else {
+    // Si inactif ou non configuré: proposer démarrage essai ou activation premium
+    row2.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`superadmin_start_trial_${guildId}`)
+        .setLabel('🆓 Démarrer Essai')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`superadmin_convert_premium_${guildId}`)
+        .setLabel('💎 Activer Premium')
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+
+  const row3 = new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
         .setCustomId(`superadmin_guild_stats_${guildId}`)
@@ -230,7 +293,7 @@ Dernière act. : ${config.last_activity ? new Date(config.last_activity).toLocal
 
   await interaction.update({
     embeds: [embed],
-    components: [row1, row2]
+    components: [row1, row2, row3]
   });
 }
 
@@ -1031,6 +1094,237 @@ async function showGuildLogs(interaction, guildId) {
   });
 }
 
+/**
+ * Afficher le modal pour démarrer une période d'essai
+ */
+async function handleStartTrialModal(interaction, guildId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`superadmin_start_trial_modal_${guildId}`)
+    .setTitle('🆓 Démarrer une Période d\'Essai');
+
+  const daysInput = new TextInputBuilder()
+    .setCustomId('trial_days')
+    .setLabel('Nombre de jours d\'essai')
+    .setPlaceholder('Ex: 14')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(3)
+    .setValue('14');
+
+  const maxPlayersInput = new TextInputBuilder()
+    .setCustomId('max_players')
+    .setLabel('Limite de joueurs (vide = illimité)')
+    .setPlaceholder('Ex: 50 (laisser vide pour illimité)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(5);
+
+  const row1 = new ActionRowBuilder().addComponents(daysInput);
+  const row2 = new ActionRowBuilder().addComponents(maxPlayersInput);
+  modal.addComponents(row1, row2);
+
+  await interaction.showModal(modal);
+}
+
+/**
+ * Traiter le démarrage d'une période d'essai
+ */
+async function handleStartTrial(interaction, guildId) {
+  await interaction.deferReply({ flags: 64 });
+
+  const daysStr = interaction.fields.getTextInputValue('trial_days');
+  const maxPlayersStr = interaction.fields.getTextInputValue('max_players');
+
+  const days = parseInt(daysStr, 10);
+  if (isNaN(days) || days < 1 || days > 365) {
+    return interaction.editReply({
+      content: '❌ Nombre de jours invalide. Entrez un nombre entre 1 et 365.'
+    });
+  }
+
+  const maxPlayers = maxPlayersStr ? parseInt(maxPlayersStr, 10) : null;
+  if (maxPlayersStr && (isNaN(maxPlayers) || maxPlayers < 1)) {
+    return interaction.editReply({
+      content: '❌ Limite de joueurs invalide. Entrez un nombre positif ou laissez vide.'
+    });
+  }
+
+  try {
+    const config = await GuildConfig.getConfig(guildId);
+    if (!config) {
+      return interaction.editReply({
+        content: '❌ Serveur introuvable.'
+      });
+    }
+
+    await GuildConfig.startTrial(guildId, days, maxPlayers);
+
+    await logSuperAdminAction(
+      interaction.user.id,
+      'trial_started',
+      guildId,
+      { guild_name: config.guild_name, days, max_players: maxPlayers }
+    );
+
+    await interaction.editReply({
+      content: `✅ Période d'essai de **${days} jours** démarrée pour **${config.guild_name}**${maxPlayers ? ` (max ${maxPlayers} joueurs)` : ''}.`
+    });
+
+    // Rafraîchir l'affichage
+    await showGuildDetails(interaction, guildId);
+  } catch (error) {
+    console.error('Erreur lors du démarrage de l\'essai:', error);
+    await interaction.editReply({
+      content: `❌ Erreur: ${error.message}`
+    });
+  }
+}
+
+/**
+ * Convertir un serveur en premium
+ */
+async function handleConvertToPremium(interaction, guildId) {
+  await interaction.deferUpdate();
+
+  try {
+    const config = await GuildConfig.getConfig(guildId);
+    if (!config) {
+      return interaction.followUp({
+        content: '❌ Serveur introuvable.',
+        flags: 64
+      });
+    }
+
+    await GuildConfig.convertToPremium(guildId, null); // null = illimité
+
+    await logSuperAdminAction(
+      interaction.user.id,
+      'converted_to_premium',
+      guildId,
+      { guild_name: config.guild_name }
+    );
+
+    // Envoyer un DM au propriétaire du serveur
+    if (config.owner_id) {
+      try {
+        const owner = await interaction.client.users.fetch(config.owner_id);
+        await owner.send({
+          content: `🎉 **Félicitations ! Votre serveur est maintenant Premium !**\n\n` +
+            `Le serveur **${config.guild_name}** a été converti en version **Premium** 💎\n\n` +
+            `**Avantages débloqués:**\n` +
+            `• ✅ Accès illimité au bot\n` +
+            `• ✅ Plus de limite de temps\n` +
+            `• ✅ Support prioritaire\n` +
+            `• ✅ Nouvelles fonctionnalités en avant-première\n\n` +
+            `Merci pour votre confiance ! 🚀`
+        });
+        console.log(`✅ DM Premium envoyé au propriétaire de ${config.guild_name}`);
+      } catch (dmError) {
+        console.log(`⚠️ Impossible d'envoyer le DM Premium au propriétaire (DMs fermés)`);
+      }
+    }
+
+    await interaction.followUp({
+      content: `✅ **${config.guild_name}** est maintenant en **version Premium** 💎`,
+      flags: 64
+    });
+
+    // Rafraîchir l'affichage
+    await showGuildDetails(interaction, guildId);
+  } catch (error) {
+    console.error('Erreur lors de la conversion premium:', error);
+    await interaction.followUp({
+      content: `❌ Erreur: ${error.message}`,
+      flags: 64
+    });
+  }
+}
+
+/**
+ * Afficher le modal pour prolonger une période d'essai
+ */
+async function handleExtendTrialModal(interaction, guildId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`superadmin_extend_trial_modal_${guildId}`)
+    .setTitle('⏰ Prolonger la Période d\'Essai');
+
+  const daysInput = new TextInputBuilder()
+    .setCustomId('extra_days')
+    .setLabel('Jours supplémentaires à ajouter')
+    .setPlaceholder('Ex: 7')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(3)
+    .setValue('7');
+
+  const row = new ActionRowBuilder().addComponents(daysInput);
+  modal.addComponents(row);
+
+  await interaction.showModal(modal);
+}
+
+/**
+ * Traiter la prolongation d'une période d'essai
+ */
+async function handleExtendTrial(interaction, guildId) {
+  await interaction.deferReply({ flags: 64 });
+
+  const extraDaysStr = interaction.fields.getTextInputValue('extra_days');
+  const extraDays = parseInt(extraDaysStr, 10);
+
+  if (isNaN(extraDays) || extraDays < 1 || extraDays > 365) {
+    return interaction.editReply({
+      content: '❌ Nombre de jours invalide. Entrez un nombre entre 1 et 365.'
+    });
+  }
+
+  try {
+    const config = await GuildConfig.getConfig(guildId);
+    if (!config) {
+      return interaction.editReply({
+        content: '❌ Serveur introuvable.'
+      });
+    }
+
+    // Si le serveur n'est pas en trial, le passer en trial d'abord
+    if (!config.is_trial) {
+      await GuildConfig.startTrial(guildId, extraDays, config.max_players);
+      await logSuperAdminAction(
+        interaction.user.id,
+        'trial_started',
+        guildId,
+        { guild_name: config.guild_name, days: extraDays }
+      );
+
+      await interaction.editReply({
+        content: `✅ Nouvelle période d'essai de **${extraDays} jours** démarrée pour **${config.guild_name}**.`
+      });
+    } else {
+      await GuildConfig.extendTrial(guildId, extraDays);
+      await logSuperAdminAction(
+        interaction.user.id,
+        'trial_extended',
+        guildId,
+        { guild_name: config.guild_name, extra_days: extraDays }
+      );
+
+      await interaction.editReply({
+        content: `✅ Période d'essai prolongée de **${extraDays} jours** pour **${config.guild_name}**.`
+      });
+    }
+
+    // Rafraîchir l'affichage
+    await showGuildDetails(interaction, guildId);
+  } catch (error) {
+    console.error('Erreur lors de la prolongation de l\'essai:', error);
+    await interaction.editReply({
+      content: `❌ Erreur: ${error.message}`
+    });
+  }
+}
+
 module.exports = {
   isSuperAdmin,
   showMainPanel,
@@ -1049,5 +1343,11 @@ module.exports = {
   handleAddAdminRole,
   handleRemoveAdminRole,
   showGuildStats,
-  showGuildLogs
+  showGuildLogs,
+  // Trial/Premium management
+  handleStartTrialModal,
+  handleStartTrial,
+  handleConvertToPremium,
+  handleExtendTrialModal,
+  handleExtendTrial
 };

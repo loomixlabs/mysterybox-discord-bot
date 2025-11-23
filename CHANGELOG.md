@@ -5,9 +5,106 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.9.0] - 2025-11-23
+
+### ✨ Added
+
+- **[Système de Subscriptions]**: Système complet de gestion Trial/Premium multi-serveur
+  - **Nouveau handler**: `handlers/subscriptionHandler.js` - Gestion centralisée des subscriptions
+  - **Période d'essai automatique**: 14 jours offerts à chaque nouveau serveur
+  - **Vérification au démarrage**: Contrôle immédiat des trials expirés au lancement du bot
+  - **Notifications automatiques**:
+    - 📨 DM de bienvenue au propriétaire lors de l'installation du bot
+    - ⚠️ DM d'alerte 3 jours avant expiration du trial
+    - 🔴 DM de désactivation quand le trial expire
+    - 🎉 DM de félicitations lors du passage en Premium
+  - **Fichiers modifiés**:
+    - `handlers/subscriptionHandler.js` (NOUVEAU - 120+ lignes)
+    - `events/ready.js` (lignes 106-123): Initialisation système subscriptions
+    - `events/guildCreate.js` (lignes 55-77): DM bienvenue nouveau serveur
+    - `handlers/superAdminHandler.js` (lignes 1208-1226): DM Premium
+
+- **[Super Admin Panel]**: Gestion complète Trial/Premium des serveurs
+  - **Vue détaillée serveur**: Affichage du statut subscription (Trial/Premium/Expiré)
+  - **Actions disponibles**:
+    - 🆓 "Démarrer Trial" - Modal pour définir durée et limite de joueurs
+    - 💎 "Convertir en Premium" - Passage en version illimitée avec DM
+    - ⏰ "Étendre Trial" - Prolonger la période d'essai
+  - **Audit logs**: Toutes les actions sont loguées dans `super_admin_logs`
+  - **Fichiers modifiés**:
+    - `handlers/superAdminHandler.js` (lignes 1150-1280): 6 nouvelles fonctions
+    - `handlers/modalHandler.js` (lignes 95-110): Routing modals trial
+    - `utils/guildConfig.js` (lignes 270-400): Fonctions Trial/Premium
+
+- **[Admin Panel]**: Bannière de statut subscription
+  - **Affichage dynamique**: Banner en haut du panel selon le statut
+    - 🆓 Trial actif avec jours restants
+    - ⚠️ Trial < 3 jours avec lien Premium
+    - 🔴 Trial expiré
+    - 💎 Version Premium (pas de banner)
+  - **Fichier modifié**: `handlers/adminPanelHandler.js` (lignes 60-85)
+
+- **[Commande /check-setup]**: Nouvelle commande de diagnostic
+  - **Vérification complète**: Permissions, hiérarchie, configuration
+  - **Rapport détaillé**: Liste des problèmes avec solutions
+  - **Fichier créé**: `commands/admin/check-setup.js`
+
+### 🔧 Changed
+
+- **[Lien Discord]**: Mise à jour du lien d'invitation permanent
+  - Ancien: `https://discord.gg/JBKPw6gv` (expiré)
+  - Nouveau: `https://discord.gg/CMfGeQ2Z`
+  - **Fichiers modifiés**:
+    - `utils/footerHelper.js` (ligne 9)
+    - `handlers/adminPanelHandler.js` (ligne 80)
+
+- **[Admin Panel]**: Refactorisation avec fonction partagée
+  - **Nouvelle fonction**: `buildAdminPanelContent()` - Construction unifiée du panel
+  - **Avantage**: Code DRY, maintenance simplifiée
+  - **Fichier modifié**: `handlers/adminPanelHandler.js` (lignes 35-150)
+
+### 📦 Scripts Utilitaires
+
+- `scripts/convert-to-premium.js` - Conversion manuelle d'un serveur en Premium
+- `scripts/check-guild-trial.js` - Vérification du statut trial d'un serveur
+- `scripts/expire-trial-test.js` - Tests de manipulation des dates d'expiration
+
+---
+
 ## [1.8.0] - 2025-11-23
 
 ### ✨ Added
+
+- **[Setup Wizard]**: Vérification automatique de hiérarchie et permissions au lancement
+  - **Diagnostic automatique**: Vérifie la hiérarchie du rôle bot et les permissions requises
+  - **Affichage des erreurs**: Détection et affichage clair des problèmes de configuration
+  - **Lien de réinvitation**: Génère automatiquement un lien OAuth2 avec les bonnes permissions
+  - **Options utilisateur**: "Continuer malgré tout", "Diagnostic complet", "Annuler"
+  - **Fichiers modifiés**:
+    - `commands/admin/setup.js` (lignes 26-108): Vérification au début du wizard
+    - `handlers/setupHandler.js` (lignes 166-213): 3 nouveaux handlers
+    - `events/interactionCreate.js` (lignes 228-237): Routage des nouveaux boutons
+
+- **[Setup Wizard]**: Création automatique du rôle couleur dans TOUS les workflows
+  - **Rôle générique**: `🤖 Rôle Couleur - MysteryBox` (nom fixe, couleur personnalisable via `/server-config`)
+  - **Idempotent**: Vérifie d'abord en base de données, puis sur Discord avant de créer
+  - **Sauvegarde automatique**: `bot_role_id` enregistré en DB pour configuration ultérieure
+  - **Workflows couverts**:
+    - Import de thème préconfigurés → rôle créé après import réussi
+    - Skip thème → rôle créé à la finalisation
+  - **Fichiers modifiés**:
+    - `utils/botRoleManager.js` (ligne 31): Nom générique fixe
+    - `handlers/setupThemeHandler.js` (lignes 280-302): Création après import thème
+    - `handlers/setupHandler.js` (lignes 131-157): Création à la finalisation
+
+- **[Setup Wizard]**: Messages améliorés pour le positionnement des rôles
+  - **Détection visuelle**: `🔴 Configuration détectée incorrecte` quand rôles mal positionnés
+  - **Hiérarchie visuelle claire**: Affiche un schéma avec `@Fondateur ← peut rester ici`, `@Bot ← REMONTER ICI`, `@Complétion ← EN DESSOUS`
+  - **Rassurance**: Note explicite que les rôles admin/fondateur peuvent rester au-dessus
+  - **Nom du rôle de complétion**: Utilise le vrai nom du rôle créé par le thème
+  - **Fichiers modifiés**:
+    - `handlers/setupThemeHandler.js` (lignes 428-449): Message amélioré après import
+    - `handlers/setupHandler.js` (lignes 160-179): Message amélioré à la finalisation
 
 - **[Missions Quiz]**: Nouveau système de comparaison intelligente pour les quiz
   - **Tolérance aux fautes de frappe**: Algorithme de Levenshtein avec seuil de 80% de similarité

@@ -1,6 +1,7 @@
 const { ActivityType } = require('discord.js');
 const superBonusHandler = require('../handlers/superBonusHandler');
 const missionHandler = require('../handlers/missionHandler');
+const subscriptionHandler = require('../handlers/subscriptionHandler');
 const db = require('../utils/database-pg');
 
 module.exports = {
@@ -101,5 +102,24 @@ module.exports = {
 
     // Vérification immédiate au démarrage
     missionHandler.checkExpiredMissions(client);
+
+    // === GESTION DES SUBSCRIPTIONS ===
+    // Vérification des essais expirés (toutes les heures)
+    setInterval(() => {
+      subscriptionHandler.checkExpiredTrials(client);
+    }, 3600000); // 1 heure en millisecondes
+
+    // Vérification immédiate au démarrage
+    subscriptionHandler.checkExpiredTrials(client);
+
+    // Notifications des essais qui expirent bientôt (tous les jours à minuit = 24h)
+    setInterval(() => {
+      subscriptionHandler.notifyExpiringTrials(client, 3);
+    }, 86400000); // 24 heures en millisecondes
+
+    // Notification immédiate au démarrage
+    subscriptionHandler.notifyExpiringTrials(client, 3);
+
+    console.log('📊 Système de subscriptions initialisé');
   }
 };

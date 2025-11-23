@@ -27,9 +27,8 @@ class BotRoleManager {
         }
       }
 
-      // Créer le nom du rôle
-      const displayName = botName || branding.bot_display_name || guild.members.me.displayName;
-      const roleName = `🤖 Bot - ${displayName}`;
+      // Créer le nom du rôle (nom fixe, personnalisable via /server-config)
+      const roleName = `🤖 Rôle Couleur - MysteryBox`;
 
       // Vérifier si un rôle avec ce nom existe déjà
       let role = guild.roles.cache.find(r => r.name === roleName);

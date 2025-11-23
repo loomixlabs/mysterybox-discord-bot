@@ -9,6 +9,193 @@ const probabilityHandler = require('./probabilityHandler');
 const superBonusHandler = require('./superBonusHandler');
 const progressionRoleAdminHandler = require('./progressionRoleAdminHandler');
 const { canAccessAdminPanel } = require('../utils/permissions');
+const GuildConfig = require('../utils/guildConfig');
+const { LOOMIX_BRANDING } = require('../utils/footerHelper');
+
+/**
+ * Génère le contenu du panneau admin (embed + components)
+ * Fonction partagée utilisée par la commande ET le handler
+ * @param {string} guildId - ID du serveur
+ * @returns {Promise<{embed: EmbedBuilder, components: ActionRowBuilder[], hasTheme: boolean}>}
+ */
+async function buildAdminPanelContent(guildId) {
+  // Requêtes en PARALLÈLE pour être plus rapide
+  const [theme, allThemes, giveChannels, subscriptionStatus] = await Promise.all([
+    db.getActiveTheme(guildId),
+    db.getAllThemes(guildId),
+    db.getAllGiveChannels(guildId),
+    GuildConfig.getSubscriptionStatus(guildId)
+  ]);
+
+  const config = theme ? await db.getThemeConfig(guildId, theme.id) : null;
+  const categories = giveChannels.filter(c => c.type === 'category');
+  const channels = giveChannels.filter(c => c.type === 'channel');
+
+  // Helper: Créer la barre de progression mini
+  const createMiniProgressBar = (percentage) => {
+    const totalBars = 15;
+    const filledBars = Math.round((percentage / 100) * totalBars);
+    const emptyBars = totalBars - filledBars;
+    let fillEmoji = percentage >= 70 ? '🟩' : percentage >= 30 ? '🟨' : '🟥';
+    return fillEmoji.repeat(filledBars) + '⬜'.repeat(emptyBars);
+  };
+
+  // Générer le texte de durée du thème
+  let durationText = '';
+  let progressBar = '';
+
+  if (theme) {
+    const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
+
+    if (expirationInfo.isUnlimited) {
+      durationText = '♾️ **Illimitée**';
+    } else if (expirationInfo.notActivated) {
+      durationText = `⏸️ Non activé (${theme.duration_days}j configurés)`;
+    } else if (expirationInfo.isExpired) {
+      durationText = '🔴 **EXPIRÉ**';
+      progressBar = '\n' + createMiniProgressBar(0);
+    } else {
+      const daysText = expirationInfo.daysRemaining === 0 ?
+        `⏰ ${expirationInfo.hoursRemaining}h restantes` :
+        expirationInfo.daysRemaining === 1 ?
+        `⚠️ ${expirationInfo.daysRemaining} jour restant` :
+        `⏱️ ${expirationInfo.daysRemaining} jours restants`;
+
+      durationText = `${daysText} (${expirationInfo.percentageRemaining}%)`;
+      progressBar = '\n' + createMiniProgressBar(expirationInfo.percentageRemaining);
+    }
+  }
+
+  // Générer le banner de période d'essai (seulement si trial, rien si premium)
+  let subscriptionBanner = '';
+  if (subscriptionStatus && subscriptionStatus.status === 'trial') {
+    const daysRemaining = subscriptionStatus.days_remaining || 0;
+    const expiresAt = subscriptionStatus.expires_at;
+
+    if (daysRemaining <= 0) {
+      subscriptionBanner = '🔴 **Période d\'essai expirée**\n\n';
+    } else if (daysRemaining <= 3) {
+      subscriptionBanner = `⚠️ **Période d'essai:** ${daysRemaining} jour${daysRemaining > 1 ? 's' : ''} restant${daysRemaining > 1 ? 's' : ''}\n` +
+                          `📅 Expire le: <t:${Math.floor(new Date(expiresAt).getTime() / 1000)}:D>\n` +
+                          `💎 [Passer en Premium](https://discord.gg/CMfGeQ2Z)\n\n`;
+    } else {
+      subscriptionBanner = `🆓 **Période d'essai:** ${daysRemaining} jour${daysRemaining > 1 ? 's' : ''} restant${daysRemaining > 1 ? 's' : ''}\n` +
+                          `📅 Expire le: <t:${Math.floor(new Date(expiresAt).getTime() / 1000)}:D>\n\n`;
+    }
+  }
+
+  // Créer l'embed
+  const embed = new EmbedBuilder()
+    .setTitle('🎨 PANNEAU D\'ADMINISTRATION')
+    .setColor(theme ? '#3498db' : '#e74c3c')
+    .setTimestamp();
+
+  if (!theme) {
+    // Pas de thème : message d'accueil pour nouveau serveur
+    embed.setDescription(
+      subscriptionBanner +
+      '# 🚀 Bienvenue sur le panneau d\'administration !\n\n' +
+      '⚠️ **Aucun thème configuré pour ce serveur**\n\n' +
+      '## 📋 Première utilisation ? Lance `/setup`\n\n' +
+      'La commande `/setup` est **essentielle** pour configurer le bot :\n' +
+      '• ✅ Configure les **rôles administrateurs** du bot\n' +
+      '• ✅ Crée le **rôle couleur** pour personnaliser le bot\n' +
+      '• ✅ **Vérifie la hiérarchie** des rôles Discord\n' +
+      '• ✅ Propose des **thèmes préconfigurés** (Monopoly, Pokémon...)\n' +
+      '• ✅ Guide **étape par étape** avec tutoriel intégré\n\n' +
+      '**Déjà configuré ?** Utilise "⚙️ Paramétrage" ci-dessous pour créer un thème personnalisé.'
+    );
+  } else {
+    // Thème existant : affichage normal
+    embed.setDescription(
+      subscriptionBanner +
+      `**Thème actif:** ${theme.name}\n` +
+      `**Durée:** ${durationText}${progressBar}\n` +
+      `**Items requis:** ${theme.required_items}\n` +
+      `**Rôle final:** ${theme.final_role_name}\n\n` +
+      `**Canaux configurés:**\n` +
+      `📂 Catégories: ${categories.length}\n` +
+      `📍 Canaux: ${channels.length}\n\n` +
+      `Choisis une action ci-dessous :`
+    );
+
+    if (config) {
+      embed.addFields({
+        name: '🎲 Probabilités actuelles',
+        value: `🎁 Collectibles: **${config.probability_collectible}%**\n` +
+               `📋 Missions: **${config.probability_mission}%**\n` +
+               `⚠️ Pièges: **${config.probability_trap}%**\n` +
+               `✨ Super Bonus: **${config.probability_super_bonus || 0}%**`,
+        inline: true
+      });
+    }
+  }
+
+  // Créer les composants
+  const components = [];
+
+  // Select menu pour changer de thème (si plusieurs thèmes existent)
+  if (allThemes.length > 1) {
+    const themeSelect = new StringSelectMenuBuilder()
+      .setCustomId('select_theme')
+      .setPlaceholder('🔄 Changer de thème actif')
+      .addOptions(
+        allThemes.map(t => ({
+          label: t.name,
+          value: t.id.toString(),
+          description: `${t.required_items} items - ${t.duration_days === 0 ? 'Illimité' : `${t.duration_days}j`}`,
+          default: t.is_active === 1
+        }))
+      );
+    components.push(new ActionRowBuilder().addComponents(themeSelect));
+  }
+
+  // Ligne 1: Give Unique + Lancer Campagne
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('admin_give_unique')
+      .setLabel('Lancer un Give Unique')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('🎁')
+      .setDisabled(!theme),
+    new ButtonBuilder()
+      .setCustomId('admin_launch_campaign')
+      .setLabel('Lancer une Campagne')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('🚀')
+      .setDisabled(!theme)
+  );
+
+  // Ligne 2: Paramétrage + Statistiques
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('admin_settings')
+      .setLabel('Paramétrage')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('⚙️'),
+    new ButtonBuilder()
+      .setCustomId('admin_stats')
+      .setLabel('Statistiques')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📊')
+      .setDisabled(!theme)
+  );
+
+  components.push(row1, row2);
+
+  // Bouton "Passer en Premium" uniquement visible en mode trial
+  if (subscriptionStatus && subscriptionStatus.status === 'trial') {
+    const row3 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('💎 Passer en Premium')
+        .setStyle(ButtonStyle.Link)
+        .setURL(LOOMIX_BRANDING.discordInvite)
+    );
+    components.push(row3);
+  }
+
+  return { embed, components, hasTheme: !!theme };
+}
 
 /**
  * Handler pour le panneau d'administration
@@ -649,141 +836,10 @@ class AdminPanelHandler {
   }
 
   /**
-   * Rafraîchir le panneau principal - NOUVELLE STRUCTURE
+   * Rafraîchir le panneau principal - Utilise la fonction partagée
    */
   async handleRefresh(interaction) {
-    // Requêtes en PARALLÈLE pour être plus rapide
-    const [theme, allThemes, giveChannels] = await Promise.all([
-      db.getActiveTheme(interaction.guildId),
-      db.getAllThemes(interaction.guildId),
-      db.getAllGiveChannels(interaction.guildId)
-    ]);
-
-    if (!theme) {
-      return interaction.update({
-        content: '❌ Aucun thème actif. Crée un thème d\'abord dans Paramétrage.',
-        embeds: [],
-        components: []
-      });
-    }
-
-    const config = await db.getThemeConfig(interaction.guildId, theme.id);
-    const categories = giveChannels.filter(c => c.type === 'category');
-    const channels = giveChannels.filter(c => c.type === 'channel');
-
-    // Calculer l'expiration du thème
-    const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
-
-    // Créer la barre de progression mini
-    const createMiniProgressBar = (percentage) => {
-      const totalBars = 15;
-      const filledBars = Math.round((percentage / 100) * totalBars);
-      const emptyBars = totalBars - filledBars;
-      let fillEmoji = percentage >= 70 ? '🟩' : percentage >= 30 ? '🟨' : '🟥';
-      return fillEmoji.repeat(filledBars) + '⬜'.repeat(emptyBars);
-    };
-
-    // Générer le texte de durée
-    let durationText = '';
-    let progressBar = '';
-
-    if (expirationInfo.isUnlimited) {
-      durationText = '♾️ **Illimitée**';
-    } else if (expirationInfo.notActivated) {
-      durationText = `⏸️ Non activé (${theme.duration_days}j configurés)`;
-    } else if (expirationInfo.isExpired) {
-      durationText = '🔴 **EXPIRÉ**';
-      progressBar = '\n' + createMiniProgressBar(0);
-    } else {
-      const daysText = expirationInfo.daysRemaining === 0 ?
-        `⏰ ${expirationInfo.hoursRemaining}h restantes` :
-        expirationInfo.daysRemaining === 1 ?
-        `⚠️ ${expirationInfo.daysRemaining} jour restant` :
-        `⏱️ ${expirationInfo.daysRemaining} jours restants`;
-
-      durationText = `${daysText} (${expirationInfo.percentageRemaining}%)`;
-      progressBar = '\n' + createMiniProgressBar(expirationInfo.percentageRemaining);
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('🎨 PANNEAU D\'ADMINISTRATION')
-      .setDescription(
-        `**Thème actif:** ${theme.name}\n` +
-        `**Durée:** ${durationText}${progressBar}\n` +
-        `**Items requis:** ${theme.required_items}\n` +
-        `**Rôle final:** ${theme.final_role_name}\n\n` +
-        `**Canaux configurés:**\n` +
-        `📂 Catégories: ${categories.length}\n` +
-        `📍 Canaux: ${channels.length}\n\n` +
-        `Choisis une action ci-dessous :`
-      )
-      .setColor('#3498db')
-      .setTimestamp();
-
-    if (config) {
-      embed.addFields({
-        name: '🎲 Probabilités actuelles',
-        value: `🎁 Collectibles: **${config.probability_collectible}%**\n` +
-               `📋 Missions: **${config.probability_mission}%**\n` +
-               `⚠️ Pièges: **${config.probability_trap}%**\n` +
-               `✨ Super Bonus: **${config.probability_super_bonus || 0}%**`,
-        inline: true
-      });
-    }
-
-    // Select menu pour changer de thème (si plusieurs thèmes existent)
-    const components = [];
-
-    if (allThemes.length > 1) {
-      const themeSelect = new StringSelectMenuBuilder()
-        .setCustomId('select_theme')
-        .setPlaceholder('🔄 Changer de thème actif')
-        .addOptions(
-          allThemes.map(t => ({
-            label: t.name,
-            value: t.id.toString(),
-            description: `${t.required_items} items - ${t.duration_days === 0 ? 'Illimité' : `${t.duration_days}j`}`,
-            default: t.is_active === 1
-          }))
-        );
-
-      components.push(new ActionRowBuilder().addComponents(themeSelect));
-    }
-
-    // Ligne 1: Give Unique + Lancer Campagne
-    const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('admin_give_unique')
-        .setLabel('Lancer un Give Unique')
-        .setStyle(ButtonStyle.Success)
-        .setEmoji('🎁'),
-      new ButtonBuilder()
-        .setCustomId('admin_launch_campaign')
-        .setLabel('Lancer une Campagne')
-        .setStyle(ButtonStyle.Success)
-        .setEmoji('🚀')
-    );
-
-    // Ligne 2: Paramétrage + Statistiques
-    const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('admin_settings')
-        .setLabel('Paramétrage')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('⚙️'),
-      new ButtonBuilder()
-        .setCustomId('admin_stats')
-        .setLabel('Statistiques')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('📊'),
-      new ButtonBuilder()
-        .setCustomId('admin_refresh')
-        .setLabel('Rafraîchir')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('🔄')
-    );
-
-    components.push(row1, row2);
+    const { embed, components } = await buildAdminPanelContent(interaction.guildId);
 
     return interaction.update({
       embeds: [embed],
@@ -793,7 +849,7 @@ class AdminPanelHandler {
 
   /**
    * Gérer la sélection d'un thème
-   * NOTE: L'interaction est déjà déférée par handleSelectMenu()
+   * NOTE: L'interaction est déjà déférée par handleSelectMenu() - utiliser editReply
    */
   async handleThemeSelection(interaction) {
     try {
@@ -804,8 +860,16 @@ class AdminPanelHandler {
 
       const newTheme = await db.getActiveTheme(guildId);
 
+      // Rafraîchir l'embed avec editReply (car déjà déféré par handleSelectMenu)
+      const { embed, components } = await buildAdminPanelContent(guildId);
+      await interaction.editReply({
+        embeds: [embed],
+        components: components
+      });
+
+      // Message de confirmation
       await interaction.followUp({
-        content: `✅ Thème actif changé : **${newTheme.name}**\n\n💡 Utilise le bouton 🔄 Rafraîchir pour voir les changements dans le panneau.`,
+        content: `✅ Thème actif changé : **${newTheme.name}**`,
         flags: 64
       });
 
@@ -7099,4 +7163,7 @@ class AdminPanelHandler {
   }
 }
 
-module.exports = new AdminPanelHandler();
+// Exporter le handler ET la fonction partagée
+const adminPanelHandler = new AdminPanelHandler();
+module.exports = adminPanelHandler;
+module.exports.buildAdminPanelContent = buildAdminPanelContent;

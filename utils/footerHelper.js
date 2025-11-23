@@ -6,7 +6,7 @@ const db = require('./database-pg');
 const LOOMIX_BRANDING = {
   logo: 'https://avatars.githubusercontent.com/u/241378179?s=400&u=fb81108da6b3639fae0f2a9335d01ca07bb0ddc5&v=4',
   suffix: 'Powered by Loomix Bot',
-  discordInvite: 'https://discord.gg/JBKPw6gv',
+  discordInvite: 'https://discord.gg/CMfGeQ2Z',
   website: 'https://loomix.bot' // Optionnel - à configurer plus tard
 };
 

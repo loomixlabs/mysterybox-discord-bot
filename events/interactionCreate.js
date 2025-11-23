@@ -9,10 +9,14 @@ const setupHandler = require('../handlers/setupHandler');
 const profileHandler = require('../handlers/profileHandler');
 const ServerConfigHandler = require('../handlers/serverConfigHandler');
 const progressionRoleAdminHandler = require('../handlers/progressionRoleAdminHandler');
+const subscriptionHandler = require('../handlers/subscriptionHandler');
 
 // Pour le tracking des connexions et badges Engagement
 const db = require('../utils/database-pg');
 const badgeHandler = require('../handlers/badgeHandler');
+
+// Commandes exemptées du check de subscription (toujours accessibles)
+const EXEMPT_COMMANDS = ['super-admin-panel', 'setup', 'check-setup'];
 
 module.exports = {
   name: 'interactionCreate',
@@ -27,6 +31,14 @@ module.exports = {
       }
 
       try {
+        // Vérifier le statut de subscription (sauf pour commandes exemptées)
+        if (!EXEMPT_COMMANDS.includes(interaction.commandName)) {
+          const isSubscriptionValid = await subscriptionHandler.checkSubscriptionStatus(interaction);
+          if (!isSubscriptionValid) {
+            return; // Le handler a déjà répondu avec l'embed
+          }
+        }
+
         await command.execute(interaction, client);
       } catch (error) {
         console.error(`🔴 Erreur lors de l'exécution de ${interaction.commandName}:`, error);
@@ -224,6 +236,16 @@ module.exports = {
         }
         else if (customId === 'setup_finish') {
           await setupHandler.handleFinish(interaction);
+        }
+        // Boutons Setup - Vérification hiérarchie/permissions
+        else if (customId === 'setup_continue_anyway') {
+          await setupHandler.handleContinueAnyway(interaction);
+        }
+        else if (customId === 'setup_run_diagnostic') {
+          await setupHandler.handleRunDiagnostic(interaction);
+        }
+        else if (customId === 'setup_cancel') {
+          await setupHandler.handleCancel(interaction);
         }
         // Boutons Setup - Thèmes préconfigurés
         else if (customId.startsWith('setup_import_theme:')) {
@@ -574,6 +596,24 @@ async function handleSuperAdminButton(interaction) {
   if (customId.startsWith('superadmin_guild_logs_')) {
     const guildId = customId.replace('superadmin_guild_logs_', '');
     return await superAdminHandler.showGuildLogs(interaction, guildId);
+  }
+
+  // Démarrer période d'essai (affiche modal)
+  if (customId.startsWith('superadmin_start_trial_')) {
+    const guildId = customId.replace('superadmin_start_trial_', '');
+    return await superAdminHandler.handleStartTrialModal(interaction, guildId);
+  }
+
+  // Convertir en premium
+  if (customId.startsWith('superadmin_convert_premium_')) {
+    const guildId = customId.replace('superadmin_convert_premium_', '');
+    return await superAdminHandler.handleConvertToPremium(interaction, guildId);
+  }
+
+  // Prolonger période d'essai (affiche modal)
+  if (customId.startsWith('superadmin_extend_trial_')) {
+    const guildId = customId.replace('superadmin_extend_trial_', '');
+    return await superAdminHandler.handleExtendTrialModal(interaction, guildId);
   }
 
   // Voir détails d'un serveur

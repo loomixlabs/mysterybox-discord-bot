@@ -5,11 +5,13 @@ const path = require('path');
 
 const commands = [];
 
-// Charger toutes les commandes
+// Charger toutes les commandes (SAUF superadmin qui est déployé séparément)
+// superadmin est déployé via deploy-commands-superadmin.js
 const commandFolders = ['admin', 'player'];
 
 for (const folder of commandFolders) {
-  const commandsPath = path.join(__dirname, 'commands', folder);
+  // Remonter de 2 niveaux: scripts/setup → scripts → racine
+  const commandsPath = path.join(__dirname, '..', '..', 'commands', folder);
 
   if (fs.existsSync(commandsPath)) {
     const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));

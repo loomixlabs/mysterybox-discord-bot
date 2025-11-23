@@ -1,5 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, RoleSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const permissions = require('../../utils/permissions');
+const setupDiagnostic = require('../../utils/setupDiagnostic');
+const oauthGenerator = require('../../utils/oauthGenerator');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -21,6 +23,90 @@ module.exports = {
       });
     }
 
+    // VÉRIFICATION AUTOMATIQUE: Hiérarchie et permissions
+    console.log(`🔍 Setup: Diagnostic automatique pour ${interaction.guild.name}`);
+    const hierarchyResult = await setupDiagnostic.checkRoleHierarchy(interaction.guild);
+    const permissionsResult = await setupDiagnostic.checkBotPermissions(interaction.guild);
+
+    // Si des erreurs critiques de hiérarchie ou permissions
+    if (!hierarchyResult.isHealthy || !permissionsResult.isHealthy) {
+      const warningEmbed = new EmbedBuilder()
+        .setTitle('⚠️ Problèmes de Configuration Détectés')
+        .setColor('#E74C3C')
+        .setDescription(
+          '**Avant de continuer, veuillez résoudre ces problèmes:**\n\n' +
+          'Ces erreurs peuvent empêcher le bot de fonctionner correctement.'
+        )
+        .setTimestamp();
+
+      // Erreurs de hiérarchie
+      if (hierarchyResult.errors.length > 0) {
+        const hierarchyErrors = hierarchyResult.errors
+          .map(e => `❌ ${e.message}${e.details ? `\n   └─ ${e.details}` : ''}`)
+          .join('\n');
+        warningEmbed.addFields({
+          name: '🔺 Hiérarchie des Rôles',
+          value: hierarchyErrors.substring(0, 1024),
+          inline: false
+        });
+      }
+
+      // Erreurs de permissions
+      if (permissionsResult.errors.length > 0) {
+        const permErrors = permissionsResult.errors
+          .slice(0, 5) // Limiter à 5 pour éviter l'encombrement
+          .map(e => `❌ ${e.message}`)
+          .join('\n');
+        const suffix = permissionsResult.errors.length > 5
+          ? `\n... et ${permissionsResult.errors.length - 5} autres permissions manquantes`
+          : '';
+        warningEmbed.addFields({
+          name: '🔐 Permissions Manquantes',
+          value: permErrors + suffix,
+          inline: false
+        });
+      }
+
+      // Ajouter le lien de réinvitation
+      const inviteUrl = oauthGenerator.generateInviteUrl(
+        process.env.APPLICATION_ID,
+        { guildId: interaction.guild.id }
+      );
+
+      warningEmbed.addFields({
+        name: '💡 Solution',
+        value: `1. **Hiérarchie**: Allez dans Paramètres du serveur → Rôles → Remontez le rôle du bot AU-DESSUS des rôles qu'il doit gérer\n\n` +
+               `2. **Permissions**: [Cliquez ici pour réinviter le bot avec les bonnes permissions](${inviteUrl})`,
+        inline: false
+      });
+
+      // Boutons pour continuer malgré tout ou annuler
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('setup_continue_anyway')
+          .setLabel('⚠️ Continuer malgré tout')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('setup_run_diagnostic')
+          .setLabel('🔍 Diagnostic Complet')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('setup_cancel')
+          .setLabel('❌ Annuler')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({
+        embeds: [warningEmbed],
+        components: [row]
+      });
+    }
+
+    // Avertissements non-bloquants (affichés mais on continue)
+    if (hierarchyResult.hasWarnings || permissionsResult.hasWarnings) {
+      console.log(`⚠️ Setup: Avertissements détectés mais non-bloquants`);
+    }
+
     // Afficher l'étape 1: Configuration des rôles admin
     await showRoleConfiguration(interaction);
   }
@@ -33,37 +119,51 @@ async function showRoleConfiguration(interaction) {
   // Récupérer les rôles actuellement configurés
   const currentRoles = await permissions.getAdminRoles(interaction.guildId);
 
-  let rolesDescription = '';
+  const embed = new EmbedBuilder()
+    .setTitle('🎮 Configuration du Bot - Étape 1/3')
+    .setColor('#3498db')
+    .setFooter({ text: `${interaction.guild.name} • Étape 1: Équipe → Étape 2: Thème → Étape 3: Finalisation` })
+    .setTimestamp();
+
+  // Section principale
+  embed.setDescription(
+    '## 👥 Qui peut gérer le bot ?\n\n' +
+    'Sélectionnez les rôles de votre équipe qui pourront accéder au **panneau d\'administration** (`/admin-panel`).\n\n' +
+    '> 💡 **Conseil**: Choisissez les rôles de vos modérateurs ou organisateurs qui géreront les events.'
+  );
+
+  // Afficher les rôles actuels
   if (currentRoles.length === 0) {
-    rolesDescription = '📋 **Aucun rôle configuré actuellement**\n\n' +
-                       '⚠️ Tant qu\'aucun rôle n\'est configuré, seul le propriétaire du serveur peut accéder à `/admin-panel`.\n\n' +
-                       '💡 Utilisez le menu ci-dessous pour sélectionner les rôles qui auront accès.';
+    embed.addFields({
+      name: '📋 Rôles autorisés',
+      value: '```\nAucun rôle configuré\n```\n' +
+             '⚠️ Seul vous (propriétaire) pouvez actuellement accéder à `/admin-panel`.',
+      inline: false
+    });
   } else {
-    rolesDescription = '📋 **Rôles actuellement configurés:**\n\n';
-    for (const roleData of currentRoles) {
-      const role = interaction.guild.roles.cache.get(roleData.role_id);
-      if (role) {
-        rolesDescription += `• ${role.name}\n`;
-      } else {
-        rolesDescription += `• ~~Rôle supprimé~~ (${roleData.role_id})\n`;
-      }
-    }
-    rolesDescription += '\n💡 Modifiez la sélection ci-dessous pour ajouter ou retirer des rôles.';
+    const rolesList = currentRoles
+      .map(roleData => {
+        const role = interaction.guild.roles.cache.get(roleData.role_id);
+        return role ? `• <@&${role.id}>` : `• ~~Rôle supprimé~~`;
+      })
+      .join('\n');
+
+    embed.addFields({
+      name: `📋 Rôles autorisés (${currentRoles.length})`,
+      value: rolesList,
+      inline: false
+    });
   }
 
-  const embed = new EmbedBuilder()
-    .setTitle('🛠️ Configuration Initiale - Étape 1/3')
-    .setDescription(
-      '# Configuration des Rôles Admin\n\n' +
-      rolesDescription + '\n\n' +
-      '**Hiérarchie des permissions:**\n' +
-      '1️⃣ **Super Admins** (hardcodés) → Accès à TOUS les serveurs\n' +
-      '2️⃣ **Propriétaire du serveur** → Accès automatique\n' +
-      '3️⃣ **Rôles configurés** → Accès selon votre sélection ci-dessous'
-    )
-    .setColor('#3498db')
-    .setFooter({ text: 'Étape 1: Rôles Admin → Étape 2: Thème → Étape 3: Checklist' })
-    .setTimestamp();
+  // Ce que peuvent faire les admins
+  embed.addFields({
+    name: '🔧 Fonctionnalités accessibles',
+    value: '• Créer et gérer les **thèmes** de collection\n' +
+           '• Lancer des **mystery boxes** et **gives**\n' +
+           '• Configurer les **missions** et **récompenses**\n' +
+           '• Gérer les **campagnes** automatisées',
+    inline: false
+  });
 
   // Select menu pour les rôles (multi-select)
   const roleSelect = new RoleSelectMenuBuilder()

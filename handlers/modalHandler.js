@@ -106,6 +106,17 @@ class ModalHandler {
       const guildId = customId.replace('superadmin_add_role_modal_', '');
       return superAdminHandler.handleAddAdminRole(interaction, guildId);
     }
+    // Gestion des modals trial super-admin
+    else if (customId.startsWith('superadmin_start_trial_modal_')) {
+      const superAdminHandler = require('./superAdminHandler');
+      const guildId = customId.replace('superadmin_start_trial_modal_', '');
+      return superAdminHandler.handleStartTrial(interaction, guildId);
+    }
+    else if (customId.startsWith('superadmin_extend_trial_modal_')) {
+      const superAdminHandler = require('./superAdminHandler');
+      const guildId = customId.replace('superadmin_extend_trial_modal_', '');
+      return superAdminHandler.handleExtendTrial(interaction, guildId);
+    }
     // Gestion des modals server-config (délégation)
     else if (customId.startsWith('modal_edit_')) {
       const ServerConfigHandler = require('./serverConfigHandler');

@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const ThemeValidator = require('../utils/themeValidator');
 const ThemeImporter = require('../utils/themeImporter');
+const BotRoleManager = require('../utils/botRoleManager');
 const db = require('../utils/database-pg');
 
 // Chemin vers les thèmes préconfigurés
@@ -284,6 +285,22 @@ async function handleThemeImport(interaction, themeId) {
       });
     }
 
+    // Créer le rôle bot pour les couleurs (si pas déjà existant)
+    let botRoleInfo = null;
+    try {
+      const branding = await db.getGuildBranding(interaction.guildId);
+      const botRole = await BotRoleManager.createOrGetBotRole(
+        interaction.guild,
+        branding.bot_display_name,
+        branding.primary_color
+      );
+      botRoleInfo = { name: botRole.name, color: botRole.hexColor, created: botRole.created };
+      console.log(`✅ Setup: Rôle bot créé/récupéré: ${botRole.name}`);
+    } catch (error) {
+      console.error('⚠️ Erreur lors de la création du rôle bot:', error);
+      // Non bloquant - on continue
+    }
+
     // Succès ! - Construire un récapitulatif détaillé du thème importé
     const themeName = themeData.metadata?.name || themeData.theme?.name;
     const themeDescription = themeData.metadata?.description || themeData.theme?.description || '';
@@ -349,8 +366,14 @@ async function handleThemeImport(interaction, themeId) {
 
     // Rôle final créé
     if (result.roleCreated) {
-      successMessage += `**Rôle final:** ${result.roleCreated.name} ${result.roleCreated.created ? '✨ (créé)' : '(existant)'}\n\n`;
+      successMessage += `**Rôle final:** ${result.roleCreated.name} ${result.roleCreated.created ? '✨ (créé)' : '(existant)'}\n`;
     }
+
+    // Rôle bot pour les couleurs
+    if (botRoleInfo) {
+      successMessage += `**Rôle bot:** ${botRoleInfo.name} (${botRoleInfo.color})\n`;
+    }
+    successMessage += '\n';
 
     // Configuration du thème
     successMessage += '## ⚙️ Configuration\n\n';
@@ -370,12 +393,79 @@ async function handleThemeImport(interaction, themeId) {
 
     // Prochaines étapes
     successMessage += '## ➡️ Prochaines étapes\n\n';
-    if (shouldActivate) {
-      successMessage += '1. Configurez les canaux de give dans `/admin-panel`\n';
-      successMessage += '2. Lancez un Give pour tester le système !\n';
+
+    // Vérifier le positionnement des rôles
+    const botMember = interaction.guild.members.me;
+    const botHighestRole = botMember.roles.highest;
+    const colorRoleNeedsPosition = botRoleInfo && botRoleInfo.name;
+
+    // Vérifier si on doit afficher l'avertissement de positionnement
+    let needsRolePositionWarning = false;
+
+    // Vérifier si le rôle couleur est bien positionné (au-dessus d'au moins un rôle à attribuer)
+    if (botRoleInfo) {
+      const colorRole = interaction.guild.roles.cache.find(r => r.name === botRoleInfo.name);
+      if (colorRole) {
+        // Le rôle couleur doit être au-dessus des rôles de complétion/progression
+        const completionRoles = [];
+        if (result.roleCreated?.id) {
+          const completionRole = interaction.guild.roles.cache.get(result.roleCreated.id);
+          if (completionRole && colorRole.position <= completionRole.position) {
+            needsRolePositionWarning = true;
+          }
+        }
+        // Si le rôle couleur est tout en bas de la hiérarchie
+        if (colorRole.position <= 1) {
+          needsRolePositionWarning = true;
+        }
+      } else {
+        needsRolePositionWarning = true;
+      }
     } else {
-      successMessage += '1. Activez ce thème quand vous serez prêt\n';
-      successMessage += '2. Configurez les canaux de give dans `/admin-panel`\n';
+      needsRolePositionWarning = true;
+    }
+
+    if (needsRolePositionWarning) {
+      const botUsername = interaction.client.user.username;
+      const completionRoleName = result.roleCreated?.name || '🏆 Rôle de complétion';
+
+      successMessage += '### 🔴 Configuration détectée incorrecte\n';
+      successMessage += '**Action requise:** Repositionnez les rôles du bot dans la hiérarchie.\n\n';
+      successMessage += '```\n';
+      successMessage += 'Paramètres serveur → Rôles\n';
+      successMessage += '─────────────────────────────\n';
+      successMessage += '@Fondateur         ← peut rester ici\n';
+      successMessage += '@Administrateur    ← peut rester ici\n';
+      successMessage += '─────────────────────────────\n';
+      successMessage += `@${botUsername}    ← REMONTER ICI\n`;
+      if (botRoleInfo) {
+        successMessage += `@${botRoleInfo.name.replace('🤖 ', '')} ← sous le principal\n`;
+      }
+      successMessage += '─────────────────────────────\n';
+      successMessage += `@${completionRoleName}  ← doit être EN DESSOUS\n`;
+      successMessage += '─────────────────────────────\n';
+      successMessage += '```\n';
+      successMessage += '> 💡 Vos rôles admin/fondateur peuvent rester au-dessus du bot.\n\n';
+    }
+
+    if (shouldActivate) {
+      if (needsRolePositionWarning) {
+        successMessage += '1. **Remontez les rôles du bot** dans la hiérarchie\n';
+        successMessage += '2. Configurez les canaux de give dans `/admin-panel`\n';
+        successMessage += '3. Lancez un Give pour tester !\n';
+      } else {
+        successMessage += '1. Configurez les canaux de give dans `/admin-panel`\n';
+        successMessage += '2. Lancez un Give pour tester !\n';
+      }
+    } else {
+      if (needsRolePositionWarning) {
+        successMessage += '1. **Remontez les rôles du bot** dans la hiérarchie\n';
+        successMessage += '2. Activez ce thème quand vous serez prêt\n';
+        successMessage += '3. Configurez les canaux de give dans `/admin-panel`\n';
+      } else {
+        successMessage += '1. Activez ce thème quand vous serez prêt\n';
+        successMessage += '2. Configurez les canaux de give dans `/admin-panel`\n';
+      }
     }
 
     const embed = new EmbedBuilder()

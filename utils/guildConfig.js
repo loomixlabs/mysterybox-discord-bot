@@ -198,6 +198,149 @@ class GuildConfig {
   }
 
   /**
+   * Démarre une période d'essai pour un serveur
+   * @param {string} guildId - ID du serveur
+   * @param {number} days - Nombre de jours d'essai (défaut: 14)
+   * @param {number} maxPlayers - Limite de joueurs pendant l'essai (optionnel)
+   */
+  static async startTrial(guildId, days = 14, maxPlayers = null) {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + days);
+
+    return await db.query(`
+      UPDATE guild_config
+      SET is_active = TRUE,
+          is_trial = TRUE,
+          trial_expires_at = $2,
+          max_players = $3,
+          activated_at = NOW(),
+          deactivated_at = NULL,
+          notes = $4
+      WHERE guild_id = $1
+      RETURNING *
+    `, [guildId, expiresAt, maxPlayers, `Période d'essai de ${days} jours démarrée`]);
+  }
+
+  /**
+   * Convertit un essai en version premium (complète)
+   * @param {string} guildId - ID du serveur
+   * @param {number} maxPlayers - Nouvelle limite de joueurs (null = illimité)
+   */
+  static async convertToPremium(guildId, maxPlayers = null) {
+    return await db.query(`
+      UPDATE guild_config
+      SET is_trial = FALSE,
+          trial_expires_at = NULL,
+          max_players = $2,
+          notes = $3
+      WHERE guild_id = $1
+      RETURNING *
+    `, [guildId, maxPlayers, 'Converti en premium le ' + new Date().toLocaleDateString('fr-FR')]);
+  }
+
+  /**
+   * Prolonge la période d'essai
+   * @param {string} guildId - ID du serveur
+   * @param {number} extraDays - Jours supplémentaires à ajouter
+   */
+  static async extendTrial(guildId, extraDays) {
+    const config = await this.getConfig(guildId);
+    if (!config || !config.is_trial) {
+      throw new Error('Ce serveur n\'est pas en période d\'essai');
+    }
+
+    const currentExpiry = config.trial_expires_at ? new Date(config.trial_expires_at) : new Date();
+    const newExpiry = new Date(currentExpiry);
+    newExpiry.setDate(newExpiry.getDate() + extraDays);
+
+    return await db.query(`
+      UPDATE guild_config
+      SET trial_expires_at = $2,
+          notes = notes || E'\n' || $3
+      WHERE guild_id = $1
+      RETURNING *
+    `, [guildId, newExpiry, `Essai prolongé de ${extraDays} jours le ${new Date().toLocaleDateString('fr-FR')}`]);
+  }
+
+  /**
+   * Récupère les informations de subscription d'un serveur
+   */
+  static async getSubscriptionStatus(guildId) {
+    const config = await this.getConfig(guildId);
+    if (!config) {
+      return { status: 'not_registered', message: 'Serveur non enregistré' };
+    }
+
+    if (!config.is_active) {
+      return {
+        status: 'inactive',
+        message: 'Bot désactivé',
+        deactivated_at: config.deactivated_at
+      };
+    }
+
+    if (config.is_trial) {
+      const expiresAt = config.trial_expires_at ? new Date(config.trial_expires_at) : null;
+      const now = new Date();
+
+      if (expiresAt && expiresAt < now) {
+        return {
+          status: 'trial_expired',
+          message: 'Période d\'essai expirée',
+          expired_at: expiresAt
+        };
+      }
+
+      const daysRemaining = expiresAt ? Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24)) : null;
+      return {
+        status: 'trial',
+        message: `Période d'essai (${daysRemaining} jours restants)`,
+        expires_at: expiresAt,
+        days_remaining: daysRemaining,
+        max_players: config.max_players
+      };
+    }
+
+    return {
+      status: 'premium',
+      message: 'Version premium active',
+      max_players: config.max_players
+    };
+  }
+
+  /**
+   * Récupère tous les serveurs dont l'essai expire bientôt (pour notifications)
+   * @param {number} daysThreshold - Nombre de jours avant expiration (défaut: 3)
+   */
+  static async getExpiringTrials(daysThreshold = 3) {
+    const thresholdDate = new Date();
+    thresholdDate.setDate(thresholdDate.getDate() + daysThreshold);
+
+    return await db.query(`
+      SELECT * FROM guild_config
+      WHERE is_active = TRUE
+        AND is_trial = TRUE
+        AND trial_expires_at IS NOT NULL
+        AND trial_expires_at <= $1
+        AND trial_expires_at > NOW()
+      ORDER BY trial_expires_at ASC
+    `, [thresholdDate]);
+  }
+
+  /**
+   * Récupère tous les essais expirés (pour désactivation automatique)
+   */
+  static async getExpiredTrials() {
+    return await db.query(`
+      SELECT * FROM guild_config
+      WHERE is_active = TRUE
+        AND is_trial = TRUE
+        AND trial_expires_at IS NOT NULL
+        AND trial_expires_at < NOW()
+    `);
+  }
+
+  /**
    * Récupère tous les serveurs actifs
    */
   static async getAllActive() {
