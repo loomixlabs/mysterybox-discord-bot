@@ -1333,13 +1333,13 @@ class MysteryBoxHandler {
       flags: 64
     });
 
-    // Annonce de la malédiction
-    await announcements.announceTrapCurse(
+    // Annonce du piège cooldown
+    await announcements.announceTrapCooldownTriggered(
       interaction.client,
       interaction.guildId,
       interaction.user.username,
       trap.name,
-      `Cooldown de ${trap.cooldown_duration} minutes`
+      trap.cooldown_duration
     );
   }
 
@@ -1430,17 +1430,20 @@ class MysteryBoxHandler {
   async applyTrapShame(interaction, trap, player) {
     const shameChannel = interaction.guild.channels.cache.get(trap.shame_channel_id || process.env.ANNOUNCE_CHANNEL_ID);
 
+    // Remplacer la variable {player} par la mention du joueur
+    const shameMsg = trap.shame_message.replace('{player}', `<@${interaction.user.id}>`);
+
     if (shameChannel) {
-      const shameMsg = trap.shame_message.replace('{player}', `<@${interaction.user.id}>`);
       await shameChannel.send(shameMsg);
     }
 
-    // Annonce de la malédiction
-    await announcements.announceTrapCurse(
+    // Annonce du piège public-shame (avec message où {player} est remplacé)
+    await announcements.announceTrapPublicShameTriggered(
       interaction.client,
+      interaction.guildId,
       interaction.user.username,
       trap.name,
-      trap.shame_message
+      shameMsg
     );
   }
 
@@ -1456,13 +1459,7 @@ class MysteryBoxHandler {
       flags: 64
     });
 
-    // Annonce de la malédiction
-    await announcements.announceTrapCurse(
-      interaction.client,
-      interaction.user.username,
-      trap.name,
-      `${trap.malus_points} points de malédiction`
-    );
+    // Note: Pas d'annonce publique pour les points de malus
   }
 
   /**

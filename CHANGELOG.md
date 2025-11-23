@@ -5,6 +5,40 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.9.1] - 2025-11-23
+
+### 🐛 Fixed
+
+- **[Quiz Missions - Give Unique]**: Correction du bug des questions incorrectes dans les quiz
+  - **Symptôme**: Lors de l'envoi d'une mission quiz "Devinette" via Give Unique, les questions affichées étaient celles d'une autre mission quiz du même thème
+  - **Cause racine**: La fonction `validateQuiz()` utilisait `getRandomQuizQuestion(theme_id)` qui récupérait une question aléatoire parmi **toutes les questions du thème**, au lieu de filtrer par mission spécifique
+  - **Solution**: Remplacement par `getRandomQuizQuestionByMission(guild_id, mission_id, theme_id)` avec triple filtrage pour sécurité maximale
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js` (lignes 469-471): Appel à la bonne fonction
+    - `utils/database-pg.js` (lignes 520-542): Fonction améliorée avec paramètre optionnel `themeId`
+
+- **[Admin Panel - Suppression Mission]**: Correction du bouton "Supprimer" qui retournait "Mission introuvable"
+  - **Symptôme**: Cliquer sur le bouton supprimer une mission affichait toujours "Mission introuvable"
+  - **Cause racine**: Les fonctions `getMissionById()` et `deleteMission()` étaient appelées sans le paramètre `guildId` requis
+  - **Solution**: Ajout de `const guildId = interaction.guildId;` et passage aux fonctions DB
+  - **Fichier modifié**: `handlers/adminPanelHandler.js` - fonction `handleDeleteMission()`
+
+- **[Missions Mot-Clé]**: Correction des canaux par défaut pour les missions "mot deviné"
+  - **Symptôme**: Les missions mot-clé utilisaient TOUS les canaux texte au lieu des canaux configurés pour les mystery boxes
+  - **Cause racine**: Quand `mission.allowed_channels` était vide, le système ne filtrait pas et utilisait tous les canaux
+  - **Solution**: Fallback automatique vers les canaux `give_channels` (mystery box) quand aucun canal spécifique n'est configuré
+  - **Fichier modifié**: `handlers/missionHandler.js` - fonction `validateKeywordMessage()`
+
+### 🔧 Changed
+
+- **[Thème Monopoly]**: Ajout du piège "Krach Boursier" (lose-all-collectibles)
+  - Nouveau piège dévastateur qui fait perdre tous les collectibles d'un coup
+  - **Fichiers modifiés**:
+    - `themes/presets/monopoly.theme.json`: Définition du piège
+    - `scripts/add-devastateur-trap-monopoly.js`: Script d'ajout en base
+
+---
+
 ## [1.9.0] - 2025-11-23
 
 ### ✨ Added
@@ -48,6 +82,24 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   - **Vérification complète**: Permissions, hiérarchie, configuration
   - **Rapport détaillé**: Liste des problèmes avec solutions
   - **Fichier créé**: `commands/admin/check-setup.js`
+
+### 🐛 Fixed
+
+- **[Permissions Super Admin]**: Correction accès aux commandes admin sans rôle Discord Administrator
+  - **Problème**: Les Super Admins (IDs hardcodés) ne pouvaient pas accéder aux commandes admin sur des serveurs où ils n'avaient pas le rôle "Administrator"
+  - **Cause**: `setDefaultMemberPermissions(Administrator)` bloquait l'affichage des commandes côté Discord AVANT l'exécution du code de vérification interne
+  - **Solution**: Suppression de `setDefaultMemberPermissions()` sur les commandes admin, la vérification se fait maintenant uniquement via `permissions.canAccessAdminPanel()`
+  - **Fichiers modifiés**:
+    - `commands/admin/admin-panel.js` (lignes 8-11)
+    - `commands/admin/setup.js` (lignes 9-11)
+    - `commands/admin/server-config.js` (lignes 8-10)
+    - `commands/admin/check-setup.js` (lignes 9-11)
+  - **Commandes re-déployées** sur tous les serveurs
+
+- **[Script Déploiement Guild]**: Nouveau script pour déploiement instantané par serveur
+  - Permet de déployer les commandes immédiatement sur un serveur spécifique (sans attendre 1h)
+  - Usage: `node scripts/deploy-commands-guild.js <GUILD_ID>`
+  - **Fichier créé**: `scripts/deploy-commands-guild.js`
 
 ### 🔧 Changed
 

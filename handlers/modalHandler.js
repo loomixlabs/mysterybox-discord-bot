@@ -1800,20 +1800,45 @@ class ModalHandler {
   }
 
   /**
-   * Gérer la saisie manuelle de l'ID du canal d'annonces
+   * Gérer la saisie manuelle du canal d'annonces (ID ou nom)
    */
   async handleManualAnnouncementChannel(interaction) {
     await interaction.deferReply({ flags: 64 });
 
     try {
-      const channelId = interaction.fields.getTextInputValue('channel_id_input').trim();
+      const input = interaction.fields.getTextInputValue('channel_id_input').trim();
+      let channel = null;
 
-      // Vérifier que le canal existe
-      const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+      // Vérifier si c'est un ID (nombre de 17-20 chiffres)
+      if (/^\d{17,20}$/.test(input)) {
+        // Recherche par ID
+        channel = await interaction.guild.channels.fetch(input).catch(() => null);
+      } else {
+        // Recherche par nom (insensible à la casse)
+        const searchName = input.toLowerCase().replace(/^#/, ''); // Enlever le # si présent
+        const textChannels = interaction.guild.channels.cache.filter(
+          c => c.isTextBased() && !c.isThread() && !c.isDMBased()
+        );
+
+        // Recherche exacte d'abord
+        channel = textChannels.find(c => c.name.toLowerCase() === searchName);
+
+        // Sinon recherche partielle
+        if (!channel) {
+          channel = textChannels.find(c => c.name.toLowerCase().includes(searchName));
+        }
+      }
 
       if (!channel) {
+        // Afficher les canaux disponibles pour aider
+        const textChannels = interaction.guild.channels.cache
+          .filter(c => c.isTextBased() && !c.isThread() && !c.isDMBased())
+          .map(c => `\`${c.name}\``)
+          .slice(0, 15)
+          .join(', ');
+
         return interaction.editReply({
-          content: `❌ **Canal introuvable**\n\nAucun canal avec l'ID \\\`${channelId}\\\` n'existe sur ce serveur.\n\n💡 **Astuce:** Fais un clic droit sur le canal > Copier l'ID`,
+          content: `❌ **Canal introuvable**\n\nAucun canal correspondant à \`${input}\` n'a été trouvé.\n\n💡 **Tu peux entrer:**\n• Le nom du canal (ex: \`annonces\` ou \`general\`)\n• L'ID du canal (ex: \`1234567890123456789\`)\n\n📋 **Quelques canaux disponibles:** ${textChannels}...`,
           flags: 64
         });
       }
@@ -1821,17 +1846,17 @@ class ModalHandler {
       // Vérifier que c'est un canal textuel
       if (!channel.isTextBased() || channel.isThread() || channel.isDMBased()) {
         return interaction.editReply({
-          content: `❌ **Type de canal invalide**\n\nLe canal <#${channelId}> n'est pas un canal textuel valide pour les annonces.`,
+          content: `❌ **Type de canal invalide**\n\nLe canal <#${channel.id}> n'est pas un canal textuel valide pour les annonces.`,
           flags: 64
         });
       }
 
       // Enregistrer le canal
-      await db.setAnnouncementChannel(interaction.guildId, channelId);
+      await db.setAnnouncementChannel(interaction.guildId, channel.id);
 
       // Message de confirmation
       return interaction.editReply({
-        content: `✅ **Canal d'annonces configuré !**\n\n📢 Les annonces seront maintenant envoyées dans <#${channelId}>`,
+        content: `✅ **Canal d'annonces configuré !**\n\n📢 Les annonces seront maintenant envoyées dans <#${channel.id}>`,
         flags: 64
       });
 

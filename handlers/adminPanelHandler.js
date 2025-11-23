@@ -3861,25 +3861,13 @@ class AdminPanelHandler {
     const components = [];
 
     if (!announcementChannel) {
-      const allTextChannels = interaction.guild.channels.cache.filter(
-        ch => ch.isTextBased() && !ch.isThread() && !ch.isDMBased()
-      );
+      // ChannelSelectMenuBuilder permet de rechercher parmi TOUS les canaux (pas de limite de 25)
+      const selectMenu = new ChannelSelectMenuBuilder()
+        .setCustomId('select_announcement_channel')
+        .setPlaceholder('📢 Rechercher et sélectionner un canal...')
+        .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
 
-      if (allTextChannels.size > 0) {
-        const selectMenu = new StringSelectMenuBuilder()
-          .setCustomId('select_announcement_channel')
-          .setPlaceholder('📢 Sélectionner le canal d\'annonces')
-          .addOptions(
-            Array.from(allTextChannels.values()).slice(0, 25).map(ch => ({
-              label: `#${ch.name}`,
-              value: ch.id,
-              description: `ID: ${ch.id}`,
-              emoji: '📢'
-            }))
-          );
-
-        components.push(new ActionRowBuilder().addComponents(selectMenu));
-      }
+      components.push(new ActionRowBuilder().addComponents(selectMenu));
 
       components.push(new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -4239,16 +4227,28 @@ class AdminPanelHandler {
 
   /**
    * Handler pour la sélection d'un canal d'annonces
+   * Supporte ChannelSelectMenuBuilder (interaction.channels) et StringSelectMenuBuilder (interaction.values)
    */
   async handleAnnouncementChannelSelection(interaction) {
     // Defer l'interaction immédiatement
     await interaction.deferUpdate();
 
-    const channelId = interaction.values[0];
+    // ChannelSelectMenuBuilder: canaux dans interaction.channels
+    // StringSelectMenuBuilder: IDs dans interaction.values
+    let channel;
+    let channelId;
+
+    if (interaction.channels && interaction.channels.size > 0) {
+      // ChannelSelectMenuBuilder - le canal est directement fourni
+      channel = interaction.channels.first();
+      channelId = channel.id;
+    } else if (interaction.values && interaction.values.length > 0) {
+      // StringSelectMenuBuilder - on a l'ID, on doit récupérer le canal
+      channelId = interaction.values[0];
+      channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+    }
 
     try {
-      // Récupérer le canal depuis Discord
-      const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
 
       if (!channel || !channel.isTextBased()) {
         await interaction.followUp({
@@ -4282,28 +4282,12 @@ class AdminPanelHandler {
 
   /**
    * Afficher le sélecteur pour changer de canal d'annonces
+   * Note: Utilise un modal au lieu de ChannelSelectMenu (limité à 25 canaux)
    */
   async showChangeAnnouncementChannelSelector(interaction) {
-    // Utiliser ChannelSelectMenuBuilder pour permettre la recherche directe
-    const selectMenu = new ChannelSelectMenuBuilder()
-      .setCustomId('select_announcement_channel')
-      .setPlaceholder('🔍 Recherche ou sélectionne un canal...')
-      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
-
-    const row1 = new ActionRowBuilder().addComponents(selectMenu);
-
-    const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('admin_announcements')
-        .setLabel('🔙 Retour')
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    return interaction.update({
-      content: '**Sélectionne un nouveau canal pour les annonces:**\n\n💡 Tu peux taper le nom du canal ou son ID pour le rechercher directement !',
-      embeds: [],
-      components: [row1, row2]
-    });
+    // Ouvrir directement le modal pour saisir le nom ou ID du canal
+    // (Remplace le ChannelSelectMenu limité à 25 canaux)
+    return this.showManualAnnouncementChannelModal(interaction);
   }
 
   /**
@@ -4346,21 +4330,21 @@ class AdminPanelHandler {
   }
 
   /**
-   * Afficher le modal pour saisir manuellement l'ID du canal d'annonces
+   * Afficher le modal pour saisir le canal d'annonces (nom ou ID)
    */
   async showManualAnnouncementChannelModal(interaction) {
     const modal = new ModalBuilder()
       .setCustomId('modal_manual_announcement_channel')
-      .setTitle('Saisir l\'ID du Canal d\'Annonces');
+      .setTitle('Choisir le Canal d\'Annonces');
 
     const channelIdInput = new TextInputBuilder()
       .setCustomId('channel_id_input')
-      .setLabel('ID du Canal')
+      .setLabel('Nom ou ID du Canal')
       .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 1234567890123456789')
+      .setPlaceholder('Ex: annonces, general, ou 1234567890123456789')
       .setRequired(true)
-      .setMinLength(17)
-      .setMaxLength(20);
+      .setMinLength(1)
+      .setMaxLength(100);
 
     const row = new ActionRowBuilder().addComponents(channelIdInput);
     modal.addComponents(row);
@@ -6915,7 +6899,8 @@ class AdminPanelHandler {
     const missionId = parseInt(interaction.customId.split('_').pop());
 
     try {
-      const mission = await db.getMissionById(missionId);
+      const guildId = interaction.guildId;
+      const mission = await db.getMissionById(guildId, missionId);
 
       if (!mission) {
         return interaction.followUp({
@@ -6924,7 +6909,7 @@ class AdminPanelHandler {
         });
       }
 
-      await db.deleteMission(missionId);
+      await db.deleteMission(guildId, missionId);
 
       await interaction.followUp({
         content: `✅ **${mission.name}** a été supprimée avec succès !`,

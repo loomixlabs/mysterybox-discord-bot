@@ -273,6 +273,14 @@
       "image_url": "https://assets.stickpng.com/images/593007da3919fe0ee3614da8.png",
       "reveal_message": "🔨 Vous avez fait une enchère ridicule et tout le monde se moque de vous !",
       "shame_message": "📢 **VENTE AUX ENCHÈRES** 📢\n\n🔨 {player} a fait une enchère ridicule de 1€ sur la Rue de la Paix !\n\nLe commissaire-priseur est mort de rire ! 😂\n\n*\"Même la case Départ vaut plus que ça !\"*"
+    },
+    {
+      "trap_id": "krach_boursier",
+      "name": "Krach Boursier",
+      "type": "lose-all-collectibles",
+      "description": "Catastrophe ! Un krach boursier dévastateur vous fait tout perdre !",
+      "image_url": "https://assets.stickpng.com/images/593007da3919fe0ee3614da8.png",
+      "reveal_message": "📉 **KRACH BOURSIER !** La bourse s'effondre ! Toutes vos propriétés sont saisies pour rembourser vos dettes ! Vous devez tout recommencer..."
     }
   ],
   "missions": {

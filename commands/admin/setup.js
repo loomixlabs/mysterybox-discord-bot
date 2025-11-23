@@ -6,8 +6,9 @@ const oauthGenerator = require('../../utils/oauthGenerator');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('setup')
-    .setDescription('🛠️ Configuration initiale du serveur (Wizard)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDescription('🛠️ Configuration initiale du serveur (Wizard)'),
+    // Note: Pas de setDefaultMemberPermissions pour permettre aux Super Admins
+    // d'accéder même sans rôle Administrator Discord. Vérification dans execute().
 
   async execute(interaction, client) {
     await interaction.deferReply({ flags: 64 }); // EPHEMERAL

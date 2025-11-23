@@ -516,9 +516,22 @@ class DatabaseWrapper {
 
   /**
    * Récupérer une question de quiz aléatoire pour une mission spécifique
+   * Filtre par guild_id, mission_id ET theme_id pour une sécurité maximale
    */
-  async getRandomQuizQuestionByMission(guildId, missionId) {
+  async getRandomQuizQuestionByMission(guildId, missionId, themeId = null) {
     guildId = this._getGuildId(guildId);
+
+    // Si themeId est fourni, filtrer aussi par thème pour plus de sécurité
+    if (themeId) {
+      return this.queryOne(
+        `SELECT * FROM quiz_questions
+         WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+         ORDER BY RANDOM()
+         LIMIT 1`,
+        [guildId, missionId, themeId]
+      );
+    }
+
     return this.queryOne(
       `SELECT * FROM quiz_questions
        WHERE guild_id = $1 AND mission_id = $2
@@ -1552,9 +1565,9 @@ class DatabaseWrapper {
         collection_lost, trap_curse, trap_cooldown, trap_lose_collectible,
         trap_public_shame, trap_malus_points, mission_word_guessed, theme_expired,
         theme_expiring_soon, mission_started, mission_completed, mission_failed,
-        mission_approved, mission_rejected
+        mission_approved, mission_rejected, trap_lose_all_collectibles
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        ON CONFLICT (guild_id) DO UPDATE
          SET legendary_collectible = EXCLUDED.legendary_collectible,
              collection_completed = EXCLUDED.collection_completed,
@@ -1573,6 +1586,7 @@ class DatabaseWrapper {
              mission_failed = EXCLUDED.mission_failed,
              mission_approved = EXCLUDED.mission_approved,
              mission_rejected = EXCLUDED.mission_rejected,
+             trap_lose_all_collectibles = EXCLUDED.trap_lose_all_collectibles,
              updated_at = NOW()`,
       [
         guildId,
@@ -1592,7 +1606,8 @@ class DatabaseWrapper {
         settings.mission_completed ?? false,
         settings.mission_failed ?? false,
         settings.mission_approved ?? false,
-        settings.mission_rejected ?? false
+        settings.mission_rejected ?? false,
+        settings.trap_lose_all_collectibles ?? true
       ]
     );
   }
@@ -1743,6 +1758,7 @@ class DatabaseWrapper {
         trap_lose_collectible: true,
         trap_public_shame: true,
         trap_malus_points: true,
+        trap_lose_all_collectibles: true,
         mission_word_guessed: false,
         theme_expired: false,
         theme_expiring_soon: false

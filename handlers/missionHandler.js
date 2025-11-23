@@ -352,7 +352,37 @@ class MissionHandler {
           textChannels = textChannels.filter(ch => mission.allowed_channels.includes(ch.id));
           console.log(`📡 Mission avec canaux restreints: ${mission.allowed_channels.length} canaux autorisés, ${textChannels.size} disponibles`);
         } else {
-          console.log(`🌐 Mission sans restriction de canaux: ${textChannels.size} canaux disponibles`);
+          // Fallback: utiliser les canaux configurés pour les mystery boxes (give_channels)
+          const giveChannels = await db.queryAll(
+            'SELECT discord_id, type, parent_category_id FROM give_channels WHERE guild_id = $1',
+            [interaction.guildId]
+          );
+
+          if (giveChannels && giveChannels.length > 0) {
+            // Collecter tous les IDs de canaux autorisés (canaux directs + canaux dans les catégories)
+            const allowedChannelIds = new Set();
+
+            for (const gc of giveChannels) {
+              if (gc.type === 'channel') {
+                allowedChannelIds.add(gc.discord_id);
+              } else if (gc.type === 'category') {
+                // Ajouter tous les canaux texte de cette catégorie
+                const categoryChannels = interaction.guild.channels.cache.filter(
+                  ch => ch.type === 0 && ch.parentId === gc.discord_id
+                );
+                categoryChannels.forEach(ch => allowedChannelIds.add(ch.id));
+              }
+            }
+
+            if (allowedChannelIds.size > 0) {
+              textChannels = textChannels.filter(ch => allowedChannelIds.has(ch.id));
+              console.log(`📦 Mission utilisant canaux mystery box par défaut: ${allowedChannelIds.size} canaux configurés, ${textChannels.size} disponibles`);
+            } else {
+              console.log(`🌐 Aucun canal mystery box valide, utilisant tous les canaux: ${textChannels.size} disponibles`);
+            }
+          } else {
+            console.log(`🌐 Aucun canal mystery box configuré, utilisant tous les canaux: ${textChannels.size} disponibles`);
+          }
         }
 
         if (textChannels.size === 0) {
@@ -436,8 +466,9 @@ class MissionHandler {
    * Validation quiz
    */
   async validateQuiz(interaction, mission, player, progress, validationData) {
-    // Fetch a random quiz question from the database for this theme
-    const quizQuestion = await db.getRandomQuizQuestion(interaction.guildId, mission.theme_id);
+    // Fetch a random quiz question from the database for this specific mission
+    // Filtre par guild_id, mission_id ET theme_id pour une sécurité maximale
+    const quizQuestion = await db.getRandomQuizQuestionByMission(interaction.guildId, mission.id, mission.theme_id);
 
     let question, answer, hint, difficulty, alternatives;
 
