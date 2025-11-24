@@ -40,6 +40,27 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   - **Fichier de migration**: `database/migrations/add-mission-progress-columns.sql`
   - **Note**: Cette migration corrige l'erreur `column mp.expires_at does not exist` après déploiement
 
+- **[Schéma Complet - 10 Tables Manquantes]**: Synchronisation complète du schéma DB entre local et VPS
+  - **Symptôme**: Erreurs `relation "guild_branding" does not exist`, Admin panel ne se connecte plus à la DB
+  - **Cause**: VPS avait 27 tables, la base locale en avait 37 (10 tables manquantes)
+  - **Tables créées**:
+    1. `quiz_questions` : Questions de quiz liées aux missions
+    2. `mission_keywords` : Mots-clés de validation des missions
+    3. `guild_branding` : Configuration de branding par serveur
+    4. `badges` : Définition des badges du système
+    5. `player_badges` : Badges débloqués par joueur
+    6. `badge_progress` : Progression vers déblocage badges
+    7. `colors` : Palette de couleurs pour customisation
+    8. `guild_admin_roles` : Rôles admin personnalisés par serveur
+    9. `player_login_history` : Historique connexions joueurs
+    10. `apple_game_winners` : Gagnants du jeu de la pomme
+  - **Solution**:
+    - Backup complet avant modification: `/root/backup_before_schema_update.sql`
+    - Création SQL avec toutes les tables et indexes: `/root/create-missing-tables.sql`
+    - Application via Docker: `docker compose exec -T postgres psql`
+    - Redémarrage du bot pour appliquer les changements
+  - **Résultat**: ✅ 37 tables sur VPS (synchronisé avec local), admin panel fonctionnel
+
 ### 📝 Documentation
 
 - **[Scripts Maintenance]**: Ajout de 2 scripts utilitaires pour diagnostiquer et réparer les questions quiz orphelines
