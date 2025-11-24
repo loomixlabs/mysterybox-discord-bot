@@ -36,23 +36,22 @@ jobs:
 
             cd $VPS_PATH
 
-            # Backup des fichiers sensibles
-            echo "💾 Backup des fichiers sensibles..."
+            # Backup du .env
+            echo "💾 Backup du fichier .env..."
             cp .env .env.backup
-            cp utils/database-pg.js utils/database-pg.backup
 
             # Pull des derniers changements
             echo "📥 Récupération des derniers changements..."
             git fetch origin master
             git reset --hard origin/master
 
-            # Restaurer les fichiers sensibles
-            echo "♻️  Restauration des fichiers sensibles..."
+            # Restaurer le .env
+            echo "♻️  Restauration du fichier .env..."
             cp .env.backup .env
 
             # Rebuild et redémarrage
             echo "🔨 Reconstruction de l'image Docker..."
-            docker compose build bot-mysterybox
+            docker compose build bot
 
             echo "🔄 Redémarrage du bot..."
             docker compose up -d
@@ -66,7 +65,7 @@ jobs:
 
             echo ""
             echo "📝 Derniers logs:"
-            docker compose logs bot-mysterybox --tail=20
+            docker compose logs bot --tail=20
 
             echo ""
             echo "============================================="
