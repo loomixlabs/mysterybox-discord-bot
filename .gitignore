@@ -25,6 +25,8 @@ bot.db*
 *.sql.gz
 *.dump
 database/backups/*.sql
+backup_botdb.sql
+*.sql
 
 # ==================== Logs ====================
 *.log
@@ -117,6 +119,10 @@ coverage/
 temp-*.bat
 temp-*.js
 temp-*.sql
+
+# Scripts d'export avec credentials
+export-*.ps1
+export-*.bat
 
 # Anciens backups
 *.backup.*

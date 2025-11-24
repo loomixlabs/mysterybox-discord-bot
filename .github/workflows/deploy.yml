@@ -1,0 +1,86 @@
+name: Deploy to VPS Hostinger
+
+on:
+  push:
+    branches:
+      - master  # Se déclenche sur push vers master
+  workflow_dispatch:  # Permet de déclencher manuellement
+
+jobs:
+  deploy:
+    name: Deploy to Production VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: 🚀 Deploy to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_HOST << 'ENDSSH'
+            set -e
+
+            echo "🔄 Déploiement automatique depuis GitHub..."
+            echo "============================================="
+
+            cd ${{ secrets.VPS_PATH }}
+
+            # Backup des fichiers sensibles
+            echo "💾 Backup des fichiers sensibles..."
+            cp .env .env.backup
+            cp utils/database-pg.js utils/database-pg.backup
+
+            # Pull des derniers changements
+            echo "📥 Récupération des derniers changements..."
+            git fetch origin master
+            git reset --hard origin/master
+
+            # Restaurer les fichiers sensibles
+            echo "♻️  Restauration des fichiers sensibles..."
+            cp .env.backup .env
+
+            # Rebuild et redémarrage
+            echo "🔨 Reconstruction de l'image Docker..."
+            docker compose build bot-mysterybox
+
+            echo "🔄 Redémarrage du bot..."
+            docker compose up -d
+
+            # Attendre que le bot démarre
+            sleep 10
+
+            # Vérifier le statut
+            echo "📊 Statut des containers:"
+            docker compose ps
+
+            echo ""
+            echo "📝 Derniers logs:"
+            docker compose logs bot-mysterybox --tail=20
+
+            echo ""
+            echo "============================================="
+            echo "✅ Déploiement terminé avec succès!"
+            echo "============================================="
+          ENDSSH
+
+      - name: ✅ Deployment Success
+        if: success()
+        run: |
+          echo "✅ Le bot a été déployé avec succès sur le VPS!"
+
+      - name: ❌ Deployment Failed
+        if: failure()
+        run: |
+          echo "❌ Le déploiement a échoué. Vérifiez les logs."
+          exit 1

@@ -24,7 +24,7 @@ class DatabaseWrapper {
 
     this.pool = new Pool({
       connectionString: dbUrl,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      ssl: false, // DÉSACTIVÉ pour Docker (évite les erreurs SSL en production)
       max: 20, // Maximum 20 connexions
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
