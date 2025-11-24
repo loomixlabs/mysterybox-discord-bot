@@ -5,6 +5,54 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.9.3] - 2025-11-24
+
+### 🐛 Fixed
+
+- **[Déploiement VPS]**: Correction de la restauration de base de données PostgreSQL
+  - **Symptôme**: Base de données vide après déploiement (0 players au lieu de 53)
+  - **Cause racine**: Backup créé avec PostgreSQL 18 (Windows) contenait des commandes `\restrict` et `\unrestrict` non supportées par PostgreSQL 16 (VPS Alpine)
+  - **Solution**:
+    - Nettoyage du backup en retirant les commandes incompatibles avec `sed`
+    - DROP/CREATE de la base de données
+    - Import du backup nettoyé
+    - Redémarrage du bot
+  - **Données restaurées**:
+    - ✅ 53 joueurs
+    - ✅ 149 collectibles
+    - ✅ 220 collections
+    - ✅ 41 missions + 465 progressions
+    - ✅ 8 thèmes (4 actifs)
+    - ✅ 45 super bonus
+    - ✅ 37 badges
+  - **Fichiers modifiés**:
+    - `docker-compose.yml`: Configuration volumes PostgreSQL
+    - `.github/workflows/deploy.yml`: Workflow GitHub Actions
+    - `Dockerfile`: Changement de `npm ci` → `npm install`
+    - `utils/database-pg.js` (ligne 27): SSL désactivé pour Docker
+  - **Scripts créés**:
+    - Backup/restauration automatique sur VPS
+
+### 🔧 Changed
+
+- **[Infrastructure]**: Configuration Docker Compose pour production
+  - Container PostgreSQL: `postgres:16-alpine` (au lieu de 18)
+  - Noms standardisés: `bot-mysterybox` et `bot-mysterybox-db`
+  - Volume persistant: `bot-discord-postgres-data`
+  - Network interne: `mysterybox-network`
+  - Healthchecks activés sur tous les services
+
+- **[CI/CD]**: Mise en place GitHub Actions pour auto-déploiement
+  - Workflow automatique sur push vers `master`
+  - SSH avec clé privée (`~/.ssh/id_rsa_vps_hostinger`)
+  - Backup automatique du `.env` avant déploiement
+  - Rebuild et redémarrage automatique du bot
+  - Logs affichés en fin de déploiement
+  - **Fichier créé**: `.github/workflows/deploy.yml`
+  - **Documentation créée**: `GUIDE-AUTO-DEPLOIEMENT.md`
+
+---
+
 ## [1.9.1] - 2025-11-23
 
 ### 🐛 Fixed
