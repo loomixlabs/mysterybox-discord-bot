@@ -7,8 +7,8 @@ version: '3.8'
 services:
   # Service PostgreSQL
   postgres:
-    image: postgres:15-alpine
-    container_name: bot-discord-postgres
+    image: postgres:16-alpine
+    container_name: bot-mysterybox-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-botuser}
@@ -33,7 +33,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bot-discord-give
+    container_name: bot-mysterybox
     restart: unless-stopped
     depends_on:
       postgres:
@@ -70,10 +70,10 @@ services:
 volumes:
   postgres_data:
     driver: local
-    name: bot-discord-postgres-data
+    name: postgres_data
 
 # Réseau interne
 networks:
   bot-network:
     driver: bridge
-    name: bot-discord-network
+    name: mysterybox-network
