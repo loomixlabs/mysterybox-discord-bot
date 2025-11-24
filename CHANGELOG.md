@@ -5,6 +5,37 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [1.9.4] - 2025-11-24
+
+### 🐛 Fixed
+
+- **[Import Thème - Questions Quiz]**: Correction du bug d'import des questions de quiz sans liaison aux missions
+  - **Symptôme**: Lors de l'import d'un thème avec missions quiz, les missions étaient créées MAIS les questions/réponses n'étaient pas liées (mission_id = NULL)
+  - **Cause racine - Import**: La fonction `createMissions()` dans `themeImporter.js` (ligne 502-517) n'incluait pas le champ `mission_id` lors de l'INSERT dans `quiz_questions`
+  - **Cause racine - Export**: La fonction `formatMissions()` dans `themeExporter.js` (ligne 284) exportait TOUTES les questions pour CHAQUE mission quiz sans filtrage par mission
+  - **Impact**: 53 questions quiz orphelines sur 4 thèmes (Blanche-Neige, Monopoly, Harry Potter, Pokémon)
+  - **Solution**:
+    - **Import** (utils/themeImporter.js ligne 498-520): Ajout du champ `mission_id` dans l'INSERT avec récupération de `missionDbId`
+    - **Export** (utils/themeExporter.js ligne 283-302): Ajout du filtre `q.mission_id === mission.id` pour regrouper correctement les questions
+    - **Réparation auto**: Script `fix-orphan-quiz-questions.js` créé pour lier automatiquement les questions aux missions (si 1 seule mission quiz par thème)
+  - **Données réparées**:
+    - ✅ Blanche-Neige: 2/2 questions liées automatiquement
+    - ⚠️ Monopoly, Harry Potter, Pokémon: 51 questions nécessitent ré-import manuel (plusieurs missions par thème)
+  - **Fichiers modifiés**:
+    - `utils/themeImporter.js` (lignes 498-520): Ajout mission_id dans INSERT quiz_questions
+    - `utils/themeExporter.js` (lignes 283-302): Filtrage questions par mission_id
+  - **Scripts créés**:
+    - `check-orphan-quiz-questions.js`: Diagnostic questions orphelines
+    - `fix-orphan-quiz-questions.js`: Réparation automatique partielle
+
+### 📝 Documentation
+
+- **[Scripts Maintenance]**: Ajout de 2 scripts utilitaires pour diagnostiquer et réparer les questions quiz orphelines
+  - `check-orphan-quiz-questions.js`: Liste toutes les questions sans mission_id
+  - `fix-orphan-quiz-questions.js`: Lie automatiquement les questions aux missions (si possible)
+
+---
+
 ## [1.9.3] - 2025-11-24
 
 ### 🐛 Fixed

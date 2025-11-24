@@ -280,8 +280,9 @@ class ThemeExporter {
           }))
         });
       } else if (mission.type === 'quiz') {
-        // Regrouper les questions quiz
-        const questions = quizQuestions.map(q => ({
+        // Filtrer les questions quiz pour cette mission spécifique
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
+        const questions = missionQuestions.map(q => ({
           question_text: q.question_text,
           correct_answer: q.correct_answer,
           wrong_answers: q.wrong_answers || [],
@@ -289,17 +290,16 @@ class ThemeExporter {
           difficulty: q.difficulty || 'medium'
         }));
 
-        if (questions.length > 0) {
-          result.quiz.push({
-            mission_id: mission.mission_id,
-            name: mission.name,
-            description: mission.description,
-            timeout: mission.timeout || 60,
-            max_attempts: mission.max_attempts || undefined,
-            image_url: mission.image_url || undefined,
-            questions: questions
-          });
-        }
+        // Exporter la mission même si pas de questions (pour éviter de perdre la mission)
+        result.quiz.push({
+          mission_id: mission.mission_id,
+          name: mission.name,
+          description: mission.description,
+          timeout: mission.timeout || 60,
+          max_attempts: mission.max_attempts || undefined,
+          image_url: mission.image_url || undefined,
+          questions: questions
+        });
       }
     }
 

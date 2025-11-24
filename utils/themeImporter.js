@@ -495,17 +495,19 @@ class ThemeImporter {
           mission.max_attempts || null
         ]);
 
+        const missionDbId = missionResult[0].id;
         this.importedData.missions++;
 
-        // Créer les questions
+        // Créer les questions en les liant à la mission
         for (const question of mission.questions) {
           await db.query(`
             INSERT INTO quiz_questions (
-              guild_id, theme_id, question_text, correct_answer, wrong_answers, hint, difficulty, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+              guild_id, theme_id, mission_id, question_text, correct_answer, wrong_answers, hint, difficulty, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
           `, [
             this.guildId,
             themeId,
+            missionDbId,
             question.question_text,
             question.correct_answer,
             question.wrong_answers || null,
