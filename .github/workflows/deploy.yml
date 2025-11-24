@@ -23,18 +23,14 @@ jobs:
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
       - name: 🚀 Deploy to VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
-          ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_HOST << ENDSSH
+          ssh -i ~/.ssh/id_rsa ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} bash -s << 'ENDSSH'
             set -e
 
             echo "🔄 Déploiement automatique depuis GitHub..."
             echo "============================================="
 
-            cd $VPS_PATH
+            cd /root/bot-mysterybox
 
             # Backup du .env
             echo "💾 Backup du fichier .env..."
