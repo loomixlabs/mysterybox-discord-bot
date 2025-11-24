@@ -28,6 +28,18 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
     - `check-orphan-quiz-questions.js`: Diagnostic questions orphelines
     - `fix-orphan-quiz-questions.js`: Réparation automatique partielle
 
+### 🔧 Database Migration
+
+- **[Mission Progress - Colonnes Manquantes]**: Migration pour ajouter 4 colonnes manquantes sur le VPS
+  - **Colonnes ajoutées**:
+    - `target_channel_id` (TEXT) : ID du canal cible pour missions keyword-message
+    - `target_keyword` (TEXT) : Mot-clé cible pour missions keyword-message
+    - `mission_type` (TEXT) : Type de mission (optimisation requêtes)
+    - `expires_at` (TIMESTAMP) : Date/heure d'expiration (timeout)
+  - **Index créé**: `idx_mission_progress_expires_at` pour optimiser les requêtes de missions expirées
+  - **Fichier de migration**: `database/migrations/add-mission-progress-columns.sql`
+  - **Note**: Cette migration corrige l'erreur `column mp.expires_at does not exist` après déploiement
+
 ### 📝 Documentation
 
 - **[Scripts Maintenance]**: Ajout de 2 scripts utilitaires pour diagnostiquer et réparer les questions quiz orphelines
