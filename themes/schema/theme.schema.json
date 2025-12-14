@@ -40,7 +40,22 @@
         "preview_image": {
           "type": "string",
           "format": "uri",
-          "description": "Image de prévisualisation"
+          "description": "Image de prévisualisation (deprecated, use banner_url)"
+        },
+        "banner_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL de la bannière du thème (1200x400 recommandé)"
+        },
+        "thumbnail_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL de la miniature du thème (400x400 recommandé)"
+        },
+        "icon": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "Emoji icône du thème"
         },
         "created_at": {
           "type": "string",

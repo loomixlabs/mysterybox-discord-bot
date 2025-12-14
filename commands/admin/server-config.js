@@ -5,8 +5,9 @@ const ServerConfigHandler = require('../../handlers/serverConfigHandler');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('server-config')
-    .setDescription('[BOT CORE] Configuration globale du serveur (branding, paramètres)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDescription('[BOT CORE] Configuration globale du serveur (branding, paramètres)'),
+    // Note: Pas de setDefaultMemberPermissions pour permettre aux Super Admins
+    // d'accéder même sans rôle Administrator Discord. Vérification dans execute().
 
   async execute(interaction) {
     try {

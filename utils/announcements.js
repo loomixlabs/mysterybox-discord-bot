@@ -133,10 +133,13 @@ class AnnouncementSystem {
     });
   }
 
-  async announceCollectionLost(client, guildId, userName, trapName) {
+  async announceCollectionLost(client, guildId, userName, trapName, collectibleName = '') {
     return this.sendAnnouncement(client, guildId, 'collection_lost', {
       userName,
-      trapName
+      trapName,
+      collectibleName,
+      collectibleLost: collectibleName, // Alias pour rétro-compatibilité
+      collectible: collectibleName // Alias supplémentaire
     });
   }
 
@@ -154,7 +157,9 @@ class AnnouncementSystem {
     return this.sendAnnouncement(client, guildId, 'trap_lose_collectible', {
       userName,
       trapName,
-      collectibleName
+      collectibleName,
+      collectibleLost: collectibleName, // Alias pour rétro-compatibilité
+      collectible: collectibleName // Alias supplémentaire
     });
   }
 
@@ -252,14 +257,7 @@ class AnnouncementSystem {
     });
   }
 
-  async announceTrapLoseCollectibleTriggered(client, guildId, userName, trapName, collectibleLost) {
-    return this.sendAnnouncement(client, guildId, 'trap_lose_collectible', {
-      userName,
-      trapName,
-      collectibleLost,
-      collectible: collectibleLost // Alias pour compatibilité
-    });
-  }
+  // NOTE: announceTrapLoseCollectibleTriggered déplacé plus haut dans le fichier (ligne 156)
 
   async announceTrapPublicShameTriggered(client, guildId, userName, trapName, shameMessage) {
     return this.sendAnnouncement(client, guildId, 'trap_public_shame', {

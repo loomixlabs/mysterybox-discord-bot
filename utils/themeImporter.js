@@ -270,16 +270,20 @@ class ThemeImporter {
       mentionable: role.mentionable || false
     }));
 
+    // Extraire les probabilités de sévérité des pièges
+    const severityProba = config.trap_severity_probabilities || {};
+
     await db.query(`
       INSERT INTO theme_config (
         guild_id, theme_id,
         probability_collectible, probability_mission, probability_trap, probability_super_bonus,
         collectible_rarity_legendary, collectible_rarity_epic, collectible_rarity_rare, collectible_rarity_common,
         super_bonus_rarity_legendary, super_bonus_rarity_epic, super_bonus_rarity_rare, super_bonus_rarity_common,
+        trap_severity_1, trap_severity_2, trap_severity_3, trap_severity_4, trap_severity_5,
         mystery_box_image, mystery_box_title, mystery_box_description,
         mystery_box_winner_message, mystery_box_celebration_gif, mystery_box_celebration_emojis,
         auto_delete_celebration_message, progression_roles
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
       ON CONFLICT (guild_id, theme_id) DO UPDATE SET
         probability_collectible = EXCLUDED.probability_collectible,
         probability_mission = EXCLUDED.probability_mission,
@@ -293,6 +297,11 @@ class ThemeImporter {
         super_bonus_rarity_epic = EXCLUDED.super_bonus_rarity_epic,
         super_bonus_rarity_rare = EXCLUDED.super_bonus_rarity_rare,
         super_bonus_rarity_common = EXCLUDED.super_bonus_rarity_common,
+        trap_severity_1 = EXCLUDED.trap_severity_1,
+        trap_severity_2 = EXCLUDED.trap_severity_2,
+        trap_severity_3 = EXCLUDED.trap_severity_3,
+        trap_severity_4 = EXCLUDED.trap_severity_4,
+        trap_severity_5 = EXCLUDED.trap_severity_5,
         mystery_box_image = EXCLUDED.mystery_box_image,
         mystery_box_title = EXCLUDED.mystery_box_title,
         mystery_box_description = EXCLUDED.mystery_box_description,
@@ -316,6 +325,12 @@ class ThemeImporter {
       config.super_bonus_rarity_epic || 10,
       config.super_bonus_rarity_rare || 20,
       config.super_bonus_rarity_common || 40,
+      // Probabilités sévérité pièges (defaults: 45/30/15/8/2)
+      severityProba.severity_1 || config.trap_severity_1 || 45,
+      severityProba.severity_2 || config.trap_severity_2 || 30,
+      severityProba.severity_3 || config.trap_severity_3 || 15,
+      severityProba.severity_4 || config.trap_severity_4 || 8,
+      severityProba.severity_5 || config.trap_severity_5 || 2,
       config.mystery_box_image || null,
       config.mystery_box_title || 'BOITE MYSTERIEUSE',
       config.mystery_box_description || 'Que contient-elle ?',
@@ -371,15 +386,31 @@ class ThemeImporter {
    */
   async createTraps(themeId, traps) {
     for (const trap of traps) {
+      // Déterminer la sévérité par défaut si non fournie (basée sur le type)
+      let severity = trap.severity;
+      if (severity === undefined || severity === null) {
+        // Sévérités par défaut par type de piège
+        const defaultSeverities = {
+          'empty-box': 1,        // Minor
+          'cooldown': 2,         // Low
+          'points-malus': 2,     // Low
+          'lose-collectible': 3, // Medium
+          'public-shame': 3,     // Medium
+          'lose-all-collectibles': 5  // Extreme
+        };
+        severity = defaultSeverities[trap.type] || 3;
+      }
+
       await db.query(`
         INSERT INTO traps (
-          guild_id, theme_id, trap_id, name, type, description, image_url,
+          guild_id, theme_id, trap_id, name, type, severity, description, image_url,
           cooldown_duration, removes_collectible, shame_message, malus_points,
           is_default, is_active, notif_title, notif_description, notif_color, notif_footer, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
         ON CONFLICT (guild_id, theme_id, trap_id) DO UPDATE SET
           name = EXCLUDED.name,
           type = EXCLUDED.type,
+          severity = EXCLUDED.severity,
           description = EXCLUDED.description,
           image_url = EXCLUDED.image_url,
           cooldown_duration = EXCLUDED.cooldown_duration,
@@ -398,6 +429,7 @@ class ThemeImporter {
         trap.trap_id,
         trap.name,
         trap.type,
+        severity,
         trap.description,
         trap.image_url || null,
         trap.cooldown_duration || null,

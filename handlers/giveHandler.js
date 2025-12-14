@@ -92,9 +92,14 @@ class GiveHandler {
       const embed = new EmbedBuilder()
         .setTitle('🎊 Collectible obtenu !')
         .setDescription(successMsg)
-        .setColor(collectible.role_color)
-        .setThumbnail(collectible.image_url)
-        .addFields(
+        .setColor(collectible.role_color);
+
+      // Thumbnail uniquement si URL valide (non vide)
+      if (collectible.image_url && collectible.image_url.trim()) {
+        embed.setThumbnail(collectible.image_url);
+      }
+
+      embed.addFields(
           {
             name: 'Progression',
             value: `${progress.collected_count}/${collectible.required_items}`,
@@ -138,8 +143,12 @@ class GiveHandler {
     const embed = new EmbedBuilder()
       .setTitle('⚠️ Doublon !')
       .setDescription(duplicateMsg + '\n\nContinue de chercher les autres !')
-      .setColor('#FFA500')
-      .setThumbnail(collectible.image_url);
+      .setColor('#FFA500');
+
+    // Thumbnail uniquement si URL valide (non vide)
+    if (collectible.image_url && collectible.image_url.trim()) {
+      embed.setThumbnail(collectible.image_url);
+    }
 
     return interaction.followUp({
       embeds: [embed],
@@ -170,8 +179,12 @@ class GiveHandler {
       const embed = new EmbedBuilder()
         .setTitle('😈 OH NON ! C\'était un piège !')
         .setDescription(trap.description)
-        .setColor('#8B0000')
-        .setImage(trap.image_url);
+        .setColor('#8B0000');
+
+      // Image uniquement si URL valide (non vide)
+      if (trap.image_url && trap.image_url.trim()) {
+        embed.setImage(trap.image_url);
+      }
 
       // Message visible par tous (pour l'amusement)
       await interaction.followUp({

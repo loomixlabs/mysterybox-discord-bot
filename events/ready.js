@@ -2,6 +2,7 @@ const { ActivityType } = require('discord.js');
 const superBonusHandler = require('../handlers/superBonusHandler');
 const missionHandler = require('../handlers/missionHandler');
 const subscriptionHandler = require('../handlers/subscriptionHandler');
+const threadManager = require('../utils/threadManager');
 const db = require('../utils/database-pg');
 
 module.exports = {
@@ -102,6 +103,29 @@ module.exports = {
 
     // Vérification immédiate au démarrage
     missionHandler.checkExpiredMissions(client);
+
+    // === NETTOYAGE DES THREADS ET MISSIONS ===
+    // Nettoyage des missions abandonnées (toutes les 5 minutes)
+    // Missions créées mais jamais lancées (bouton non cliqué)
+    setInterval(() => {
+      threadManager.cleanupAbandonedMissions(client, 30); // 30 minutes max
+    }, 300000); // 5 minutes en millisecondes
+
+    // Nettoyage immédiat au démarrage (missions abandonnées)
+    threadManager.cleanupAbandonedMissions(client, 30);
+
+    // Nettoyage des threads orphelins (toutes les 15 minutes)
+    // Threads de missions terminées/échouées non archivés
+    setInterval(() => {
+      threadManager.cleanupOrphanedThreads(client);
+    }, 900000); // 15 minutes en millisecondes
+
+    // Nettoyage immédiat au démarrage (threads orphelins)
+    setTimeout(() => {
+      threadManager.cleanupOrphanedThreads(client);
+    }, 5000); // Attendre 5s que le bot soit bien initialisé
+
+    console.log('🧵 Système de gestion des threads initialisé');
 
     // === GESTION DES SUBSCRIPTIONS ===
     // Vérification des essais expirés (toutes les heures)

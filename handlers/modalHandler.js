@@ -92,6 +92,13 @@ class ModalHandler {
     else if (customId.startsWith('modal_keyword_add_')) {
       await this.handleAddKeyword(interaction);
     }
+    // Gestion des modals de mots-clés (nouveau format depuis admin panel)
+    else if (customId.startsWith('modal_add_keyword_')) {
+      await this.handleAddKeywordFromAdminPanel(interaction);
+    }
+    else if (customId.startsWith('modal_edit_keyword_')) {
+      await this.handleEditKeywordFromAdminPanel(interaction);
+    }
     // Gestion des modals de quiz
     else if (customId.startsWith('modal_quiz_add_')) {
       await this.handleAddQuizQuestion(interaction);
@@ -1862,6 +1869,195 @@ class ModalHandler {
 
     } catch (error) {
       console.error('❌ Erreur lors de la configuration du canal d\'annonces:', error);
+      return interaction.editReply({
+        content: `❌ **Erreur:** ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour ajouter un mot-clé depuis l'admin panel
+   * Format customId: modal_add_keyword_${missionId}
+   */
+  async handleAddKeywordFromAdminPanel(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    try {
+      // Extraire missionId depuis le customId
+      const missionId = parseInt(interaction.customId.replace('modal_add_keyword_', ''));
+
+      // Récupérer les valeurs du modal
+      const keyword = interaction.fields.getTextInputValue('keyword_value').trim().toLowerCase();
+      const difficulty = interaction.fields.getTextInputValue('keyword_difficulty').trim().toLowerCase();
+
+      // Validation du mot-clé
+      if (!keyword || keyword.length === 0) {
+        return interaction.editReply({
+          content: '❌ **Erreur:** Le mot-clé ne peut pas être vide.',
+          flags: 64
+        });
+      }
+
+      if (keyword.length > 100) {
+        return interaction.editReply({
+          content: '❌ **Erreur:** Le mot-clé ne peut pas dépasser 100 caractères.',
+          flags: 64
+        });
+      }
+
+      // Validation de la difficulté
+      const validDifficulties = ['easy', 'medium', 'hard'];
+      const finalDifficulty = validDifficulties.includes(difficulty) ? difficulty : 'easy';
+
+      // Vérifier si le mot-clé existe déjà pour cette mission
+      const existingKeywords = await db.getMissionKeywords(interaction.guildId, missionId);
+      if (existingKeywords.some(kw => kw.keyword.toLowerCase() === keyword)) {
+        return interaction.editReply({
+          content: `❌ **Erreur:** Le mot-clé **"${keyword}"** existe déjà pour cette mission.`,
+          flags: 64
+        });
+      }
+
+      // Ajouter le mot-clé
+      await db.addMissionKeyword(interaction.guildId, missionId, keyword, null, finalDifficulty);
+
+      // Logger l'action
+      await audit.logMissionKeywordAdded(
+        interaction.guildId,
+        interaction.user.id,
+        {
+          mission_id: missionId,
+          keyword: keyword,
+          difficulty: finalDifficulty
+        }
+      );
+
+      // Récupérer le branding pour l'embed
+      const branding = await db.getGuildBranding(interaction.guildId);
+
+      // Emojis de difficulté
+      const difficultyEmojis = {
+        'easy': '🟢',
+        'medium': '🟡',
+        'hard': '🔴'
+      };
+
+      // Message de succès
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ Mot-clé ajouté avec succès !')
+        .setDescription('Le mot-clé a été ajouté à la mission.')
+        .addFields(
+          { name: '🔤 Mot-clé', value: keyword, inline: true },
+          { name: '⚡ Difficulté', value: `${difficultyEmojis[finalDifficulty]} ${finalDifficulty}`, inline: true }
+        )
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId))
+        .setTimestamp();
+
+      return interaction.editReply({
+        embeds: [successEmbed],
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleAddKeywordFromAdminPanel:', error);
+      return interaction.editReply({
+        content: `❌ **Erreur:** ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour modifier un mot-clé depuis l'admin panel
+   * Format customId: modal_edit_keyword_${missionId}_${keywordId}
+   */
+  async handleEditKeywordFromAdminPanel(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    try {
+      // Extraire missionId et keywordId depuis le customId
+      const parts = interaction.customId.replace('modal_edit_keyword_', '').split('_');
+      const missionId = parseInt(parts[0]);
+      const keywordId = parseInt(parts[1]);
+
+      // Récupérer les valeurs du modal
+      const keyword = interaction.fields.getTextInputValue('keyword_value').trim().toLowerCase();
+      const difficulty = interaction.fields.getTextInputValue('keyword_difficulty').trim().toLowerCase();
+
+      // Validation du mot-clé
+      if (!keyword || keyword.length === 0) {
+        return interaction.editReply({
+          content: '❌ **Erreur:** Le mot-clé ne peut pas être vide.',
+          flags: 64
+        });
+      }
+
+      if (keyword.length > 100) {
+        return interaction.editReply({
+          content: '❌ **Erreur:** Le mot-clé ne peut pas dépasser 100 caractères.',
+          flags: 64
+        });
+      }
+
+      // Validation de la difficulté
+      const validDifficulties = ['easy', 'medium', 'hard'];
+      const finalDifficulty = validDifficulties.includes(difficulty) ? difficulty : 'easy';
+
+      // Vérifier si le mot-clé existe déjà pour une autre entrée de cette mission
+      const existingKeywords = await db.getMissionKeywords(interaction.guildId, missionId);
+      const conflictingKeyword = existingKeywords.find(
+        kw => kw.keyword.toLowerCase() === keyword && kw.id !== keywordId
+      );
+
+      if (conflictingKeyword) {
+        return interaction.editReply({
+          content: `❌ **Erreur:** Le mot-clé **"${keyword}"** existe déjà pour cette mission.`,
+          flags: 64
+        });
+      }
+
+      // Mettre à jour le mot-clé
+      await db.query(
+        `UPDATE mission_keywords
+         SET keyword = $1, difficulty = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [keyword, finalDifficulty, keywordId]
+      );
+
+      // Logger l'action (utilisation de logMissionKeywordAdded avec un message adapté)
+      console.log(`✅ Mot-clé modifié: Mission ${missionId}, Keyword ID ${keywordId}, New value: "${keyword}" (${finalDifficulty})`);
+
+      // Récupérer le branding pour l'embed
+      const branding = await db.getGuildBranding(interaction.guildId);
+
+      // Emojis de difficulté
+      const difficultyEmojis = {
+        'easy': '🟢',
+        'medium': '🟡',
+        'hard': '🔴'
+      };
+
+      // Message de succès
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ Mot-clé modifié avec succès !')
+        .setDescription('Le mot-clé a été mis à jour.')
+        .addFields(
+          { name: '🔤 Mot-clé', value: keyword, inline: true },
+          { name: '⚡ Difficulté', value: `${difficultyEmojis[finalDifficulty]} ${finalDifficulty}`, inline: true }
+        )
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId))
+        .setTimestamp();
+
+      return interaction.editReply({
+        embeds: [successEmbed],
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleEditKeywordFromAdminPanel:', error);
       return interaction.editReply({
         content: `❌ **Erreur:** ${error.message}`,
         flags: 64

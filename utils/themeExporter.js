@@ -201,6 +201,12 @@ class ThemeExporter {
       super_bonus_rarity_epic: config.super_bonus_rarity_epic,
       super_bonus_rarity_rare: config.super_bonus_rarity_rare,
       super_bonus_rarity_common: config.super_bonus_rarity_common,
+      // Probabilités sévérité pièges
+      trap_severity_1: config.trap_severity_1,
+      trap_severity_2: config.trap_severity_2,
+      trap_severity_3: config.trap_severity_3,
+      trap_severity_4: config.trap_severity_4,
+      trap_severity_5: config.trap_severity_5,
       mystery_box_image: config.mystery_box_image,
       mystery_box_title: config.mystery_box_title,
       mystery_box_description: config.mystery_box_description,
@@ -238,6 +244,7 @@ class ThemeExporter {
       trap_id: t.trap_id,
       name: t.name,
       type: t.type,
+      severity: t.severity || 3, // Inclure la sévérité (default: Medium)
       description: t.description
     };
 

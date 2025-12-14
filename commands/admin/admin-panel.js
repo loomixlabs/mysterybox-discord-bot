@@ -5,8 +5,10 @@ const { buildAdminPanelContent } = require('../../handlers/adminPanelHandler');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('admin-panel')
-    .setDescription('[ADMIN] Panneau d\'administration et configuration')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDescription('[ADMIN] Panneau d\'administration et configuration'),
+    // Note: Pas de setDefaultMemberPermissions pour permettre aux Super Admins
+    // d'accéder même sans rôle Administrator Discord. La vérification se fait
+    // via permissions.canAccessAdminPanel() qui gère les 3 niveaux de permissions.
 
   async execute(interaction) {
     try {

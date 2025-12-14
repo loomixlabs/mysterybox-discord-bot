@@ -6,6 +6,7 @@ const progressionRoleHandler = require('./progressionRoleHandler');
 const audit = require('../utils/auditLogger');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 const quizAnswerMatcher = require('../utils/quizAnswerMatcher');
+const threadManager = require('../utils/threadManager');
 
 /**
  * Handler pour le système de missions V2
@@ -708,7 +709,112 @@ class MissionHandler {
   }
 
   /**
-   * Compléter une mission et donner un collectible aléatoire
+   * Récupérer la récompense de la mission selon son type configuré
+   * Types supportés: 'random-collectible', 'specific-collectible', 'super-bonus'
+   * @param {string} guildId - ID du serveur
+   * @param {object} mission - Mission avec reward_type et reward_data
+   * @returns {object} { type: string, reward: object|null, name: string }
+   */
+  async getMissionReward(guildId, mission) {
+    const rewardType = mission.reward_type || 'random-collectible';
+    let rewardData = mission.reward_data;
+
+    // Parser reward_data si c'est une string JSON
+    if (typeof rewardData === 'string') {
+      try {
+        rewardData = JSON.parse(rewardData);
+      } catch (e) {
+        rewardData = {};
+      }
+    }
+    rewardData = rewardData || {};
+
+    console.log(`🎁 [MISSION REWARD] Type: ${rewardType}, Data:`, rewardData);
+
+    switch (rewardType) {
+      case 'specific-collectible': {
+        // Récupérer un collectible spécifique par son collectible_id (string ID comme "pikachu")
+        const collectibleId = rewardData.collectible_id || rewardData.collectibleId;
+        if (!collectibleId) {
+          console.warn('⚠️  [MISSION REWARD] specific-collectible mais pas de collectible_id - fallback random');
+          const fallback = await db.getRandomCollectible(guildId, mission.theme_id);
+          return { type: 'collectible', reward: fallback, name: fallback?.name || 'Collectible' };
+        }
+
+        // Chercher par collectible_id (string)
+        const collectible = await db.queryOne(
+          `SELECT * FROM collectibles
+           WHERE guild_id = $1 AND theme_id = $2 AND collectible_id = $3`,
+          [guildId, mission.theme_id, collectibleId]
+        );
+
+        if (!collectible) {
+          console.warn(`⚠️  [MISSION REWARD] Collectible '${collectibleId}' introuvable - fallback random`);
+          const fallback = await db.getRandomCollectible(guildId, mission.theme_id);
+          return { type: 'collectible', reward: fallback, name: fallback?.name || 'Collectible' };
+        }
+
+        return { type: 'collectible', reward: collectible, name: collectible.name };
+      }
+
+      case 'super-bonus': {
+        // Récupérer un super bonus aléatoire parmi ceux activés
+        const superBonus = await db.queryOne(
+          `SELECT * FROM super_bonuses
+           WHERE guild_id = $1 AND is_enabled = true
+           ORDER BY RANDOM() LIMIT 1`,
+          [guildId]
+        );
+
+        if (!superBonus) {
+          console.warn('⚠️  [MISSION REWARD] Aucun super bonus actif - fallback collectible random');
+          const fallback = await db.getRandomCollectible(guildId, mission.theme_id);
+          return { type: 'collectible', reward: fallback, name: fallback?.name || 'Collectible' };
+        }
+
+        return { type: 'super-bonus', reward: superBonus, name: superBonus.name };
+      }
+
+      case 'random-collectible':
+      default: {
+        // Comportement par défaut: collectible aléatoire
+        const collectible = await db.getRandomCollectible(guildId, mission.theme_id);
+        return { type: 'collectible', reward: collectible, name: collectible?.name || 'Collectible' };
+      }
+    }
+  }
+
+  /**
+   * Donner un super bonus à un joueur (pour récompense mission)
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur dans la DB
+   * @param {object} superBonus - Objet super bonus
+   * @returns {boolean} Succès
+   */
+  async giveSuperBonusReward(guildId, playerId, superBonus) {
+    try {
+      // Calculer l'expiration (24h par défaut, ou selon configuration)
+      const duration = superBonus.default_duration || 86400; // 24h en secondes
+      const expiresAt = new Date(Date.now() + duration * 1000);
+
+      await db.query(
+        `INSERT INTO player_active_bonuses (guild_id, user_id, bonus_id, expires_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (guild_id, user_id, bonus_id)
+         DO UPDATE SET expires_at = GREATEST(player_active_bonuses.expires_at, $4)`,
+        [guildId, playerId, superBonus.id, expiresAt]
+      );
+
+      console.log(`✅ [MISSION REWARD] Super bonus '${superBonus.name}' donné au joueur ${playerId}`);
+      return true;
+    } catch (error) {
+      console.error('🔴 [MISSION REWARD] Erreur attribution super bonus:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Compléter une mission et donner la récompense configurée
    */
   async completeMission(interaction, mission, player, progress, proof = null) {
     try {
@@ -723,76 +829,130 @@ class MissionHandler {
         [proof, progress.id]
       );
 
-      // Récupérer un collectible aléatoire du thème
-      const randomCollectible = await db.getRandomCollectible(interaction.guildId, mission.theme_id);
+      // 🎁 Récupérer la récompense selon le type configuré (random-collectible, specific-collectible, super-bonus)
+      const rewardResult = await this.getMissionReward(interaction.guildId, mission);
+      console.log(`🎁 [MISSION] Récompense obtenue: type=${rewardResult.type}, name=${rewardResult.name}`);
 
-      if (!randomCollectible) {
+      if (!rewardResult.reward) {
         await interaction.followUp({
-          content: '✅ Mission terminée mais aucun collectible disponible !'
+          content: '✅ Mission terminée mais aucune récompense disponible !'
         });
         return;
       }
 
-      // Vérifier si le joueur l'a déjà
-      const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, randomCollectible.id);
+      let rewardName = rewardResult.name;
 
-      // Ajouter le collectible si pas de doublon
-      if (!alreadyHas) {
-        await db.addCollectible(interaction.guildId, player.id, randomCollectible.id, 'mission');
-        const playerProgress = await db.incrementProgress(interaction.guildId, player.id, mission.theme_id);
+      // ========================================
+      // TRAITEMENT SELON LE TYPE DE RÉCOMPENSE
+      // ========================================
+      if (rewardResult.type === 'super-bonus') {
+        // 🌟 SUPER BONUS REWARD
+        const superBonus = rewardResult.reward;
+        const success = await this.giveSuperBonusReward(interaction.guildId, player.id, superBonus);
 
-        // Message de récompense
-        const rewardEmbed = new EmbedBuilder()
-          .setTitle('🎉 Mission Réussie !')
-          .setDescription(
-            `Félicitations ! Tu as terminé la mission **${mission.name}** !\n\n` +
-            `**Récompense:** ${randomCollectible.name}`
-          )
-          .setColor(branding.secondary_color)
-          .setThumbnail(randomCollectible.image_url)
-          .addFields({
-            name: 'Progression',
-            value: `${playerProgress.collected_count}/${mission.required_items || 7}`,
-            inline: true
-          })
-          .setFooter(getLoomixFooterWithCustomText(`Rareté: ${randomCollectible.rarity}`));
+        if (success) {
+          const duration = superBonus.default_duration || 86400;
+          const durationText = duration >= 86400
+            ? `${Math.floor(duration / 86400)} jour(s)`
+            : `${Math.floor(duration / 3600)} heure(s)`;
 
-        await interaction.channel.send({ embeds: [rewardEmbed] });
+          const rewardEmbed = new EmbedBuilder()
+            .setTitle('🎉 Mission Réussie !')
+            .setDescription(
+              `Félicitations ! Tu as terminé la mission **${mission.name}** !\n\n` +
+              `**Récompense:** ⭐ Super Bonus **${superBonus.name}**`
+            )
+            .setColor('#FFD700') // Gold pour super bonus
+            .addFields(
+              { name: '✨ Effet', value: superBonus.description || 'Bonus spécial', inline: true },
+              { name: '⏱️ Durée', value: durationText, inline: true }
+            )
+            .setFooter(getLoomixFooterWithCustomText('Super Bonus activé !'));
 
-        // Vérifier si collection complète
-        const theme = await db.queryOne('SELECT * FROM themes WHERE id = $1', [mission.theme_id]);
-        if (playerProgress.collected_count >= theme.required_items && !playerProgress.is_completed) {
-          await this.handleCollectionComplete(interaction, player, theme);
+          await interaction.channel.send({ embeds: [rewardEmbed] });
+        } else {
+          // Fallback si erreur d'attribution
+          await interaction.channel.send({
+            content: `✅ Mission **${mission.name}** terminée ! (Erreur d'attribution du super bonus)`
+          });
         }
 
-        // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires
-        try {
-          const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
-            interaction.guild,
-            interaction.user.id,
-            interaction.guildId,
-            mission.theme_id,
-            playerProgress.collected_count
-          );
-          if (newProgressionRole) {
-            console.log(`🏅 [PROGRESSION] Nouveau rôle attribué via mission: ${newProgressionRole.name}`);
-            await interaction.channel.send({
-              content: `🎉 <@${interaction.user.id}> a atteint **${newProgressionRole.percentage}%** de la collection et obtient le rôle **${newProgressionRole.name}** !`
-            });
-          }
-        } catch (error) {
-          console.error('🔴 [PROGRESSION] Erreur check progression roles (mission):', error);
-        }
       } else {
-        // Doublon
-        const embed = new EmbedBuilder()
-          .setTitle('⚠️ Mission réussie mais doublon !')
-          .setDescription(`Tu as terminé la mission mais tu avais déjà **${randomCollectible.name}** dans ta collection !`)
-          .setColor(branding.secondary_color)
-          .setThumbnail(randomCollectible.image_url)
-          .setFooter(await getLoomixFooter(interaction.guildId));
+        // 🎯 COLLECTIBLE REWARD (random ou specific)
+        const collectible = rewardResult.reward;
 
-        await interaction.channel.send({ embeds: [embed] });
+        // Vérifier si le joueur l'a déjà
+        const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, collectible.id);
+
+        // Ajouter le collectible si pas de doublon
+        if (!alreadyHas) {
+          await db.addCollectible(interaction.guildId, player.id, collectible.id, 'mission');
+          const playerProgress = await db.incrementProgress(interaction.guildId, player.id, mission.theme_id);
+
+          // Message de récompense
+          const rewardEmbed = new EmbedBuilder()
+            .setTitle('🎉 Mission Réussie !')
+            .setDescription(
+              `Félicitations ! Tu as terminé la mission **${mission.name}** !\n\n` +
+              `**Récompense:** ${collectible.name}`
+            )
+            .setColor(branding.secondary_color);
+
+          // Thumbnail uniquement si URL valide (non vide)
+          if (collectible.image_url && collectible.image_url.trim()) {
+            rewardEmbed.setThumbnail(collectible.image_url);
+          }
+
+          rewardEmbed.addFields({
+              name: 'Progression',
+              value: `${playerProgress.collected_count}/${mission.required_items || 7}`,
+              inline: true
+            })
+            .setFooter(getLoomixFooterWithCustomText(`Rareté: ${collectible.rarity}`));
+
+          await interaction.channel.send({ embeds: [rewardEmbed] });
+
+          // Vérifier si collection complète
+          const theme = await db.queryOne('SELECT * FROM themes WHERE id = $1', [mission.theme_id]);
+          if (playerProgress.collected_count >= theme.required_items && !playerProgress.is_completed) {
+            await this.handleCollectionComplete(interaction, player, theme);
+          }
+
+          // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires
+          try {
+            const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
+              interaction.guild,
+              interaction.user.id,
+              interaction.guildId,
+              mission.theme_id,
+              playerProgress.collected_count
+            );
+            if (newProgressionRole) {
+              console.log(`🏅 [PROGRESSION] Nouveau rôle attribué via mission: ${newProgressionRole.name}`);
+              await interaction.channel.send({
+                content: `🎉 <@${interaction.user.id}> a atteint **${newProgressionRole.percentage}%** de la collection et obtient le rôle **${newProgressionRole.name}** !`
+              });
+            }
+          } catch (error) {
+            console.error('🔴 [PROGRESSION] Erreur check progression roles (mission):', error);
+          }
+        } else {
+          // Doublon
+          const embed = new EmbedBuilder()
+            .setTitle('⚠️ Mission réussie mais doublon !')
+            .setDescription(`Tu as terminé la mission mais tu avais déjà **${collectible.name}** dans ta collection !`)
+            .setColor(branding.secondary_color)
+            .setFooter(await getLoomixFooter(interaction.guildId));
+
+          // Thumbnail uniquement si URL valide (non vide)
+          if (collectible.image_url && collectible.image_url.trim()) {
+            embed.setThumbnail(collectible.image_url);
+          }
+
+          await interaction.channel.send({ embeds: [embed] });
+        }
+
+        rewardName = collectible.name;
       }
 
       // Annonce : mission réussie
@@ -801,7 +961,7 @@ class MissionHandler {
         interaction.guildId,
         interaction.user.username,
         mission.name,
-        randomCollectible.name
+        rewardName
       );
 
       // 🏆 BADGE TRACKING - Mission Completed
@@ -894,7 +1054,7 @@ class MissionHandler {
 
     try {
       const progressData = await db.queryOne(
-        `SELECT mp.*, p.discord_id, p.username, m.name as mission_name, m.theme_id, t.required_items
+        `SELECT mp.*, p.discord_id, p.username, m.name as mission_name, m.theme_id, m.reward_type, m.reward_data, t.required_items
          FROM mission_progress mp
          JOIN players p ON mp.player_id = p.id
          JOIN missions m ON mp.mission_id = m.id
@@ -923,40 +1083,72 @@ class MissionHandler {
         components: []
       });
 
-      // Donner un collectible aléatoire
-      const randomCollectible = await db.getRandomCollectible(progressData.guild_id, progressData.theme_id);
+      // 🎁 Récupérer la récompense selon le type configuré (random-collectible, specific-collectible, super-bonus)
+      const missionForReward = {
+        theme_id: progressData.theme_id,
+        reward_type: progressData.reward_type,
+        reward_data: progressData.reward_data
+      };
+      const rewardResult = await this.getMissionReward(progressData.guild_id, missionForReward);
       const player = await db.getPlayerByDiscordId(progressData.guild_id, progressData.discord_id);
+      let rewardName = 'Aucune';
 
-      if (randomCollectible) {
-        const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, randomCollectible.id);
+      if (rewardResult.reward) {
+        rewardName = rewardResult.name;
 
-        if (!alreadyHas) {
-          await db.addCollectible(interaction.guildId, player.id, randomCollectible.id, 'mission');
-          const playerProgress = await db.incrementProgress(interaction.guildId, player.id, progressData.theme_id);
+        if (rewardResult.type === 'super-bonus') {
+          // 🌟 SUPER BONUS REWARD
+          const superBonus = rewardResult.reward;
+          const success = await this.giveSuperBonusReward(progressData.guild_id, player.id, superBonus);
 
-          // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires (mission approuvée)
-          try {
-            const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
-              interaction.guild,
-              progressData.discord_id,  // Le joueur (pas l'admin qui approuve)
-              interaction.guildId,
-              progressData.theme_id,
-              playerProgress.collected_count
-            );
-            if (newProgressionRole) {
-              console.log(`🏅 [PROGRESSION] Nouveau rôle attribué via approbation mission: ${newProgressionRole.name}`);
-              await interaction.channel.send({
-                content: `🎉 <@${progressData.discord_id}> a atteint **${newProgressionRole.percentage}%** de la collection et obtient le rôle **${newProgressionRole.name}** !`
-              });
-            }
-          } catch (error) {
-            console.error('🔴 [PROGRESSION] Erreur check progression roles (approve):', error);
+          if (success) {
+            const duration = superBonus.default_duration || 86400;
+            const durationText = duration >= 86400
+              ? `${Math.floor(duration / 86400)} jour(s)`
+              : `${Math.floor(duration / 3600)} heure(s)`;
+
+            await interaction.channel.send({
+              content: `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> !\n🎁 Récompense : ⭐ Super Bonus **${superBonus.name}** (${durationText})`
+            });
+          } else {
+            await interaction.channel.send({
+              content: `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> ! (Erreur d'attribution du super bonus)`
+            });
           }
-        }
 
-        await interaction.channel.send({
-          content: `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> !\n🎁 Récompense : **${randomCollectible.name}**`
-        });
+        } else {
+          // 🎯 COLLECTIBLE REWARD (random ou specific)
+          const collectible = rewardResult.reward;
+          const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, collectible.id);
+
+          if (!alreadyHas) {
+            await db.addCollectible(interaction.guildId, player.id, collectible.id, 'mission');
+            const playerProgress = await db.incrementProgress(interaction.guildId, player.id, progressData.theme_id);
+
+            // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires (mission approuvée)
+            try {
+              const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
+                interaction.guild,
+                progressData.discord_id,  // Le joueur (pas l'admin qui approuve)
+                interaction.guildId,
+                progressData.theme_id,
+                playerProgress.collected_count
+              );
+              if (newProgressionRole) {
+                console.log(`🏅 [PROGRESSION] Nouveau rôle attribué via approbation mission: ${newProgressionRole.name}`);
+                await interaction.channel.send({
+                  content: `🎉 <@${progressData.discord_id}> a atteint **${newProgressionRole.percentage}%** de la collection et obtient le rôle **${newProgressionRole.name}** !`
+                });
+              }
+            } catch (error) {
+              console.error('🔴 [PROGRESSION] Erreur check progression roles (approve):', error);
+            }
+          }
+
+          await interaction.channel.send({
+            content: `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> !\n🎁 Récompense : **${collectible.name}**`
+          });
+        }
       }
 
       // Annonce : mission approuvée
@@ -966,7 +1158,7 @@ class MissionHandler {
         progressData.username,
         progressData.mission_name,
         interaction.user.username,
-        randomCollectible ? randomCollectible.name : 'Aucune'
+        rewardName
       );
 
       // Notifier le joueur
@@ -1425,13 +1617,18 @@ class MissionHandler {
         });
       }
 
-      // Créer un select menu avec tous les mots-clés
+      // Limiter à 25 options (limite Discord pour les select menus)
+      const limitedKeywords = keywords.slice(0, 25);
+      const hasMore = keywords.length > 25;
+
+      // Créer un select menu avec les mots-clés (max 25)
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(`select_keyword_delete_${missionId}`)
         .setPlaceholder('Choisir un mot-clé à supprimer')
         .addOptions(
-          keywords.map(kw => ({
-            label: kw.keyword,
+          limitedKeywords.map(kw => ({
+            // Tronquer le label à 100 caractères max (limite Discord)
+            label: kw.keyword.length > 100 ? kw.keyword.substring(0, 97) + '...' : kw.keyword,
             value: kw.id.toString(),
             description: kw.target_channel_id ? `Canal: ${kw.target_channel_id}` : 'Tous les canaux'
           }))
@@ -1439,8 +1636,13 @@ class MissionHandler {
 
       const row = new ActionRowBuilder().addComponents(selectMenu);
 
+      let content = '🗑️ **Sélectionne le mot-clé à supprimer:**';
+      if (hasMore) {
+        content += `\n\n⚠️ *Seuls les 25 premiers mots-clés sont affichés (${keywords.length} au total). Utilisez l'Admin Panel pour gérer tous les mots-clés.*`;
+      }
+
       await interaction.reply({
-        content: '🗑️ **Sélectionne le mot-clé à supprimer:**',
+        content,
         components: [row],
         flags: 64
       });
@@ -2286,6 +2488,359 @@ class MissionHandler {
 
     } catch (error) {
       console.error('🔴 Erreur recoverStaleMissions:', error);
+    }
+  }
+
+  /**
+   * Handler pour afficher l'interface de configuration de récompense d'une mission
+   * Bouton: mission_reward_config_{missionId}
+   */
+  async handleRewardConfig(interaction) {
+    try {
+      await interaction.deferUpdate();
+      const guildId = interaction.guildId;
+
+      // Extraire missionId depuis le customId: mission_reward_config_{missionId}
+      const parts = interaction.customId.split('_');
+      const missionId = parseInt(parts[3]);
+
+      // Récupérer la mission
+      const mission = await db.getMissionById(guildId, missionId);
+      if (!mission) {
+        return interaction.editReply({
+          content: '❌ Mission introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      // Déterminer le type de récompense actuel
+      const currentRewardType = mission.reward_type || 'random-collectible';
+      let currentRewardLabel = '🎲 Collectible aléatoire';
+      let currentRewardDetails = 'Le joueur recevra un collectible au hasard selon les probabilités de rareté.';
+
+      if (currentRewardType === 'specific-collectible' && mission.reward_data) {
+        const rewardData = typeof mission.reward_data === 'string'
+          ? JSON.parse(mission.reward_data)
+          : mission.reward_data;
+        if (rewardData.collectible_id) {
+          const collectible = await db.queryOne(
+            'SELECT name, rarity FROM collectibles WHERE id = $1 AND guild_id = $2',
+            [rewardData.collectible_id, guildId]
+          );
+          if (collectible) {
+            currentRewardLabel = `🎯 ${collectible.name} (${collectible.rarity})`;
+            currentRewardDetails = `Le joueur recevra exactement ce collectible.`;
+          }
+        }
+      } else if (currentRewardType === 'super-bonus') {
+        currentRewardLabel = '⭐ Super Bonus';
+        currentRewardDetails = 'Le joueur recevra un super bonus aléatoire.';
+      }
+
+      const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎁 Configuration de la Récompense')
+        .setDescription(
+          `**Mission:** ${mission.name}\n` +
+          `**Type:** ${mission.type}\n\n` +
+          `**Récompense actuelle:** ${currentRewardLabel}\n` +
+          `*${currentRewardDetails}*\n\n` +
+          `Sélectionnez le type de récompense pour cette mission:`
+        )
+        .setColor('#10b981');
+
+      // Menu de sélection du type de récompense
+      const rewardTypeMenu = new StringSelectMenuBuilder()
+        .setCustomId(`mission_reward_type_${missionId}`)
+        .setPlaceholder('Choisir le type de récompense')
+        .addOptions([
+          {
+            label: 'Collectible aléatoire',
+            description: 'Un collectible au hasard selon les probabilités de rareté',
+            value: 'random-collectible',
+            emoji: '🎲',
+            default: currentRewardType === 'random-collectible'
+          },
+          {
+            label: 'Collectible spécifique',
+            description: 'Un collectible précis défini par l\'admin',
+            value: 'specific-collectible',
+            emoji: '🎯',
+            default: currentRewardType === 'specific-collectible'
+          },
+          {
+            label: 'Super Bonus',
+            description: 'Un super bonus aléatoire',
+            value: 'super-bonus',
+            emoji: '⭐',
+            default: currentRewardType === 'super-bonus'
+          }
+        ]);
+
+      const selectRow = new ActionRowBuilder().addComponents(rewardTypeMenu);
+
+      // Bouton retour
+      const backButton = new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('↩️ Retour à la mission')
+        .setStyle(ButtonStyle.Secondary);
+
+      const buttonRow = new ActionRowBuilder().addComponents(backButton);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [selectRow, buttonRow]
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleRewardConfig:', error);
+      try {
+        await interaction.editReply({
+          content: '❌ Erreur lors de la configuration de la récompense.',
+          embeds: [],
+          components: []
+        });
+      } catch (e) {
+        // Ignorer
+      }
+    }
+  }
+
+  /**
+   * Handler pour la sélection du type de récompense
+   * SelectMenu: mission_reward_type_{missionId}
+   */
+  async handleRewardTypeSelect(interaction) {
+    try {
+      await interaction.deferUpdate();
+      const guildId = interaction.guildId;
+
+      // Extraire missionId depuis le customId: mission_reward_type_{missionId}
+      const parts = interaction.customId.split('_');
+      const missionId = parseInt(parts[3]);
+      const selectedType = interaction.values[0];
+
+      // Récupérer la mission
+      const mission = await db.getMissionById(guildId, missionId);
+      if (!mission) {
+        return interaction.editReply({
+          content: '❌ Mission introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      // Si "specific-collectible", afficher le sélecteur de collectible
+      if (selectedType === 'specific-collectible') {
+        // Récupérer les collectibles du thème actif
+        const theme = await db.getActiveTheme(guildId);
+        if (!theme) {
+          return interaction.editReply({
+            content: '❌ Aucun thème actif. Activez un thème pour configurer un collectible spécifique.',
+            embeds: [],
+            components: []
+          });
+        }
+
+        const collectibles = await db.queryAll(
+          'SELECT id, name, rarity FROM collectibles WHERE guild_id = $1 AND theme_id = $2 ORDER BY rarity, name',
+          [guildId, theme.id]
+        );
+
+        if (!collectibles || collectibles.length === 0) {
+          return interaction.editReply({
+            content: '❌ Aucun collectible trouvé dans le thème actif.',
+            embeds: [],
+            components: []
+          });
+        }
+
+        const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+
+        const embed = new EmbedBuilder()
+          .setTitle('🎯 Sélection du Collectible')
+          .setDescription(
+            `**Mission:** ${mission.name}\n\n` +
+            `Choisissez le collectible que le joueur recevra en récompense:`
+          )
+          .setColor('#3b82f6');
+
+        // Grouper les collectibles par rareté (max 25 options)
+        const limitedCollectibles = collectibles.slice(0, 25);
+        const rarityEmoji = {
+          'common': '⚪',
+          'rare': '🔵',
+          'epic': '🟣',
+          'legendary': '🟡',
+          'mythic': '🔴'
+        };
+
+        const collectibleMenu = new StringSelectMenuBuilder()
+          .setCustomId(`mission_reward_collectible_${missionId}`)
+          .setPlaceholder('Choisir un collectible')
+          .addOptions(
+            limitedCollectibles.map(c => ({
+              label: c.name.slice(0, 100),
+              description: c.rarity,
+              value: c.id.toString(),
+              emoji: rarityEmoji[c.rarity] || '⚪'
+            }))
+          );
+
+        const selectRow = new ActionRowBuilder().addComponents(collectibleMenu);
+
+        // Bouton retour
+        const backButton = new ButtonBuilder()
+          .setCustomId(`mission_reward_config_${missionId}`)
+          .setLabel('↩️ Retour aux types')
+          .setStyle(ButtonStyle.Secondary);
+
+        const buttonRow = new ActionRowBuilder().addComponents(backButton);
+
+        return interaction.editReply({
+          embeds: [embed],
+          components: [selectRow, buttonRow]
+        });
+      }
+
+      // Pour random-collectible ou super-bonus, sauvegarder directement
+      await db.query(
+        `UPDATE missions SET reward_type = $1, reward_data = NULL WHERE id = $2 AND guild_id = $3`,
+        [selectedType, missionId, guildId]
+      );
+
+      const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+
+      const typeLabels = {
+        'random-collectible': '🎲 Collectible aléatoire',
+        'super-bonus': '⭐ Super Bonus'
+      };
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Récompense Configurée')
+        .setDescription(
+          `**Mission:** ${mission.name}\n\n` +
+          `**Nouvelle récompense:** ${typeLabels[selectedType]}`
+        )
+        .setColor('#10b981');
+
+      // Bouton retour à la mission
+      const backButton = new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('↩️ Retour à la mission')
+        .setStyle(ButtonStyle.Secondary);
+
+      const buttonRow = new ActionRowBuilder().addComponents(backButton);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [buttonRow]
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleRewardTypeSelect:', error);
+      try {
+        await interaction.editReply({
+          content: '❌ Erreur lors de la sélection du type de récompense.',
+          embeds: [],
+          components: []
+        });
+      } catch (e) {
+        // Ignorer
+      }
+    }
+  }
+
+  /**
+   * Handler pour la sélection d'un collectible spécifique comme récompense
+   * SelectMenu: mission_reward_collectible_{missionId}
+   */
+  async handleRewardCollectibleSelect(interaction) {
+    try {
+      await interaction.deferUpdate();
+      const guildId = interaction.guildId;
+
+      // Extraire missionId depuis le customId: mission_reward_collectible_{missionId}
+      const parts = interaction.customId.split('_');
+      const missionId = parseInt(parts[3]);
+      const collectibleId = parseInt(interaction.values[0]);
+
+      // Récupérer la mission
+      const mission = await db.getMissionById(guildId, missionId);
+      if (!mission) {
+        return interaction.editReply({
+          content: '❌ Mission introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      // Récupérer le collectible sélectionné
+      const collectible = await db.queryOne(
+        'SELECT id, name, rarity FROM collectibles WHERE id = $1 AND guild_id = $2',
+        [collectibleId, guildId]
+      );
+
+      if (!collectible) {
+        return interaction.editReply({
+          content: '❌ Collectible introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      // Sauvegarder la configuration
+      const rewardData = JSON.stringify({ collectible_id: collectibleId });
+      await db.query(
+        `UPDATE missions SET reward_type = 'specific-collectible', reward_data = $1 WHERE id = $2 AND guild_id = $3`,
+        [rewardData, missionId, guildId]
+      );
+
+      const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+
+      const rarityEmoji = {
+        'common': '⚪',
+        'rare': '🔵',
+        'epic': '🟣',
+        'legendary': '🟡',
+        'mythic': '🔴'
+      };
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Récompense Configurée')
+        .setDescription(
+          `**Mission:** ${mission.name}\n\n` +
+          `**Récompense:** 🎯 Collectible spécifique\n` +
+          `**Collectible:** ${rarityEmoji[collectible.rarity] || '⚪'} ${collectible.name} (${collectible.rarity})`
+        )
+        .setColor('#10b981');
+
+      // Bouton retour à la mission
+      const backButton = new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('↩️ Retour à la mission')
+        .setStyle(ButtonStyle.Secondary);
+
+      const buttonRow = new ActionRowBuilder().addComponents(backButton);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [buttonRow]
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleRewardCollectibleSelect:', error);
+      try {
+        await interaction.editReply({
+          content: '❌ Erreur lors de la sélection du collectible.',
+          embeds: [],
+          components: []
+        });
+      } catch (e) {
+        // Ignorer
+      }
     }
   }
 }

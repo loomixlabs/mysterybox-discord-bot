@@ -6,8 +6,9 @@ const oauthGenerator = require('../../utils/oauthGenerator');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('check-setup')
-    .setDescription('Diagnostic complet de la configuration du bot sur ce serveur')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    .setDescription('Diagnostic complet de la configuration du bot sur ce serveur'),
+    // Note: Pas de setDefaultMemberPermissions pour permettre aux Super Admins
+    // d'accéder même sans rôle Administrator Discord. Vérification dans execute().
 
   async execute(interaction) {
     // Vérifier les permissions
