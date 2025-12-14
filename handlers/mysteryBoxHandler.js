@@ -26,11 +26,12 @@ class MysteryBoxHandler {
     // Récupérer le guildId si non fourni
     guildId = guildId || channel.guild.id;
 
-    // Récupérer le thème, sa config et le branding avec guild_id
-    const [theme, config, branding] = await Promise.all([
+    // Récupérer le thème, sa config, le branding et les messages avec guild_id
+    const [theme, config, branding, themeMessages] = await Promise.all([
       db.queryOne('SELECT * FROM themes WHERE id = $1 AND guild_id = $2', [themeId, guildId]),
       db.getThemeConfig(guildId, themeId),
-      db.getGuildBranding(guildId)
+      db.getGuildBranding(guildId),
+      db.getThemeMessages(guildId, themeId)
     ]);
 
     if (!theme || !config) {
@@ -67,10 +68,11 @@ class MysteryBoxHandler {
       embed.setImage(config.mystery_box_image);
     }
 
-    // Créer le bouton
+    // Créer le bouton avec label personnalisable
+    const buttonLabel = themeMessages?.mystery_box_button_label || '🎯 Ouvrir la boîte';
     const button = new ButtonBuilder()
       .setCustomId(`mystery_open_${content.type}_${content.id}`)
-      .setLabel('🎯 Ouvrir la boîte')
+      .setLabel(buttonLabel)
       .setStyle(ButtonStyle.Primary);
 
     const row = new ActionRowBuilder().addComponents(button);
@@ -225,6 +227,95 @@ class MysteryBoxHandler {
 
     console.log(`✅ Rareté sélectionnée: ${selectedRarity} (roll: ${rand.toFixed(2)})`);
     console.log(`   Collectible: ${selected.name}`);
+
+    return selected;
+  }
+
+  /**
+   * Sélectionner un piège de manière pondérée selon la sévérité
+   * Sévérités: 1=Minor, 2=Low, 3=Medium, 4=High, 5=Extreme
+   * @param {array} traps - Liste des pièges disponibles
+   * @param {object} config - Configuration du thème (contient trap_severity_1..5)
+   * @returns {object} Piège sélectionné
+   */
+  selectTrapWeighted(traps, config) {
+    // Pourcentages par sévérité depuis la config (défauts: 45/30/15/8/2)
+    const percentages = {
+      1: config.trap_severity_1 || 45,  // Minor (⭐)
+      2: config.trap_severity_2 || 30,  // Low (⭐⭐)
+      3: config.trap_severity_3 || 15,  // Medium (⭐⭐⭐)
+      4: config.trap_severity_4 || 8,   // High (⭐⭐⭐⭐)
+      5: config.trap_severity_5 || 2    // Extreme (⭐⭐⭐⭐⭐)
+    };
+
+    console.log(`🎲 Pourcentages sévérité pièges:`, percentages);
+
+    // Grouper les pièges par sévérité
+    const bySeverity = {
+      1: traps.filter(t => t.severity === 1),
+      2: traps.filter(t => t.severity === 2),
+      3: traps.filter(t => t.severity === 3),
+      4: traps.filter(t => t.severity === 4),
+      5: traps.filter(t => t.severity === 5)
+    };
+
+    console.log(`📊 Distribution pièges: S1=${bySeverity[1].length}, S2=${bySeverity[2].length}, S3=${bySeverity[3].length}, S4=${bySeverity[4].length}, S5=${bySeverity[5].length}`);
+
+    // Sélection de la sévérité basée sur les pourcentages (probabilité cumulative)
+    const rand = Math.random() * 100;
+    let cumulative = 0;
+    let selectedSeverity = 3; // Fallback: Medium
+
+    for (let severity = 1; severity <= 5; severity++) {
+      cumulative += percentages[severity];
+      if (rand < cumulative && bySeverity[severity].length > 0) {
+        selectedSeverity = severity;
+        break;
+      }
+    }
+
+    // Fallback: Si la sévérité sélectionnée n'a pas de pièges, descendre vers moins sévère
+    if (bySeverity[selectedSeverity].length === 0) {
+      console.log(`⚠️ Aucun piège de sévérité ${selectedSeverity}, recherche fallback...`);
+
+      // Chercher d'abord les sévérités inférieures (moins sévères)
+      for (let s = selectedSeverity - 1; s >= 1; s--) {
+        if (bySeverity[s].length > 0) {
+          selectedSeverity = s;
+          console.log(`✅ Fallback vers sévérité ${s} (moins sévère)`);
+          break;
+        }
+      }
+
+      // Si toujours vide, chercher sévérités supérieures
+      if (bySeverity[selectedSeverity].length === 0) {
+        for (let s = selectedSeverity + 1; s <= 5; s++) {
+          if (bySeverity[s].length > 0) {
+            selectedSeverity = s;
+            console.log(`✅ Fallback vers sévérité ${s} (plus sévère)`);
+            break;
+          }
+        }
+      }
+
+      // Ultime fallback: n'importe quel piège disponible
+      if (bySeverity[selectedSeverity].length === 0) {
+        const allAvailable = traps.filter(t => t.severity >= 1 && t.severity <= 5);
+        if (allAvailable.length > 0) {
+          const fallbackTrap = allAvailable[Math.floor(Math.random() * allAvailable.length)];
+          console.log(`✅ Fallback ultime - Piège sélectionné: ${fallbackTrap.name} (sévérité ${fallbackTrap.severity})`);
+          return fallbackTrap;
+        }
+      }
+    }
+
+    // Sélection uniforme parmi les pièges de la sévérité choisie
+    const trapsOfSeverity = bySeverity[selectedSeverity];
+    const selected = trapsOfSeverity[Math.floor(Math.random() * trapsOfSeverity.length)];
+
+    const severityLabels = { 1: 'Minor', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Extreme' };
+    console.log(`✅ Sévérité sélectionnée: ${selectedSeverity} (${severityLabels[selectedSeverity]}) - roll: ${rand.toFixed(2)}`);
+    console.log(`   Piège: ${selected.name} (type: ${selected.type})`);
 
     return selected;
   }
@@ -407,8 +498,12 @@ class MysteryBoxHandler {
       // Sélection pondérée par rareté pour les collectibles
       item = this.selectCollectibleWeighted(items, config, customPercentages);
       console.log(`🎯 Collectible sélectionné (pondéré): ${item.name} (${item.rarity})`);
+    } else if (type === 'trap') {
+      // Sélection pondérée par sévérité pour les pièges
+      item = this.selectTrapWeighted(items, config);
+      console.log(`🎯 Piège sélectionné (pondéré): ${item.name} (sévérité ${item.severity})`);
     } else {
-      // Sélection uniforme pour missions et pièges (pas de rareté)
+      // Sélection uniforme pour missions seulement
       item = items[Math.floor(Math.random() * items.length)];
     }
 
@@ -461,15 +556,45 @@ class MysteryBoxHandler {
       });
     }
 
-    // MARQUER IMMÉDIATEMENT LA BOÎTE COMME GAGNÉE (avant le traitement long)
-    await db.updateGiveWinner(interaction.message.id, interaction.user.id, interaction.user.username);
-
     // Récupérer le thème et sa config pour le message de félicitations
     const theme = await db.getActiveTheme(interaction.guildId);
     const config = await db.getThemeConfig(interaction.guildId, theme.id);
 
-    // Rollér le contenu pour cette boîte
+    // ⚠️ IMPORTANT: Roller le contenu AVANT de marquer comme gagnée
+    // Cela permet de vérifier si le joueur a déjà une mission active AVANT de consommer la boîte
     const content = await this.rollMysteryContent(interaction.guildId, theme.id, config, type, itemId, interaction.user.id);
+
+    // 🔒 VÉRIFICATION MISSION EXISTANTE - AVANT de consommer la boîte
+    // Si le contenu rollé est une mission et que le joueur en a déjà une active,
+    // on ne consomme PAS la boîte pour qu'un autre joueur puisse l'ouvrir
+    if (content.type === 'mission') {
+      const existingMission = await db.queryOne(`
+        SELECT mp.id, mp.thread_id, m.name
+        FROM mission_progress mp
+        JOIN missions m ON mp.mission_id = m.id
+        WHERE mp.player_id = $1
+          AND mp.guild_id = $2
+          AND mp.status = 'in_progress'
+        LIMIT 1
+      `, [player.id, interaction.guildId]);
+
+      if (existingMission) {
+        console.log(`⚠️ [MYSTERY BOX] Joueur ${interaction.user.tag} a déjà une mission active: ${existingMission.name}`);
+
+        // Construire le lien vers le thread si disponible
+        const threadLink = existingMission.thread_id
+          ? `\n🔗 **Accéder à ta mission:** <#${existingMission.thread_id}>`
+          : '';
+
+        return interaction.followUp({
+          content: `⚠️ Tu as déjà une mission en cours: **${existingMission.name}**${threadLink}\n\n📋 Termine-la d'abord avant d'en accepter une nouvelle !\nLa boîte reste disponible pour les autres joueurs.`,
+          flags: 64
+        });
+      }
+    }
+
+    // ✅ MARQUER LA BOÎTE COMME GAGNÉE (après vérification mission)
+    await db.updateGiveWinner(interaction.message.id, interaction.user.id, interaction.user.username);
 
     // 👁️ VISION DIVINE - Vérifier si le joueur a le bonus actif
     const visionDivineResult = await superBonusHandler.checkAndRevealVisionDivine(
@@ -597,6 +722,12 @@ class MysteryBoxHandler {
       db.getGuildBranding(interaction.guildId)
     ]);
 
+    // Récupérer les messages personnalisés du thème (fallback system)
+    let themeMessages = null;
+    if (collectible) {
+      themeMessages = await db.getThemeMessages(interaction.guildId, collectible.theme_id);
+    }
+
     if (!collectible) {
       return interaction.followUp({
         content: '❌ Collectible introuvable.',
@@ -687,7 +818,11 @@ class MysteryBoxHandler {
         common: '#95A5A6'
       };
 
-      let description = `Tu as déjà **${collectible.name}** dans ta collection !`;
+      // Message personnalisé avec fallback (priority: themeMessages > hardcoded)
+      let duplicateMessage = themeMessages?.duplicate_collectible ||
+        `Tu as déjà **{name}** dans ta collection !`;
+      // Remplacer les variables
+      let description = duplicateMessage.replace(/\{name\}/g, collectible.name);
 
       if (bonusCollectible) {
         description += `\n\n💰 **Mais grâce au Jackpot x2, tu as reçu un collectible bonus !**`;
@@ -730,9 +865,15 @@ class MysteryBoxHandler {
       console.log(`💰 [JACKPOT X2] Charge consommée - Restant: ${jackpotBonus.remaining_charges - 1}`);
     }
 
-    // Message de révélation
-    let description = collectible.reveal_message ||
-      `Félicitations ! Tu as trouvé **${collectible.name}** !`;
+    // Message de révélation avec fallback (priority: reveal_message > themeMessages > hardcoded)
+    let successMessage = collectible.reveal_message ||
+      themeMessages?.collectible_obtained ||
+      `Félicitations ! Tu as trouvé **{name}** ! ({count}/{total})`;
+    // Remplacer les variables
+    let description = successMessage
+      .replace(/\{name\}/g, collectible.name)
+      .replace(/\{count\}/g, progress?.collected_count || '?')
+      .replace(/\{total\}/g, collectible.required_items || '?');
 
     if (bonusCollectible) {
       description += `\n\n💰 **JACKPOT X2 ACTIVÉ !**\n` +
@@ -761,8 +902,12 @@ class MysteryBoxHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${bonusCollectible ? '💰 JACKPOT X2 ACTIVÉ !' : '🎉 Collectible Obtenu !'}`)
       .setDescription(description)
-      .setColor(collectible.role_color || rarityColors[collectible.rarity] || branding.secondary_color)
-      .setThumbnail(collectible.image_url);
+      .setColor(collectible.role_color || rarityColors[collectible.rarity] || branding.secondary_color);
+
+    // Thumbnail uniquement si URL valide (non vide)
+    if (collectible.image_url && collectible.image_url.trim()) {
+      embed.setThumbnail(collectible.image_url);
+    }
 
     // Collectible principal
     embed.addFields({
@@ -779,8 +924,10 @@ class MysteryBoxHandler {
         inline: false
       });
 
-      // Image du collectible bonus
-      embed.setImage(bonusCollectible.image_url);
+      // Image du collectible bonus uniquement si URL valide
+      if (bonusCollectible.image_url && bonusCollectible.image_url.trim()) {
+        embed.setImage(bonusCollectible.image_url);
+      }
     }
 
     embed.setFooter(getLoomixFooterWithCustomText(`${bonusCollectible ? '2 collectibles obtenus !' : `Rareté: ${collectible.rarity}`}`))
@@ -836,12 +983,61 @@ class MysteryBoxHandler {
 
   /**
    * Révéler une mission
+   * 🔒 Protection contre les missions multiples (race condition fix)
    */
   async revealMission(interaction, missionId, player) {
-    const [mission, branding] = await Promise.all([
+    // 🔒 RACE CONDITION FIX: Vérifier si le joueur a déjà une mission en cours
+    const existingMission = await db.queryOne(`
+      SELECT mp.id, mp.thread_id, mp.created_at, m.name as mission_name
+      FROM mission_progress mp
+      JOIN missions m ON mp.mission_id = m.id
+      WHERE mp.guild_id = $1
+        AND mp.player_id = $2
+        AND mp.status = 'in_progress'
+      ORDER BY mp.created_at DESC
+      LIMIT 1
+    `, [interaction.guildId, player.id]);
+
+    if (existingMission) {
+      console.log(`⚠️ [MISSION] Joueur ${player.id} a déjà une mission en cours: ${existingMission.mission_name}`);
+
+      // Vérifier si le thread existe toujours
+      let threadMention = '';
+      if (existingMission.thread_id) {
+        try {
+          const existingThread = await interaction.client.channels.fetch(existingMission.thread_id);
+          if (existingThread) {
+            threadMention = `\n\n📌 Retrouve ta mission ici: <#${existingMission.thread_id}>`;
+          }
+        } catch (e) {
+          // Thread introuvable - on peut le nettoyer et continuer
+          console.log(`🧹 [MISSION] Thread ${existingMission.thread_id} introuvable - nettoyage en cours`);
+          await db.query(`UPDATE mission_progress SET status = 'failed' WHERE id = $1`, [existingMission.id]);
+          // Continuer avec la nouvelle mission
+          existingMission.cleaned = true;
+        }
+      }
+
+      // Si la mission n'a pas été nettoyée, empêcher la nouvelle mission
+      if (!existingMission.cleaned) {
+        return interaction.followUp({
+          content: `⚠️ **Tu as déjà une mission en cours !**\n\n🎯 Mission: **${existingMission.mission_name}**${threadMention}\n\n💡 Termine-la avant d'en commencer une nouvelle.`,
+          flags: 64
+        });
+      }
+    }
+
+    // Récupérer la mission, le branding, le thème actif et ses messages
+    const [mission, branding, activeTheme] = await Promise.all([
       db.getMissionById(interaction.guildId, missionId),
-      db.getGuildBranding(interaction.guildId)
+      db.getGuildBranding(interaction.guildId),
+      db.getActiveTheme(interaction.guildId)
     ]);
+
+    // Récupérer les messages du thème pour personnalisation
+    const themeMessages = activeTheme
+      ? await db.getThemeMessages(interaction.guildId, activeTheme.id)
+      : null;
 
     if (!mission) {
       return interaction.followUp({
@@ -884,12 +1080,23 @@ class MysteryBoxHandler {
       }
     }
 
-    // Message de révélation dans le salon public
+    // Message de révélation dans le salon public avec fallback personnalisable
+    // Priority: themeMessages.mission_revealed → hardcoded default
+    let missionRevealedMessage = themeMessages?.mission_revealed ||
+      `Tu as déclenché une mission secrète !\n\nUn thread privé a été créé pour toi. Consulte-le pour découvrir ta mission !`;
+
+    // Remplacer les variables disponibles
+    missionRevealedMessage = missionRevealedMessage.replace(/\{player\}/g, interaction.user.username);
+
+    // GIF de mission personnalisable avec fallback
+    const missionRevealedGif = themeMessages?.mission_revealed_gif ||
+      'https://media.giphy.com/media/xT9IgBwI5SLzZGV2PC/giphy.gif';
+
     const revealEmbed = new EmbedBuilder()
       .setTitle('📋 MISSION DÉBLOQUÉE !')
-      .setDescription(`Tu as déclenché une mission secrète !\n\nUn thread privé a été créé pour toi. Consulte-le pour découvrir ta mission !`)
+      .setDescription(missionRevealedMessage)
       .setColor(branding.secondary_color)
-      .setImage('https://media.giphy.com/media/xT9IgBwI5SLzZGV2PC/giphy.gif')
+      .setImage(missionRevealedGif)
       .setFooter(await getLoomixFooter(interaction.guildId));
 
     await interaction.followUp({ embeds: [revealEmbed], flags: 64 });
@@ -1014,8 +1221,12 @@ class MysteryBoxHandler {
       .setTitle('💀 PIÈGE !')
       .setDescription(`**${trap.name}**\n\n${trap.description}`)
       .setColor(branding.secondary_color)
-      .setImage(trap.image_url)
       .setFooter(await getLoomixFooter(interaction.guildId));
+
+    // Image du piège uniquement si URL valide (non vide)
+    if (trap.image_url && trap.image_url.trim()) {
+      embed.setImage(trap.image_url);
+    }
 
     await interaction.followUp({ embeds: [embed], flags: 64 });
 
@@ -1430,8 +1641,12 @@ class MysteryBoxHandler {
   async applyTrapShame(interaction, trap, player) {
     const shameChannel = interaction.guild.channels.cache.get(trap.shame_channel_id || process.env.ANNOUNCE_CHANNEL_ID);
 
+    // Message de honte par défaut si vide
+    const defaultShameMsg = `🤡 {player} est tombé dans le piège "${trap.name}" !`;
+    const shameTemplate = (trap.shame_message && trap.shame_message.trim()) ? trap.shame_message : defaultShameMsg;
+
     // Remplacer la variable {player} par la mention du joueur
-    const shameMsg = trap.shame_message.replace('{player}', `<@${interaction.user.id}>`);
+    const shameMsg = shameTemplate.replace('{player}', `<@${interaction.user.id}>`);
 
     if (shameChannel) {
       await shameChannel.send(shameMsg);
@@ -1484,33 +1699,72 @@ class MysteryBoxHandler {
    * Gérer la collection complète
    */
   async handleCollectionComplete(interaction, player, collectible) {
-    const [theme, branding] = await Promise.all([
+    const [theme, branding, themeMessages] = await Promise.all([
       db.queryOne('SELECT * FROM themes WHERE id = $1 AND guild_id = $2', [collectible.theme_id, interaction.guildId]),
-      db.getGuildBranding(interaction.guildId)
+      db.getGuildBranding(interaction.guildId),
+      db.getThemeMessages(interaction.guildId, collectible.theme_id)
     ]);
 
     // Marquer comme complété
     await db.completeCollection(interaction.guildId, player.id, collectible.theme_id);
 
     // Attribuer le rôle final (par ID Discord, pas par nom)
-    if (theme.final_role_discord_id) {
+    // LAZY CREATION: Si le rôle n'existe pas encore (theme-builder), le créer automatiquement
+    let finalRoleId = theme.final_role_discord_id;
+
+    // Lazy creation du rôle si final_role_name existe mais pas final_role_discord_id
+    if (!finalRoleId && theme.final_role_name) {
+      try {
+        console.log(`🎨 [LAZY CREATION] Création du rôle de complétion "${theme.final_role_name}" pour le thème ${theme.name}`);
+
+        // Parser la couleur (format #RRGGBB ou nombre)
+        let roleColor = '#FFD700'; // Or par défaut
+        if (theme.final_role_color) {
+          roleColor = theme.final_role_color.startsWith('#')
+            ? parseInt(theme.final_role_color.replace('#', ''), 16)
+            : theme.final_role_color;
+        }
+
+        const newRole = await interaction.guild.roles.create({
+          name: theme.final_role_name,
+          color: roleColor,
+          hoist: true,
+          mentionable: true,
+          reason: `Lazy creation - Rôle de complétion pour le thème "${theme.name}"`
+        });
+
+        // Sauvegarder l'ID du rôle en base
+        await db.query(
+          'UPDATE themes SET final_role_discord_id = $1 WHERE id = $2 AND guild_id = $3',
+          [newRole.id, theme.id, interaction.guildId]
+        );
+
+        finalRoleId = newRole.id;
+        console.log(`✅ [LAZY CREATION] Rôle "${newRole.name}" créé avec succès (ID: ${newRole.id})`);
+      } catch (error) {
+        console.error(`❌ [LAZY CREATION] Erreur lors de la création du rôle:`, error);
+      }
+    }
+
+    // Attribuer le rôle au joueur
+    if (finalRoleId) {
       try {
         // IMPORTANT: Utiliser fetch() au lieu de cache.get() pour garantir la récupération du rôle
         // car le cache peut ne pas contenir le rôle si le bot vient de redémarrer
-        const finalRole = await interaction.guild.roles.fetch(theme.final_role_discord_id);
+        const finalRole = await interaction.guild.roles.fetch(finalRoleId);
 
         if (finalRole) {
           const member = await interaction.guild.members.fetch(interaction.user.id);
           await member.roles.add(finalRole);
           console.log(`✅ Rôle "${finalRole.name}" (ID: ${finalRole.id}) attribué à ${interaction.user.tag}`);
         } else {
-          console.error(`❌ Rôle avec ID ${theme.final_role_discord_id} introuvable dans le serveur ${interaction.guildId}`);
+          console.error(`❌ Rôle avec ID ${finalRoleId} introuvable dans le serveur ${interaction.guildId}`);
         }
       } catch (error) {
-        console.error(`❌ Erreur lors de l'attribution du rôle (ID: ${theme.final_role_discord_id}):`, error);
+        console.error(`❌ Erreur lors de l'attribution du rôle (ID: ${finalRoleId}):`, error);
       }
     } else {
-      console.log('⚠️  Aucun rôle configuré pour ce thème');
+      console.log('⚠️  Aucun rôle configuré pour ce thème (final_role_name manquant)');
     }
 
     // Annonce publique via le système d'annonces
@@ -1521,14 +1775,16 @@ class MysteryBoxHandler {
       theme.final_role_name
     );
 
-    // MP au joueur
+    // MP au joueur avec message personnalisé (fallback system)
+    let completeMessage = themeMessages?.collection_complete ||
+      `👑 **INCROYABLE !** Tu as complété la collection ! Tu obtiens le rôle **{role}** !`;
+    // Remplacer les variables
+    completeMessage = completeMessage.replace(/\{role\}/g, theme.final_role_name || 'Collectionneur');
+
     try {
       const dmEmbed = new EmbedBuilder()
         .setTitle('👑 COLLECTION COMPLÈTE !')
-        .setDescription(
-          `**Félicitations !** Tu as complété la collection **${theme.name}** !\n\n` +
-          `Tu as collecté les ${theme.required_items} items ! 🎉`
-        )
+        .setDescription(completeMessage)
         .setColor(theme.final_role_color)
         .setThumbnail(interaction.user.displayAvatarURL())
         .setFooter(await getLoomixFooter(interaction.guildId))

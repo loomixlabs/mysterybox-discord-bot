@@ -80,7 +80,13 @@ class TrapAdminHandler {
           const statusIcon = trap.is_active ? '✅' : '❌';
           const defaultBadge = trap.is_default ? ' `[DÉFAUT]`' : '';
 
+          // Indicateur de sévérité (1-5 étoiles)
+          const severityStars = '⭐'.repeat(trap.severity || 3);
+          const severityLabels = { 1: 'Minor', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Extreme' };
+          const severityLabel = severityLabels[trap.severity] || 'Medium';
+
           let details = `${statusIcon} **${trap.name}**${defaultBadge} (\`${trap.trap_id}\`)`;
+          details += `\n└─ Sévérité: ${severityStars} (${severityLabel})`;
 
           // Ajouter les détails selon le type
           if (trap.type === 'cooldown' && trap.cooldown_duration) {
@@ -132,10 +138,13 @@ class TrapAdminHandler {
               'lose-all-collectibles': '☠️'
             };
 
+            // Afficher la sévérité dans la description
+            const severityStars = '⭐'.repeat(trap.severity || 3);
+
             return {
               label: trap.name.substring(0, 100),
               value: trap.id.toString(),
-              description: `${trap.type} - ${trap.trap_id}`.substring(0, 100),
+              description: `${severityStars} | ${trap.type} - ${trap.trap_id}`.substring(0, 100),
               emoji: typeEmojis[trap.type] || '⚠️'
             };
           })
@@ -359,22 +368,143 @@ class TrapAdminHandler {
 
 
   /**
-   * Gérer la sélection du type de piège (affiche le modal de création)
+   * Gérer la sélection du type de piège (affiche le sélecteur de sévérité)
    */
   async handleTrapTypeSelection(interaction) {
     const trapType = interaction.values[0];
 
-    // Créer le modal selon le type
+    // Afficher le sélecteur de sévérité (étape intermédiaire)
+    await this.showSeveritySelector(interaction, trapType);
+  }
+
+  /**
+   * Afficher le sélecteur de sévérité pour un piège
+   */
+  async showSeveritySelector(interaction, trapType) {
+    const embed = new EmbedBuilder()
+      .setTitle(`⚠️ SÉLECTIONNER LA SÉVÉRITÉ`)
+      .setDescription(
+        `**Type de piège:** ${this.getTrapTypeEmoji(trapType)} ${this.getTrapTypeLabel(trapType)}\n\n` +
+        `Choisis le niveau de sévérité du piège:\n\n` +
+        `⭐ **Minor (1)** - 45% de chance\n` +
+        `└─ Effets mineurs, aucune perte réelle\n\n` +
+        `⭐⭐ **Low (2)** - 30% de chance\n` +
+        `└─ Inconvénients temporaires (cooldown)\n\n` +
+        `⭐⭐⭐ **Medium (3)** - 15% de chance\n` +
+        `└─ Perte modérée (1 collectible)\n\n` +
+        `⭐⭐⭐⭐ **High (4)** - 8% de chance\n` +
+        `└─ Pertes multiples + effets sociaux\n\n` +
+        `⭐⭐⭐⭐⭐ **Extreme (5)** - 2% de chance\n` +
+        `└─ Catastrophe totale (perte complète)`
+      )
+      .setColor('#e74c3c');
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`select_trap_severity_${trapType}`)
+      .setPlaceholder('Sélectionne la sévérité...')
+      .addOptions([
+        {
+          label: 'Minor (⭐)',
+          value: '1',
+          description: 'Effets mineurs, aucune perte - 45% de chance',
+          emoji: '1️⃣'
+        },
+        {
+          label: 'Low (⭐⭐)',
+          value: '2',
+          description: 'Inconvénients temporaires - 30% de chance',
+          emoji: '2️⃣'
+        },
+        {
+          label: 'Medium (⭐⭐⭐)',
+          value: '3',
+          description: 'Perte modérée - 15% de chance',
+          emoji: '3️⃣'
+        },
+        {
+          label: 'High (⭐⭐⭐⭐)',
+          value: '4',
+          description: 'Pertes multiples - 8% de chance',
+          emoji: '4️⃣'
+        },
+        {
+          label: 'Extreme (⭐⭐⭐⭐⭐)',
+          value: '5',
+          description: 'Catastrophe totale - 2% de chance',
+          emoji: '5️⃣'
+        }
+      ]);
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('trap_add')
+        .setLabel('🔙 Retour au choix du type')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.update({
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        backRow
+      ]
+    });
+  }
+
+  /**
+   * Gérer la sélection de la sévérité (affiche le modal de création)
+   */
+  async handleSeveritySelection(interaction) {
+    // Format: select_trap_severity_TYPE
+    const trapType = interaction.customId.replace('select_trap_severity_', '');
+    const severity = parseInt(interaction.values[0]);
+
+    // Valeurs pré-remplies selon le type de piège
+    const defaultValues = {
+      'cooldown': {
+        description: 'Un piège qui bloque temporairement l\'ouverture de boîtes mystère pendant une durée déterminée.',
+        notifTitle: '⏱️ Piège Temporel !',
+        notifDesc: '**Oups !** Tu es tombé dans un piège temporel !\n\nTu ne peux plus ouvrir de boîtes mystère pendant **{duration} minutes**.\n\n💡 Utilise ce temps pour préparer ta prochaine ouverture !'
+      },
+      'lose-collectible': {
+        description: 'Un piège vicieux qui vole un collectible aléatoire de la collection du joueur.',
+        notifTitle: '💀 Piège Voleur !',
+        notifDesc: '**Oh non !** Un piège vicieux t\'a volé un objet !\n\n🎁 **Objet perdu:** {collectible}\n\n⚠️ Sois plus prudent la prochaine fois !'
+      },
+      'public-shame': {
+        description: 'Un piège qui expose publiquement l\'échec du joueur devant tout le serveur.',
+        notifTitle: '😱 Piège de la Honte !',
+        notifDesc: '**Aïe !** Tu as déclenché le piège de la honte publique !\n\n🤡 Tout le monde va savoir que tu es tombé dans ce piège ridicule.\n\n💡 Essaye de mieux faire la prochaine fois !'
+      },
+      'empty-box': {
+        description: 'Un piège frustrant où le joueur n\'obtient absolument rien. La boîte est vide !',
+        notifTitle: '📦 BOÎTE VIDE !',
+        notifDesc: '**Sérieusement ?** Tu as ouvert une boîte... complètement vide !\n\n🤷 Pas de collectible, pas de mission, rien du tout. Juste le néant.\n\n💡 Au moins tu n\'as rien perdu !'
+      },
+      'lose-all-collectibles': {
+        description: 'Un piège catastrophique et dévastateur qui fait perdre TOUS les collectibles du joueur d\'un seul coup.',
+        notifTitle: '💥 PIÈGE DÉVASTATEUR !',
+        notifDesc: '**CATASTROPHE TOTALE !** Ce piège apocalyptique a effacé **TOUS TES COLLECTIBLES** !\n\n💔 **{count} objet(s) perdu(s)** d\'un seul coup...\n\n⚠️ Ta collection a été complètement anéantie !'
+      }
+    };
+
+    const defaults = defaultValues[trapType] || {
+      description: 'Description du piège personnalisé',
+      notifTitle: '⚠️ Piège Activé !',
+      notifDesc: 'Tu es tombé dans un piège !'
+    };
+
+    // Créer le modal avec type ET severity dans le customId
     const modal = new ModalBuilder()
-      .setCustomId(`modal_trap_add_${trapType}`)
-      .setTitle(`Créer un piège: ${this.getTrapTypeLabel(trapType)}`);
+      .setCustomId(`modal_trap_add_${trapType}_${severity}`)
+      .setTitle(`Créer: ${this.getTrapTypeLabel(trapType)} (S${severity})`);
 
     // Champs communs à tous les types
     const trapIdInput = new TextInputBuilder()
       .setCustomId('trap_id')
       .setLabel('ID unique du piège')
       .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: pomme-empoisonnee')
+      .setPlaceholder('Ex: pomme-empoisonnee, piege-temporel-2')
       .setRequired(true)
       .setMinLength(3)
       .setMaxLength(100);
@@ -383,7 +513,7 @@ class TrapAdminHandler {
       .setCustomId('trap_name')
       .setLabel('Nom du piège')
       .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: Pomme Empoisonnée')
+      .setPlaceholder('Ex: Pomme Empoisonnée, Coffre Maudit')
       .setRequired(true)
       .setMinLength(3)
       .setMaxLength(100);
@@ -392,7 +522,7 @@ class TrapAdminHandler {
       .setCustomId('trap_description')
       .setLabel('Description (pour admins)')
       .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('Ex: Piège qui empêche l\'ouverture de boîtes pendant 30 min')
+      .setValue(defaults.description)
       .setRequired(true)
       .setMinLength(10)
       .setMaxLength(500);
@@ -401,16 +531,17 @@ class TrapAdminHandler {
       .setCustomId('trap_notif_title')
       .setLabel('Titre notification joueur')
       .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: ⚠️ Piège Activé !')
+      .setValue(defaults.notifTitle)
       .setRequired(true)
       .setMinLength(3)
       .setMaxLength(100);
 
     const notifDescInput = new TextInputBuilder()
       .setCustomId('trap_notif_description')
-      .setLabel('Description notif (vars dynamiques)')
+      .setLabel('Description notification')
       .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('Ex: Tu es tombé dans un piège ! +{duration} min de cooldown')
+      .setPlaceholder('Vars: {duration}, {collectible}, {count}')
+      .setValue(defaults.notifDesc)
       .setRequired(true)
       .setMinLength(10)
       .setMaxLength(1000);
@@ -437,7 +568,23 @@ class TrapAdminHandler {
     await interaction.deferReply({ flags: 64 });
 
     try {
-      const trapType = interaction.customId.replace('modal_trap_add_', '');
+      // Format: modal_trap_add_TYPE_SEVERITY (ex: modal_trap_add_cooldown_2)
+      const customIdParts = interaction.customId.replace('modal_trap_add_', '').split('_');
+      // Le dernier élément est la sévérité (si présente), le reste est le type
+      let trapType, severity;
+
+      if (customIdParts.length >= 2 && !isNaN(parseInt(customIdParts[customIdParts.length - 1]))) {
+        // Nouveau format avec sévérité
+        severity = parseInt(customIdParts.pop());
+        trapType = customIdParts.join('-'); // Reconstituer le type (ex: lose-collectible)
+      } else {
+        // Ancien format sans sévérité (fallback)
+        trapType = customIdParts.join('-');
+        severity = 3; // Default: Medium
+      }
+
+      console.log(`📋 Création piège: type=${trapType}, severity=${severity}`);
+
       const theme = await db.getActiveTheme(interaction.guildId);
 
       if (!theme) {
@@ -510,19 +657,20 @@ class TrapAdminHandler {
         typeData.shame_channel_id = process.env.ANNOUNCE_CHANNEL_ID || null;
       }
 
-      // Insérer le piège dans la base de données avec les champs de notification
+      // Insérer le piège dans la base de données avec les champs de notification ET sévérité
       await db.query(
         `INSERT INTO traps (
-          guild_id, theme_id, trap_id, name, type, description, image_url,
+          guild_id, theme_id, trap_id, name, type, severity, description, image_url,
           cooldown_duration, shame_message, shame_channel_id, malus_points, removes_collectible,
           notif_title, notif_description, notif_color, notif_footer
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
           interaction.guildId,
           theme.id,
           trapId,
           name,
           trapType,
+          severity, // Nouvelle colonne sévérité
           description,
           imageUrl,
           typeData.cooldown_duration,
@@ -552,19 +700,24 @@ class TrapAdminHandler {
         console.error('⚠️ Erreur de logging (non-bloquante):', logError.message);
       }
 
-      // Créer l'embed de confirmation
+      // Créer l'embed de confirmation avec sévérité
+      const severityStars = '⭐'.repeat(severity);
+      const severityLabels = { 1: 'Minor', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Extreme' };
+      const severityLabel = severityLabels[severity] || 'Medium';
+
       const confirmEmbed = new EmbedBuilder()
         .setTitle('✅ Piège créé avec succès !')
         .setDescription(
           `**${this.getTrapTypeLabel(trapType)}** créé\n\n` +
           `**Nom:** ${name}\n` +
           `**ID:** \`${trapId}\`\n` +
+          `**Sévérité:** ${severityStars} (${severityLabel})\n` +
           `**Description:** ${description}\n\n` +
           `${this.getTrapDetailsText(trapType, typeData)}`
         )
         .setColor('#2ecc71')
         .setThumbnail(imageUrl || null)
-        .setFooter({ text: `Thème: ${theme.name}` })
+        .setFooter({ text: `Thème: ${theme.name} | Sévérité: ${severity}/5` })
         .setTimestamp();
 
       await interaction.editReply({
@@ -572,7 +725,7 @@ class TrapAdminHandler {
         flags: 64
       });
 
-      console.log(`✅ Piège créé: ${name} (${trapType}) par ${interaction.user.username}`);
+      console.log(`✅ Piège créé: ${name} (${trapType}, S${severity}) par ${interaction.user.username}`);
 
       // Retourner au menu pièges après 2 secondes
       setTimeout(async () => {
@@ -615,30 +768,40 @@ class TrapAdminHandler {
     const statusText = trap.is_active ? 'Actif' : 'Inactif';
     const defaultBadge = trap.is_default ? ' `[PIÈGE PAR DÉFAUT]`' : '';
 
+    // Indicateur de sévérité
+    const severityStars = '⭐'.repeat(trap.severity || 3);
+    const severityLabels = { 1: 'Minor', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Extreme' };
+    const severityLabel = severityLabels[trap.severity] || 'Medium';
+
     // Créer l'embed de détails
     const embed = new EmbedBuilder()
       .setTitle(`${this.getTrapTypeEmoji(trap.type)} ${trap.name}${defaultBadge}`)
       .setDescription(
         `**Statut:** ${statusIcon} ${statusText}\n` +
         `**Type:** ${this.getTrapTypeLabel(trap.type)}\n` +
+        `**Sévérité:** ${severityStars} (${severityLabel})\n` +
         `**ID:** \`${trap.trap_id}\`\n\n` +
         `**Description:**\n${trap.description}\n\n` +
         `${this.getTrapDetailsText(trap.type, trap)}`
       )
       .setColor(trap.is_active ? '#2ecc71' : '#95a5a6')
       .setThumbnail(trap.image_url || null)
-      .setFooter({ text: `ID: ${trap.id}` })
+      .setFooter({ text: `ID: ${trap.id} | Sévérité: ${trap.severity || 3}/5` })
       .setTimestamp();
 
-    // Boutons d'action
+    // Boutons d'action - Ligne 1
     const actionRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`trap_modify_${trapId}`)
         .setLabel('✏️ Modifier')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId(`trap_change_severity_${trapId}`)
+        .setLabel(`⚠️ Sévérité (${trap.severity || 3})`)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId(`trap_upload_image_${trapId}`)
-        .setLabel('📷 Changer Image')
+        .setLabel('📷 Image')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`trap_toggle_${trapId}`)
@@ -665,11 +828,185 @@ class TrapAdminHandler {
   }
 
   /**
+   * Afficher le sélecteur de sévérité pour modifier un piège existant
+   */
+  async showChangeSeveritySelector(interaction) {
+    const trapId = parseInt(interaction.customId.replace('trap_change_severity_', ''));
+    const trap = await db.queryOne(
+      'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+      [interaction.guildId, trapId]
+    );
+
+    if (!trap) {
+      return interaction.update({
+        content: '❌ Piège introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const currentSeverity = trap.severity || 3;
+    const currentStars = '⭐'.repeat(currentSeverity);
+
+    const embed = new EmbedBuilder()
+      .setTitle(`⚠️ MODIFIER LA SÉVÉRITÉ`)
+      .setDescription(
+        `**Piège:** ${trap.name}\n` +
+        `**Type:** ${this.getTrapTypeEmoji(trap.type)} ${this.getTrapTypeLabel(trap.type)}\n\n` +
+        `**Sévérité actuelle:** ${currentStars} (${currentSeverity}/5)\n\n` +
+        `Choisis le nouveau niveau de sévérité:\n\n` +
+        `⭐ **Minor (1)** - 45% de chance\n` +
+        `⭐⭐ **Low (2)** - 30% de chance\n` +
+        `⭐⭐⭐ **Medium (3)** - 15% de chance\n` +
+        `⭐⭐⭐⭐ **High (4)** - 8% de chance\n` +
+        `⭐⭐⭐⭐⭐ **Extreme (5)** - 2% de chance`
+      )
+      .setColor('#f39c12')
+      .setThumbnail(trap.image_url || null);
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`select_change_trap_severity_${trapId}`)
+      .setPlaceholder('Sélectionne la nouvelle sévérité...')
+      .addOptions([
+        {
+          label: 'Minor (⭐)',
+          value: '1',
+          description: 'Effets mineurs, aucune perte - 45% de chance',
+          emoji: '1️⃣',
+          default: currentSeverity === 1
+        },
+        {
+          label: 'Low (⭐⭐)',
+          value: '2',
+          description: 'Inconvénients temporaires - 30% de chance',
+          emoji: '2️⃣',
+          default: currentSeverity === 2
+        },
+        {
+          label: 'Medium (⭐⭐⭐)',
+          value: '3',
+          description: 'Perte modérée - 15% de chance',
+          emoji: '3️⃣',
+          default: currentSeverity === 3
+        },
+        {
+          label: 'High (⭐⭐⭐⭐)',
+          value: '4',
+          description: 'Pertes multiples - 8% de chance',
+          emoji: '4️⃣',
+          default: currentSeverity === 4
+        },
+        {
+          label: 'Extreme (⭐⭐⭐⭐⭐)',
+          value: '5',
+          description: 'Catastrophe totale - 2% de chance',
+          emoji: '5️⃣',
+          default: currentSeverity === 5
+        }
+      ]);
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`select_trap_cancel_${trapId}`)
+        .setLabel('🔙 Annuler')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.update({
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        backRow
+      ]
+    });
+  }
+
+  /**
+   * Gérer le changement de sévérité d'un piège existant
+   */
+  async handleChangeSeverity(interaction) {
+    await interaction.deferUpdate();
+
+    // Format: select_change_trap_severity_ID
+    const trapId = parseInt(interaction.customId.replace('select_change_trap_severity_', ''));
+    const newSeverity = parseInt(interaction.values[0]);
+
+    try {
+      const trap = await db.queryOne(
+        'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+        [interaction.guildId, trapId]
+      );
+
+      if (!trap) {
+        return interaction.followUp({
+          content: '❌ Piège introuvable.',
+          flags: 64
+        });
+      }
+
+      const oldSeverity = trap.severity || 3;
+
+      // Mettre à jour la sévérité
+      await db.query(
+        'UPDATE traps SET severity = $1 WHERE guild_id = $2 AND id = $3',
+        [newSeverity, interaction.guildId, trapId]
+      );
+
+      // Logger l'action
+      try {
+        await audit.logAction(
+          interaction.guildId,
+          interaction.user.id,
+          'trap_severity_changed',
+          {
+            trap_id: trap.trap_id,
+            name: trap.name,
+            old_severity: oldSeverity,
+            new_severity: newSeverity
+          }
+        );
+      } catch (logError) {
+        console.error('⚠️ Erreur de logging (non-bloquante):', logError.message);
+      }
+
+      const severityLabels = { 1: 'Minor', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Extreme' };
+      const newStars = '⭐'.repeat(newSeverity);
+      const oldStars = '⭐'.repeat(oldSeverity);
+
+      await interaction.followUp({
+        content: `✅ **Sévérité modifiée!**\n\n` +
+          `**Piège:** ${trap.name}\n` +
+          `**Avant:** ${oldStars} (${severityLabels[oldSeverity]})\n` +
+          `**Après:** ${newStars} (${severityLabels[newSeverity]})`,
+        flags: 64
+      });
+
+      console.log(`✅ Sévérité modifiée: ${trap.name} (${oldSeverity} → ${newSeverity}) par ${interaction.user.username}`);
+
+      // Retourner au détail du piège
+      setTimeout(async () => {
+        try {
+          interaction.values = [trapId.toString()];
+          await this.handleTrapSelection(interaction);
+        } catch (error) {
+          console.error('⚠️ Impossible de revenir au détail:', error.message);
+        }
+      }, 1500);
+
+    } catch (error) {
+      console.error('❌ Erreur lors du changement de sévérité:', error);
+      return interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
    * Activer/Désactiver un piège
    */
   async handleToggleTrap(interaction) {
-    await interaction.deferUpdate();
-
+    // Ne pas deferUpdate ici car handleTrapSelection fait déjà un update()
     const trapId = parseInt(interaction.customId.replace('trap_toggle_', ''));
 
     try {
@@ -700,13 +1037,13 @@ class TrapAdminHandler {
         console.error('⚠️ Erreur de logging (non-bloquante):', logError.message);
       }
 
-      // Re-afficher le menu du piège
+      // Re-afficher le menu du piège (cette fonction fait son propre update())
       interaction.values = [trapId.toString()];
       await this.handleTrapSelection(interaction);
 
     } catch (error) {
       console.error('❌ Erreur lors du toggle du piège:', error);
-      return interaction.editReply({
+      return interaction.update({
         content: `❌ Erreur: ${error.message}`,
         embeds: [],
         components: []
@@ -1206,6 +1543,9 @@ class TrapAdminHandler {
       else if (customId.startsWith('trap_back_from_upload_')) {
         await this.handleBackFromUpload(interaction);
       }
+      else if (customId.startsWith('trap_change_severity_')) {
+        await this.showChangeSeveritySelector(interaction);
+      }
       else if (customId.startsWith('trap_toggle_')) {
         await this.handleToggleTrap(interaction);
       }
@@ -1227,6 +1567,12 @@ class TrapAdminHandler {
       }
       else if (customId === 'select_trap_type') {
         await this.handleTrapTypeSelection(interaction);
+      }
+      else if (customId.startsWith('select_trap_severity_')) {
+        await this.handleSeveritySelection(interaction);
+      }
+      else if (customId.startsWith('select_change_trap_severity_')) {
+        await this.handleChangeSeverity(interaction);
       }
       // Modals
       else if (customId.startsWith('modal_trap_add_')) {

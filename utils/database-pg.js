@@ -365,6 +365,41 @@ class DatabaseWrapper {
   }
 
   /**
+   * Récupérer un message personnalisé du thème
+   * @param {string} guildId - ID du serveur
+   * @param {number} themeId - ID du thème
+   * @param {string} key - Clé du message (ex: 'mystery_box_button_label')
+   * @returns {string|null} Le contenu du message ou null si non trouvé
+   */
+  async getThemeMessage(guildId, themeId, key) {
+    guildId = this._getGuildId(guildId);
+    const result = await this.queryOne(
+      'SELECT content FROM theme_messages WHERE guild_id = $1 AND theme_id = $2 AND key = $3',
+      [guildId, themeId, key]
+    );
+    return result?.content || null;
+  }
+
+  /**
+   * Récupérer tous les messages personnalisés d'un thème
+   * @param {string} guildId - ID du serveur
+   * @param {number} themeId - ID du thème
+   * @returns {Object} Object avec les clés de message comme propriétés
+   */
+  async getThemeMessages(guildId, themeId) {
+    guildId = this._getGuildId(guildId);
+    const messages = await this.queryAll(
+      'SELECT key, content FROM theme_messages WHERE guild_id = $1 AND theme_id = $2',
+      [guildId, themeId]
+    );
+    // Convertir en objet {key: content}
+    return messages.reduce((acc, msg) => {
+      acc[msg.key] = msg.content;
+      return acc;
+    }, {});
+  }
+
+  /**
    * Récupérer tous les collectibles d'un thème
    */
   async getCollectiblesByTheme(guildId, themeId) {
@@ -938,7 +973,10 @@ class DatabaseWrapper {
    */
   async addCooldown(guildId, playerId, trapId, durationMinutes) {
     guildId = this._getGuildId(guildId);
-    const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
+    // FIX: Utiliser toISOString() pour envoyer la date en UTC à PostgreSQL
+    // Sans cela, le driver pg envoie l'heure locale (Europe/Paris) à une colonne "timestamp without time zone"
+    // ce qui cause un décalage de +1h (ou +2h en été)
+    const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000).toISOString();
     return this.queryOne(
       `INSERT INTO player_cooldowns (guild_id, player_id, trap_id, expires_at)
        VALUES ($1, $2, $3, $4)

@@ -9,8 +9,9 @@ const auditLogger = require('../utils/auditLogger');
  * 1. Probabilités des Types (collectible/mission/trap/super_bonus)
  * 2. Probabilités par Rareté - Collectibles (legendary/epic/rare/common)
  * 3. Probabilités par Rareté - Super Bonuses (legendary/epic/rare/common)
+ * 4. Probabilités par Sévérité - Pièges (Minor/Low/Medium/High/Extreme)
  *
- * Architecture: Menu principal → 3 sous-menus → Validation → Sauvegarde
+ * Architecture: Menu principal → 4 sous-menus → Validation → Sauvegarde
  */
 
 class ProbabilityHandler {
@@ -84,15 +85,28 @@ class ProbabilityHandler {
       inline: true
     });
 
+    // État actuel - Probabilités Sévérité Pièges
+    embed.addFields({
+      name: '⚠️ SÉVÉRITÉ PIÈGES',
+      value:
+        `⭐ Minor (S1): **${config.trap_severity_1 || 45}%**\n` +
+        `⭐⭐ Low (S2): **${config.trap_severity_2 || 30}%**\n` +
+        `⭐⭐⭐ Medium (S3): **${config.trap_severity_3 || 15}%**\n` +
+        `⭐⭐⭐⭐ High (S4): **${config.trap_severity_4 || 8}%**\n` +
+        `⭐⭐⭐⭐⭐ Extreme (S5): **${config.trap_severity_5 || 2}%**`,
+      inline: true
+    });
+
     embed.addFields({
       name: '💡 Informations',
       value:
         '**Probabilités des Types:** Doivent totaliser 100%\n' +
-        '**Probabilités par Rareté:** Doivent totaliser 100% (0% = jamais, 100% = toujours)',
+        '**Probabilités par Rareté:** Doivent totaliser 100%\n' +
+        '**Sévérité Pièges:** Doivent totaliser 100% (probabilité de chaque niveau)',
       inline: false
     });
 
-    // Boutons
+    // Boutons - Ligne 1 (Types + Raretés)
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('probability_config_types')
@@ -105,7 +119,11 @@ class ProbabilityHandler {
       new ButtonBuilder()
         .setCustomId('probability_config_bonus_rarity')
         .setLabel('⭐ Rareté Super Bonus')
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('probability_config_trap_severity')
+        .setLabel('⚠️ Sévérité Pièges')
+        .setStyle(ButtonStyle.Danger)
     );
 
     const backRow = new ActionRowBuilder().addComponents(
@@ -183,7 +201,7 @@ class ProbabilityHandler {
    * Traiter la soumission du modal de probabilités des types
    */
   async handleTypeProbabilitiesSubmit(interaction) {
-    await interaction.deferReply({ flags: 64 });
+    await interaction.deferUpdate();
 
     const guildId = interaction.guildId;
     const theme = await db.getActiveTheme(guildId);
@@ -193,27 +211,66 @@ class ProbabilityHandler {
     const probTrap = parseInt(interaction.fields.getTextInputValue('prob_trap'));
     const probSuperBonus = parseInt(interaction.fields.getTextInputValue('prob_super_bonus'));
 
-    // Validation
+    // Validation - en cas d'erreur, afficher dans l'embed
     if (isNaN(probCollectible) || isNaN(probMission) || isNaN(probTrap) || isNaN(probSuperBonus)) {
-      return interaction.editReply({
-        content: '❌ Toutes les valeurs doivent être des nombres valides.',
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Toutes les valeurs doivent être des nombres valides.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_types')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     if (probCollectible < 0 || probMission < 0 || probTrap < 0 || probSuperBonus < 0) {
-      return interaction.editReply({
-        content: '❌ Les probabilités ne peuvent pas être négatives.',
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Les probabilités ne peuvent pas être négatives.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_types')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     const total = probCollectible + probMission + probTrap + probSuperBonus;
     if (total !== 100) {
-      return interaction.editReply({
-        content: `❌ La somme des probabilités doit être égale à 100% (actuellement: ${total}%)`,
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription(`La somme des probabilités doit être égale à 100%.\n\nActuellement: **${total}%**`)
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_types')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     // Sauvegarde
@@ -242,14 +299,31 @@ class ProbabilityHandler {
       }
     );
 
+    // Embed de confirmation dans le panel principal
+    const successEmbed = new EmbedBuilder()
+      .setTitle('✅ PROBABILITÉS DES TYPES MISES À JOUR')
+      .setDescription(
+        `Les probabilités de contenu des Mystery Boxes ont été modifiées.\n\n` +
+        `🎁 **Collectibles:** ${probCollectible}%\n` +
+        `📋 **Missions:** ${probMission}%\n` +
+        `⚠️ **Pièges:** ${probTrap}%\n` +
+        `✨ **Super Bonus:** ${probSuperBonus}%`
+      )
+      .setColor('#2ecc71')
+      .setFooter({ text: `Thème: ${theme.name}` })
+      .setTimestamp();
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_probabilities')
+        .setLabel('🔙 Retour aux probabilités')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
     await interaction.editReply({
-      content:
-        `✅ **Probabilités des types mises à jour !**\n\n` +
-        `🎁 Collectibles: **${probCollectible}%**\n` +
-        `📋 Missions: **${probMission}%**\n` +
-        `⚠️ Pièges: **${probTrap}%**\n` +
-        `✨ Super Bonus: **${probSuperBonus}%**`,
-      flags: 64
+      content: '',
+      embeds: [successEmbed],
+      components: [backRow]
     });
   }
 
@@ -315,7 +389,7 @@ class ProbabilityHandler {
    * Traiter la soumission du modal de rareté collectibles
    */
   async handleCollectibleRaritySubmit(interaction) {
-    await interaction.deferReply({ flags: 64 });
+    await interaction.deferUpdate();
 
     const guildId = interaction.guildId;
     const theme = await db.getActiveTheme(guildId);
@@ -325,27 +399,66 @@ class ProbabilityHandler {
     const rare = parseInt(interaction.fields.getTextInputValue('collectible_rarity_rare'));
     const common = parseInt(interaction.fields.getTextInputValue('collectible_rarity_common'));
 
-    // Validation
+    // Validation - en cas d'erreur, afficher dans l'embed
     if (isNaN(legendary) || isNaN(epic) || isNaN(rare) || isNaN(common)) {
-      return interaction.editReply({
-        content: '❌ Toutes les valeurs doivent être des nombres valides.',
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Toutes les valeurs doivent être des nombres valides.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_collectible_rarity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     if (legendary < 0 || epic < 0 || rare < 0 || common < 0) {
-      return interaction.editReply({
-        content: '❌ Tous les pourcentages doivent être supérieurs ou égaux à 0.',
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Tous les pourcentages doivent être supérieurs ou égaux à 0.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_collectible_rarity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     const total = legendary + epic + rare + common;
     if (total !== 100) {
-      return interaction.editReply({
-        content: `❌ La somme des pourcentages doit être égale à 100% (actuellement: ${total}%)`,
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription(`La somme des pourcentages doit être égale à 100%.\n\nActuellement: **${total}%**`)
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_collectible_rarity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     // Sauvegarde
@@ -359,14 +472,31 @@ class ProbabilityHandler {
       WHERE theme_id = $5
     `, [legendary, epic, rare, common, theme.id]);
 
+    // Embed de confirmation dans le panel principal
+    const successEmbed = new EmbedBuilder()
+      .setTitle('✅ PROBABILITÉS RARETÉ COLLECTIBLES MISES À JOUR')
+      .setDescription(
+        `Les probabilités de rareté des collectibles ont été modifiées.\n\n` +
+        `🟣 **Legendary:** ${legendary}%\n` +
+        `🟠 **Epic:** ${epic}%\n` +
+        `🔵 **Rare:** ${rare}%\n` +
+        `⚪ **Common:** ${common}%`
+      )
+      .setColor('#2ecc71')
+      .setFooter({ text: `Thème: ${theme.name}` })
+      .setTimestamp();
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_probabilities')
+        .setLabel('🔙 Retour aux probabilités')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
     await interaction.editReply({
-      content:
-        `✅ **Probabilités rareté collectibles mises à jour !**\n\n` +
-        `🟣 Legendary: **${legendary}%**\n` +
-        `🟠 Epic: **${epic}%**\n` +
-        `🔵 Rare: **${rare}%**\n` +
-        `⚪ Common: **${common}%**`,
-      flags: 64
+      content: '',
+      embeds: [successEmbed],
+      components: [backRow]
     });
   }
 
@@ -432,7 +562,7 @@ class ProbabilityHandler {
    * Traiter la soumission du modal de rareté super bonuses
    */
   async handleBonusRaritySubmit(interaction) {
-    await interaction.deferReply({ flags: 64 });
+    await interaction.deferUpdate();
 
     const guildId = interaction.guildId;
     const theme = await db.getActiveTheme(guildId);
@@ -442,27 +572,66 @@ class ProbabilityHandler {
     const rare = parseInt(interaction.fields.getTextInputValue('super_bonus_rarity_rare'));
     const common = parseInt(interaction.fields.getTextInputValue('super_bonus_rarity_common'));
 
-    // Validation
+    // Validation - en cas d'erreur, afficher dans l'embed
     if (isNaN(legendary) || isNaN(epic) || isNaN(rare) || isNaN(common)) {
-      return interaction.editReply({
-        content: '❌ Toutes les valeurs doivent être des nombres valides.',
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Toutes les valeurs doivent être des nombres valides.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_bonus_rarity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     if (legendary < 0 || epic < 0 || rare < 0 || common < 0) {
-      return interaction.editReply({
-        content: '❌ Tous les pourcentages doivent être supérieurs ou égaux à 0.',
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Tous les pourcentages doivent être supérieurs ou égaux à 0.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_bonus_rarity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     const total = legendary + epic + rare + common;
     if (total !== 100) {
-      return interaction.editReply({
-        content: `❌ La somme des pourcentages doit être égale à 100% (actuellement: ${total}%)`,
-        flags: 64
-      });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription(`La somme des pourcentages doit être égale à 100%.\n\nActuellement: **${total}%**`)
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_bonus_rarity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
     }
 
     // Sauvegarde
@@ -476,14 +645,236 @@ class ProbabilityHandler {
       WHERE theme_id = $5
     `, [legendary, epic, rare, common, theme.id]);
 
+    // Embed de confirmation dans le panel principal
+    const successEmbed = new EmbedBuilder()
+      .setTitle('✅ PROBABILITÉS RARETÉ SUPER BONUSES MISES À JOUR')
+      .setDescription(
+        `Les probabilités de rareté des super bonuses ont été modifiées.\n\n` +
+        `🟣 **Legendary:** ${legendary}%\n` +
+        `🟠 **Epic:** ${epic}%\n` +
+        `🔵 **Rare:** ${rare}%\n` +
+        `⚪ **Common:** ${common}%`
+      )
+      .setColor('#2ecc71')
+      .setFooter({ text: `Thème: ${theme.name}` })
+      .setTimestamp();
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_probabilities')
+        .setLabel('🔙 Retour aux probabilités')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
     await interaction.editReply({
-      content:
-        `✅ **Probabilités rareté super bonuses mises à jour !**\n\n` +
-        `🟣 Legendary: **${legendary}%**\n` +
-        `🟠 Epic: **${epic}%**\n` +
-        `🔵 Rare: **${rare}%**\n` +
-        `⚪ Common: **${common}%**`,
-      flags: 64
+      content: '',
+      embeds: [successEmbed],
+      components: [backRow]
+    });
+  }
+
+  // ========================================================================
+  // PROBABILITÉS SÉVÉRITÉ PIÈGES
+  // ========================================================================
+
+  /**
+   * Afficher le modal de configuration des probabilités de sévérité des pièges
+   */
+  async showTrapSeverityModal(interaction) {
+    const guildId = interaction.guildId;
+    const theme = await db.getActiveTheme(guildId);
+    const config = await db.getThemeConfig(guildId, theme.id);
+
+    const modal = new ModalBuilder()
+      .setCustomId('probability_modal_trap_severity')
+      .setTitle('⚠️ Sévérité Pièges');
+
+    const severity1Input = new TextInputBuilder()
+      .setCustomId('trap_severity_1')
+      .setLabel('⭐ Minor (S1) - Effets mineurs (%)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(String(config.trap_severity_1 || 45))
+      .setRequired(true)
+      .setPlaceholder('0-100 (ex: 45)');
+
+    const severity2Input = new TextInputBuilder()
+      .setCustomId('trap_severity_2')
+      .setLabel('⭐⭐ Low (S2) - Inconvénients (%)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(String(config.trap_severity_2 || 30))
+      .setRequired(true)
+      .setPlaceholder('0-100 (ex: 30)');
+
+    const severity3Input = new TextInputBuilder()
+      .setCustomId('trap_severity_3')
+      .setLabel('⭐⭐⭐ Medium (S3) - Perte modérée (%)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(String(config.trap_severity_3 || 15))
+      .setRequired(true)
+      .setPlaceholder('0-100 (ex: 15)');
+
+    const severity4Input = new TextInputBuilder()
+      .setCustomId('trap_severity_4')
+      .setLabel('⭐⭐⭐⭐ High (S4) - Pertes multiples (%)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(String(config.trap_severity_4 || 8))
+      .setRequired(true)
+      .setPlaceholder('0-100 (ex: 8)');
+
+    const severity5Input = new TextInputBuilder()
+      .setCustomId('trap_severity_5')
+      .setLabel('⭐⭐⭐⭐⭐ Extreme (S5) - Catastrophe (%)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(String(config.trap_severity_5 || 2))
+      .setRequired(true)
+      .setPlaceholder('0-100 (ex: 2)');
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(severity1Input),
+      new ActionRowBuilder().addComponents(severity2Input),
+      new ActionRowBuilder().addComponents(severity3Input),
+      new ActionRowBuilder().addComponents(severity4Input),
+      new ActionRowBuilder().addComponents(severity5Input)
+    );
+
+    await interaction.showModal(modal);
+  }
+
+  /**
+   * Traiter la soumission du modal de sévérité pièges
+   */
+  async handleTrapSeveritySubmit(interaction) {
+    await interaction.deferUpdate();
+
+    const guildId = interaction.guildId;
+    const theme = await db.getActiveTheme(guildId);
+
+    const severity1 = parseInt(interaction.fields.getTextInputValue('trap_severity_1'));
+    const severity2 = parseInt(interaction.fields.getTextInputValue('trap_severity_2'));
+    const severity3 = parseInt(interaction.fields.getTextInputValue('trap_severity_3'));
+    const severity4 = parseInt(interaction.fields.getTextInputValue('trap_severity_4'));
+    const severity5 = parseInt(interaction.fields.getTextInputValue('trap_severity_5'));
+
+    // Validation - en cas d'erreur, afficher dans l'embed
+    if (isNaN(severity1) || isNaN(severity2) || isNaN(severity3) || isNaN(severity4) || isNaN(severity5)) {
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Toutes les valeurs doivent être des nombres valides.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_trap_severity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
+    }
+
+    if (severity1 < 0 || severity2 < 0 || severity3 < 0 || severity4 < 0 || severity5 < 0) {
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription('Tous les pourcentages doivent être supérieurs ou égaux à 0.')
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_trap_severity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
+    }
+
+    const total = severity1 + severity2 + severity3 + severity4 + severity5;
+    if (total !== 100) {
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ Erreur de validation')
+        .setDescription(`La somme des pourcentages doit être égale à 100%.\n\nActuellement: **${total}%**`)
+        .setColor('#e74c3c');
+
+      const backRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('probability_config_trap_severity')
+          .setLabel('🔄 Réessayer')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_probabilities')
+          .setLabel('🔙 Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ content: '', embeds: [errorEmbed], components: [backRow] });
+    }
+
+    // Sauvegarde
+    await db.query(`
+      UPDATE theme_config
+      SET
+        trap_severity_1 = $1,
+        trap_severity_2 = $2,
+        trap_severity_3 = $3,
+        trap_severity_4 = $4,
+        trap_severity_5 = $5
+      WHERE theme_id = $6
+    `, [severity1, severity2, severity3, severity4, severity5, theme.id]);
+
+    // Audit log
+    try {
+      await auditLogger.logProbabilitiesUpdated(
+        guildId,
+        interaction.user.id,
+        interaction.user.username,
+        theme.id,
+        theme.name,
+        {
+          trap_severity_1: severity1,
+          trap_severity_2: severity2,
+          trap_severity_3: severity3,
+          trap_severity_4: severity4,
+          trap_severity_5: severity5
+        }
+      );
+    } catch (err) {
+      console.error('⚠️ Erreur audit log (non-bloquante):', err.message);
+    }
+
+    // Embed de confirmation dans le panel principal
+    const successEmbed = new EmbedBuilder()
+      .setTitle('✅ PROBABILITÉS SÉVÉRITÉ MISES À JOUR')
+      .setDescription(
+        `Les probabilités de sélection des pièges par sévérité ont été modifiées.\n\n` +
+        `⭐ **Minor (S1):** ${severity1}%\n` +
+        `⭐⭐ **Low (S2):** ${severity2}%\n` +
+        `⭐⭐⭐ **Medium (S3):** ${severity3}%\n` +
+        `⭐⭐⭐⭐ **High (S4):** ${severity4}%\n` +
+        `⭐⭐⭐⭐⭐ **Extreme (S5):** ${severity5}%`
+      )
+      .setColor('#2ecc71')
+      .setFooter({ text: `Thème: ${theme.name}` })
+      .setTimestamp();
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_probabilities')
+        .setLabel('🔙 Retour aux probabilités')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.editReply({
+      content: '',
+      embeds: [successEmbed],
+      components: [backRow]
     });
   }
 
@@ -522,6 +913,10 @@ class ProbabilityHandler {
       return this.showBonusRarityModal(interaction);
     }
 
+    if (customId === 'probability_config_trap_severity') {
+      return this.showTrapSeverityModal(interaction);
+    }
+
     // Modals
     if (customId === 'probability_modal_types') {
       return this.handleTypeProbabilitiesSubmit(interaction);
@@ -533,6 +928,10 @@ class ProbabilityHandler {
 
     if (customId === 'probability_modal_bonus_rarity') {
       return this.handleBonusRaritySubmit(interaction);
+    }
+
+    if (customId === 'probability_modal_trap_severity') {
+      return this.handleTrapSeveritySubmit(interaction);
     }
   }
 }

@@ -5,6 +5,288 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.0.0] - 2025-12-14
+
+### ✨ Added
+
+- **[Système de Sévérité des Pièges]**: Nouveau système de probabilités basé sur la sévérité
+  - **Migration DB**: `database/migrations/add-trap-severity.sql`
+  - **Nouvelles colonnes**:
+    - `traps.severity` (INTEGER 1-5) : Niveau de sévérité du piège
+    - `theme_config.trap_severity_1` à `trap_severity_5` : Probabilités par sévérité
+  - **Niveaux de sévérité**:
+    - ⭐ Minor (1) : 45% par défaut - Effets mineurs (empty-box)
+    - ⭐⭐ Low (2) : 30% par défaut - Inconvénients temporaires (cooldown)
+    - ⭐⭐⭐ Medium (3) : 15% par défaut - Perte d'un item (lose-collectible, public-shame)
+    - ⭐⭐⭐⭐ High (4) : 8% par défaut - Effets sévères
+    - ⭐⭐⭐⭐⭐ Extreme (5) : 2% par défaut - Perte totale (lose-all-collectibles)
+  - **Fichiers modifiés**:
+    - `handlers/trapAdminHandler.js` : Sélecteur de sévérité, affichage dans embed
+    - `handlers/mysteryBoxHandler.js` : `selectTrapWeighted()` basé sur sévérité
+    - `handlers/probabilityHandler.js` : Configuration probabilités sévérité
+    - `utils/trapDefaults.js` : Sévérités par défaut pour chaque type de piège
+    - `utils/database-pg.js` : Support des nouvelles colonnes
+
+- **[Modal Pré-rempli Création Piège]**: Les champs description et notification sont pré-remplis selon le type de piège sélectionné
+  - **Fichier modifié**: `handlers/trapAdminHandler.js`
+  - Valeurs par défaut adaptées à chaque type (cooldown, lose-collectible, public-shame, empty-box, lose-all-collectibles)
+
+- **[Amélioration UI Probabilités]**: Les confirmations de probabilités s'affichent dans l'embed principal au lieu de messages éphémères
+  - **Fichier modifié**: `handlers/probabilityHandler.js`
+  - Bouton "Retour aux probabilités" après validation
+
+### 🐛 Fixed
+
+- **[Trap Toggle]**: Correction de l'erreur "reply already sent" lors de l'activation/désactivation d'un piège
+  - **Cause**: Double defer (deferUpdate + update dans handleTrapSelection)
+  - **Fix**: Suppression du deferUpdate dans handleToggleTrap
+  - **Fichier modifié**: `handlers/trapAdminHandler.js`
+
+- **[Routing Select Menus]**: Correction du routing manquant pour les select menus de sévérité
+  - **Fichiers modifiés**:
+    - `events/interactionCreate.js` : Ajout routing `select_trap_cancel_`
+    - `handlers/adminPanelHandler.js` : Ajout routing `select_trap_severity_`, `select_change_trap_severity_`
+
+---
+
+## [Non publié]
+
+### ✨ Added
+
+- **[Thread Manager]**: Nouveau système de gestion robuste des threads Discord
+  - **Fichier créé**: `utils/threadManager.js`
+  - **Fonctionnalités**:
+    - `archiveWithRetry()`: Archive un thread avec retry automatique (3 tentatives)
+    - `archiveAfterDelay()`: Archive après délai avec gestion robuste
+    - `cleanupOrphanedThreads()`: Nettoie les threads de missions terminées non archivés
+    - `cleanupAbandonedMissions()`: Marque les missions abandonnées (jamais lancées) comme échouées
+  - **Intégration**: Nettoyages périodiques dans `events/ready.js`
+    - Missions abandonnées: toutes les 5 minutes (timeout 30 min)
+    - Threads orphelins: toutes les 15 minutes
+
+- **[Mission Progress - Thread Tracking]**: Nouvelle colonne `thread_archived` dans `mission_progress`
+  - **Migration**: `database/migrations/add-thread-archived-column.sql`
+  - **Index optimisé**: `idx_mission_progress_thread_cleanup` pour les requêtes de nettoyage
+
+### 🐛 Fixed
+
+- **[Missions - Race Condition Fix]**: Protection contre les missions multiples simultanées
+  - **Problème**: Un joueur pouvait ouvrir plusieurs mystery boxes contenant des missions, créant plusieurs threads
+  - **Cause racine**: `revealMission()` ne vérifiait pas si le joueur avait déjà une mission en cours
+  - **Fix**: Vérification préalable + nettoyage automatique des missions orphelines
+  - **Fichier modifié**: `handlers/mysteryBoxHandler.js` (lignes 866-905)
+  - **Comportement**:
+    - Si mission en cours avec thread valide → Bloque et redirige vers le thread existant
+    - Si mission en cours avec thread supprimé → Nettoie et permet nouvelle mission
+
+- **[Missions - Threads Non Fermés]**: Correction des threads qui ne se fermaient pas automatiquement
+  - **Problèmes identifiés**:
+    1. `expires_at` défini seulement au clic "Lancer" → missions jamais lancées ignorées
+    2. `setTimeout` vulnérable aux crashs/restarts du bot
+    3. Aucun retry sur échec d'archivage
+  - **Solutions implémentées**:
+    - Nettoyage périodique des missions abandonnées (30 min sans clic)
+    - Nettoyage des threads orphelins (missions terminées mais thread ouvert)
+    - Système de retry avec fallback suppression
+
+- **[Theme Builder - Quiz Questions Mode DB]**: Correction des questions de quiz qui disparaissaient après déploiement
+  - **Symptôme**: Après déploiement en Mode DB, les questions de quiz étaient perdues (0 questions affichées)
+  - **Cause racine**: Mismatch de nom de propriété entre frontend et backend
+    - Frontend (MissionsSection.js) envoyait `mission.questions`
+    - Backend (guild.js) attendait `m.quizQuestions`
+  - **Fix**: Accepter les deux noms de propriété dans guild.js
+  - **Fichier modifié**: `theme-builder/routes/guild.js` (ligne 1338)
+    - **Avant**: `if (m.type === 'quiz' && m.quizQuestions && Array.isArray(m.quizQuestions))`
+    - **Après**: `const quizQuestions = m.quizQuestions || m.questions;`
+
+- **[Missions - Super Bonus Reward]**: Correction de 2 bugs de colonnes inexistantes pour les récompenses super-bonus
+  - **Bug 1**: Erreur SQL "la colonne « is_active » n'existe pas"
+    - **Cause**: missionHandler.js utilisait `is_active` au lieu de `is_enabled`
+    - **Fix**: Changement du nom de colonne dans la requête SQL
+    - **Fichier modifié**: `handlers/missionHandler.js` (ligne 763)
+    - **Avant**: `WHERE guild_id = $1 AND is_active = true`
+    - **Après**: `WHERE guild_id = $1 AND is_enabled = true`
+  - **Bug 2**: Erreur SQL "la colonne « source » de la relation « player_active_bonuses » n'existe pas"
+    - **Cause**: L'INSERT dans `player_active_bonuses` incluait une colonne `source` inexistante
+    - **Fix**: Suppression de la colonne `source` de la requête INSERT
+    - **Fichier modifié**: `handlers/missionHandler.js` (ligne 800)
+    - **Avant**: `INSERT INTO player_active_bonuses (guild_id, user_id, bonus_id, expires_at, source) VALUES ($1, $2, $3, $4, 'mission')`
+    - **Après**: `INSERT INTO player_active_bonuses (guild_id, user_id, bonus_id, expires_at) VALUES ($1, $2, $3, $4)`
+
+- **[Trap Cooldown - Bug Timezone]**: Correction du bug de durée de cooldown ×3 (30 min → 90 min)
+  - **Symptôme**: Les pièges configurés pour 30 minutes duraient en réalité 90 minutes
+  - **Cause racine**: Le driver `pg` envoyait les dates en heure locale (Europe/Paris, UTC+1) à PostgreSQL qui utilise UTC
+    - Node.js créait `expiresAt` en heure locale (ex: 21:03 Paris)
+    - PostgreSQL stockait cette valeur comme UTC (21:03 "UTC")
+    - `started_at` (DEFAULT NOW()) était en vrai UTC (19:03)
+    - Différence résultante: 21:03 - 19:03 = 2h au lieu de 30 min prévues
+  - **Fix**: Utiliser `.toISOString()` pour envoyer la date en format UTC à PostgreSQL
+  - **Fichier modifié**: `utils/database-pg.js` (ligne 979)
+    - **Avant**: `new Date(Date.now() + durationMinutes * 60 * 1000)`
+    - **Après**: `new Date(Date.now() + durationMinutes * 60 * 1000).toISOString()`
+  - **Impact**: Tous les pièges cooldown fonctionnent maintenant avec la durée configurée
+
+- **[Theme Builder - LibrarySection]**: Corrections multiples pour l'affichage des thèmes communautaires
+  - **Correction 1**: Utilisation de `creator_username` au lieu de `author_username` pour les thèmes Featured
+    - **Fichier modifié**: `public/js/components/LibrarySection.js` (ligne 810)
+    - **Avant**: `theme.author_username` (colonne inexistante dans la réponse API)
+    - **Après**: `theme.creator_username` (colonne retournée par l'API)
+  - **Correction 2**: Ajout des compteurs (`collectibles_count`, `traps_count`, `missions_count`) aux routes API
+    - **Fichiers modifiés**:
+      - `routes/themes.js` (lignes 217-219, 268-270): Calcul JSONB pour `/trending` et `/featured`
+      - `config/database.js` (lignes 145-148): Fonction `getPublicThemes()`
+    - **Calcul**: `COALESCE(jsonb_array_length(theme_data->'collectibles'), 0)`
+  - **Correction 3**: Enrichissement des presets fichiers avec tous les champs attendus
+    - **Fichier modifié**: `routes/themes.js` (lignes 35-42)
+    - **Ajouts**: `missions_count`, `category`, `author`, `icon`, `color`
+  - **Correction 4**: Compteur de missions gérant les deux formats de stockage
+    - **Problème**: Certains thèmes stockent les missions en tableau `[]`, d'autres en objet `{quiz: [], keyword: []}`
+    - **Cause**: La requête `jsonb_array_length()` échouait sur les objets (retourne erreur, pas 0)
+    - **Solution**: Utilisation de `CASE WHEN jsonb_typeof()` pour détecter le format et calculer correctement
+    - **Fichiers modifiés**:
+      - `config/database.js` (lignes 148-155): `getPublicThemes()` avec CASE/WHEN SQL
+      - `routes/themes.js` (lignes 231-238, 289-296): Routes `/trending` et `/featured`
+      - `routes/themes.js` (lignes 29-35): Calcul JavaScript pour les presets fichiers
+
+- **[Theme Builder - MessagesSection]**: Correction du champ utilisé pour la preview du rôle de complétion
+  - **Avant**: Utilisait `completion_role_name` (n'existe pas dans la DB)
+  - **Après**: Utilise `final_role_name` (colonne correcte dans la table `themes`)
+  - **Fichiers modifiés**:
+    - `public/js/components/MessagesSection.js` (ligne 173): `getCompletionRoleName()` corrigé
+
+- **[Admin Panel - Bouton Configurer la Récompense]**: Nouveau bouton dans Gérer les Missions pour configurer les récompenses
+  - **Contexte**: Apparaît dans la vue détail d'une mission (Gérer les missions > Sélectionner une mission)
+  - **Types de récompenses disponibles**:
+    - `🎲 Collectible aléatoire` : Un collectible au hasard parmi le thème actif
+    - `🎯 Collectible spécifique` : Un collectible précis (affiche sélecteur si choisi)
+    - `⭐ Super Bonus` : Un super bonus aléatoire parmi ceux actifs sur le serveur
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js` (ligne 6469-6477) : Ajout du bouton "🎁 Configurer la Récompense"
+    - `events/interactionCreate.js` (lignes 199-210, 390-396) : Routing boutons et StringSelectMenus
+    - `handlers/missionHandler.js` (lignes 2474-2825) :
+      - `handleRewardConfig()` : Affiche l'interface de sélection du type de récompense
+      - `handleRewardTypeSelect()` : Traite la sélection du type, affiche collectible picker si nécessaire
+      - `handleRewardCollectibleSelect()` : Sauvegarde le collectible spécifique choisi
+  - **Base de données**: Utilise les colonnes `reward_type` et `reward_data` de la table `missions`
+  - **Compatible**: Missions quiz, keyword, et tous futurs types de missions
+
+- **[Mystery Box - Label Bouton Personnalisable]**: Le label du bouton "Ouvrir la boîte" est maintenant personnalisable
+  - **Avant**: Le bouton affichait toujours "🎯 Ouvrir la boîte" (hardcodé)
+  - **Après**: Le label est lu depuis `theme_messages.mystery_box_button_label` avec fallback vers le texte par défaut
+  - **Fichiers modifiés (Bot Discord)**:
+    - `utils/database-pg.js`: Ajout des fonctions `getThemeMessage()` et `getThemeMessages()` pour récupérer les messages personnalisés
+    - `handlers/mysteryBoxHandler.js` (lignes 30-35, 71-76): Récupération des messages du thème et utilisation du label personnalisé
+  - **Fichiers modifiés (Theme Builder)**:
+    - `public/js/components/MysteryBoxSection.js` (lignes 32-35, 54, 61, 77-83, 102, 140-143, 232-248):
+      - Ajout computed `mysteryBoxButtonLabel()` lisant depuis `theme_messages`
+      - Ajout méthode `updateMessage()` pour sauvegarder dans `theme_messages`
+      - Compteur mis à jour (6→7 paramètres)
+      - Preview bouton Discord ajouté dans l'aperçu embed
+      - Card "Label du bouton" avec input dédié
+    - `public/css/mysterybox-v3.css` (lignes 560-587): Styles CSS pour le preview bouton Discord (.discord-button-preview, .embed-button-preview)
+    - `public/js/app.js` (ligne 186): Ajout de `mystery_box_button_label` dans `sectionDataMap.mysterybox` pour la détection de changements
+      - **Corrige**: ActionBar affiche maintenant "Modifié" quand le label bouton est modifié
+      - **Corrige**: Toast d'avertissement affiché lors du changement de section avec label non sauvegardé
+  - **Note**: Le champ existe aussi dans `MessagesSection.js` (catégorie Mystery Box) pour cohérence avec les autres messages
+
+- **[Mission Secrète - Message et GIF Personnalisables]**: Le message éphémère et le GIF affichés quand un joueur ouvre une mission secrète sont maintenant personnalisables
+  - **Avant**: Message et GIF hardcodés ("Tu as déclenché une mission secrète !..." + GIF Giphy fixe)
+  - **Après**: Le message et le GIF sont lus depuis `theme_messages` avec fallback vers les valeurs par défaut
+  - **Clés theme_messages utilisées**:
+    - `mission_revealed` : Le message texte (supporte variable `{player}`)
+    - `mission_revealed_gif` : L'URL du GIF personnalisé
+  - **Fichiers modifiés (Bot Discord)**:
+    - `handlers/mysteryBoxHandler.js` (lignes 858-928):
+      - Ajout fetch du thème actif et ses messages
+      - Fallback personnalisable pour le message de révélation
+      - Fallback personnalisable pour le GIF de mission (ligne 920-922)
+      - Variable `{player}` supportée pour le nom du joueur
+  - **Fichiers modifiés (Theme Builder)**:
+    - `public/js/components/MessagesSection.js` (lignes 55-66):
+      - Carte unifiée "Mission Secrète Révélée" avec champ Message + champ GIF intégré
+      - Propriétés `gifKey` et `gifPlaceholder` pour lier le champ GIF au champ principal
+      - Preview Discord affiche l'embed complet (message + GIF)
+      - Variable supportée: `{player}`
+    - `public/css/discord-preview.css` (lignes 936-1259):
+      - Styles complets pour MessagesSection V4 avec cartes unifiées
+      - Section `.gif-input-section` pour le champ GIF intégré
+      - Animations et transitions pour la preview étendue
+  - **UX améliorée**: Une seule carte pour Message + GIF au lieu de deux cartes séparées (reflète la réalité Discord : un seul embed)
+  - **Base de données**: Table `theme_messages` supporte les nouvelles clés (structure clé-valeur flexible, aucune migration requise)
+  - **Messages personnalisables désormais**: 4 cartes (5 clés) - collectible_obtained, duplicate_collectible, collection_complete, mission_revealed + mission_revealed_gif
+
+### 🐛 Fixed
+
+- **[Mystery Box - Messages Personnalisés]**: Intégration des messages personnalisés du thème dans mysteryBoxHandler
+  - **Symptôme**: Les messages configurés dans theme_messages (Theme Builder) n'étaient jamais utilisés
+  - **Cause**: Le code récupérait themeMessages mais n'appliquait pas les fallbacks
+  - **Solution**: Implémentation d'un système de fallback à 3 niveaux
+  - **Messages concernés**:
+    - `duplicate_collectible` : Message doublon (ligne 698-702)
+    - `collectible_obtained` : Message succès (ligne 745-753)
+    - `collection_complete` : Message collection complète (ligne 1544-1547)
+  - **Système de priorité**: `per-collectible message → global theme message → hardcoded default`
+  - **Variables supportées**: `{name}`, `{count}`, `{total}`, `{role}`
+  - **Fichier modifié**: `handlers/mysteryBoxHandler.js`
+  - **Lié au Theme Builder**: Les messages configurés dans MessagesSection sont maintenant appliqués
+
+- **[CRITICAL - Mission Rewards System]**: Correction du système de récompenses missions hardcodé
+  - **Symptôme**: Le bot ignorait la configuration `reward_type` et `reward_data` des missions et donnait TOUJOURS un collectible aléatoire
+  - **Cause**: `completeMission()` et `approveMission()` dans `missionHandler.js` utilisaient `db.getRandomCollectible()` hardcodé au lieu de lire la configuration de la mission
+  - **Le Theme Builder supporte 3 types de récompenses**:
+    - `random-collectible` : Collectible aléatoire du thème (comportement par défaut)
+    - `specific-collectible` : Collectible spécifique (configuré via `reward_data.collectible_id`)
+    - `super-bonus` : Super bonus aléatoire actif sur le serveur
+  - **Solution**:
+    - Ajout fonction `getMissionReward()` (lignes 710-784) : Lit `reward_type` et `reward_data`, fallback vers random
+    - Ajout fonction `giveSuperBonusReward()` (lignes 786-813) : Attribution super bonus avec cumul durée
+    - Refactoring `completeMission()` (lignes 831-956) : Supporte les 3 types avec embeds adaptés
+    - Refactoring `approveMission()` (lignes 1076-1152) : Idem avec récupération reward_type/reward_data dans la requête SQL
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js` (lignes 710-813, 831-956, 1046-1152)
+  - **Note**: Les missions existantes avec `reward_type = 'random-collectible'` ou NULL continuent de fonctionner normalement
+
+### 🔧 Theme Builder v2.0.0 - Corrections UX/Logique
+
+- **[CRITICAL - JSON Unicode Bug]**: Correction du bug de sauvegarde des thèmes avec caractères unicode
+  - **Symptôme**: Erreur PostgreSQL "syntaxe en entrée invalide pour le type json - substitution unicode basse ne doit pas suivre une substitution haute"
+  - **Cause**: Emojis avec surrogate pairs invalides (caractères unicode orphelins)
+  - **Solution**: Fonction `sanitizeJsonString()` dans `config/database.js` pour nettoyer le JSON avant INSERT
+  - **Impact**: Les thèmes avec emojis se sauvegardent maintenant correctement
+
+- **[UX - Champ Auteur]**: Correction du champ auteur qui était éditable manuellement
+  - **Problème**: L'utilisateur pouvait modifier le nom de l'auteur, ce qui n'est pas logique
+  - **Solution**:
+    - Champ rendu en lecture seule avec classe CSS `.input-readonly`
+    - Auto-population depuis `user.username` (compte Discord OAuth2)
+    - Préservé lors du reset du thème
+    - Forcé avant sauvegarde dans la bibliothèque
+  - **Fichiers**: `public/index.html` (lignes 297, 1549, 3234, 3274, 3352)
+
+- **[Validation - Collectibles]**: Ajout validation formulaire création/édition collectibles
+  - Validation ID et nom requis
+  - Détection des doublons d'ID avec message d'erreur clair
+  - **Fichier**: `public/index.html` fonction `saveCollectible()`
+
+- **[Validation - Pièges]**: Ajout validation formulaire création/édition pièges
+  - Validation ID et nom requis
+  - Détection des doublons d'ID avec message d'erreur clair
+  - **Fichier**: `public/index.html` fonction `saveTrap()`
+
+- **[Validation - Missions Quiz]**: Ajout validation formulaire création/édition missions quiz
+  - Validation mission_id et name requis
+  - Validation au moins une question requise
+  - Détection des doublons d'ID cross-missions (quiz et keyword)
+  - **Fichier**: `public/index.html` fonction `saveQuiz()`
+
+- **[Validation - Missions Keyword]**: Ajout validation formulaire création/édition missions keyword
+  - Validation mission_id et name requis
+  - Validation au moins un mot-clé requis
+  - Détection des doublons d'ID cross-missions (quiz et keyword)
+  - **Fichier**: `public/index.html` fonction `saveKeyword()`
+
+---
+
 ## [1.9.4] - 2025-11-24
 
 ### 🐛 Fixed
@@ -60,6 +342,13 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
     - Application via Docker: `docker compose exec -T postgres psql`
     - Redémarrage du bot pour appliquer les changements
   - **Résultat**: ✅ 37 tables sur VPS (synchronisé avec local), admin panel fonctionnel
+
+- **[Themes - Colonne activated_at Manquante]**: Ajout colonne manquante sur VPS
+  - **Symptôme**: Erreur PostgreSQL `column t.activated_at does not exist` dans logs DB
+  - **Cause**: La colonne `activated_at` existait dans la table `themes` en local mais pas sur VPS
+  - **Impact**: Handler d'expiration de thèmes (themeExpirationHandler.js) ne fonctionnait pas
+  - **Solution**: `ALTER TABLE themes ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP WITHOUT TIME ZONE`
+  - **Résultat**: ✅ Bot fonctionnel, système d'expiration opérationnel
 
 ### 📝 Documentation
 

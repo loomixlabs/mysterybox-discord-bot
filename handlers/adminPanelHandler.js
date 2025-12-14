@@ -705,6 +705,16 @@ class AdminPanelHandler {
     } else if (customId.startsWith('mission_channels_clear_')) {
       await this.handleMissionChannelsClear(interaction);
     }
+    // Gestion des mots-clés de mission
+    else if (customId.startsWith('mission_keywords_manage_')) {
+      await this.handleMissionKeywordsManage(interaction);
+    } else if (customId.startsWith('mission_keyword_add_')) {
+      await this.handleMissionKeywordAdd(interaction);
+    } else if (customId.startsWith('mission_keyword_edit_')) {
+      await this.handleMissionKeywordEdit(interaction);
+    } else if (customId.startsWith('mission_keyword_delete_')) {
+      await this.handleMissionKeywordDelete(interaction);
+    }
 
     // Gestion des pièges (délégation vers trapAdminHandler)
     else if (customId.startsWith('trap_')) {
@@ -735,7 +745,8 @@ class AdminPanelHandler {
     }
 
     // Pièges - Déléguer à trapAdminHandler (qui fera son propre defer)
-    if (customId === 'select_trap' || customId === 'select_trap_type') {
+    if (customId === 'select_trap' || customId === 'select_trap_type' ||
+        customId.startsWith('select_trap_severity_') || customId.startsWith('select_change_trap_severity_')) {
       return trapAdminHandler.handleInteraction(interaction);
     }
 
@@ -832,6 +843,10 @@ class AdminPanelHandler {
       await this.handleMissionSelection(interaction);
     } else if (customId.startsWith('select_mission_channels_')) {
       await this.handleMissionChannelsSelection(interaction);
+    }
+    // Sélection d'un mot-clé à modifier/supprimer
+    else if (customId.startsWith('mission_keyword_select_')) {
+      await this.handleMissionKeywordSelection(interaction);
     }
   }
 
@@ -2836,8 +2851,12 @@ class AdminPanelHandler {
           `**Rareté:** ${collectible.rarity}\n` +
           `**Message:** ${collectible.reveal_message || 'Aucun'}`
         )
-        .setImage(collectible.image_url)
         .setColor('#9b59b6');
+
+      // Image uniquement si URL valide (non vide)
+      if (collectible.image_url && collectible.image_url.trim()) {
+        embed.setImage(collectible.image_url);
+      }
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -4609,11 +4628,13 @@ class AdminPanelHandler {
         )
         .setColor(template.color);
 
-      if (template.image_url) {
+      // Image uniquement si URL valide (non vide)
+      if (template.image_url && template.image_url.trim()) {
         embed.setImage(template.image_url);
       }
 
-      if (template.thumbnail_url) {
+      // Thumbnail uniquement si URL valide (non vide)
+      if (template.thumbnail_url && template.thumbnail_url.trim()) {
         embed.setThumbnail(template.thumbnail_url);
       }
 
@@ -6466,6 +6487,16 @@ class AdminPanelHandler {
       );
     }
 
+    // Bouton Configurer la Récompense (commun à tous les types de missions)
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_reward_config_${missionId}`)
+          .setLabel('🎁 Configurer la Récompense')
+          .setStyle(ButtonStyle.Success)
+      )
+    );
+
     // Boutons Supprimer (seulement si pas hardcodée) et Retour
     const finalButtons = [];
 
@@ -6850,17 +6881,33 @@ class AdminPanelHandler {
       }
 
       // Sélecteur pour modifier/supprimer un mot-clé (seulement si il y a des mots-clés)
+      // Note: Discord limite les select menus à 25 options maximum
       if (keywords.length > 0) {
+        // Limiter à 25 options (limite Discord)
+        const limitedKeywords = keywords.slice(0, 25);
+
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId(`mission_keyword_select_${missionId}`)
           .setPlaceholder('Sélectionner un mot-clé à modifier/supprimer')
           .addOptions(
-            keywords.map(kw => ({
-              label: `${kw.keyword} (${difficultyLabels[kw.difficulty] || kw.difficulty})`,
-              value: kw.id.toString(),
-              description: `Difficulté: ${difficultyLabels[kw.difficulty] || kw.difficulty}`,
-              emoji: difficultyEmojis[kw.difficulty] || '⚪'
-            }))
+            limitedKeywords.map(kw => {
+              // Créer le label et le tronquer si nécessaire (max 100 chars)
+              let label = `${kw.keyword} (${difficultyLabels[kw.difficulty] || kw.difficulty})`;
+              if (label.length > 100) {
+                label = kw.keyword.substring(0, 90) + '...';
+              }
+              // Description aussi limitée à 100 chars
+              let description = `Difficulté: ${difficultyLabels[kw.difficulty] || kw.difficulty}`;
+              if (description.length > 100) {
+                description = description.substring(0, 97) + '...';
+              }
+              return {
+                label,
+                value: kw.id.toString(),
+                description,
+                emoji: difficultyEmojis[kw.difficulty] || '⚪'
+              };
+            })
           );
 
         components.push(new ActionRowBuilder().addComponents(selectMenu));
@@ -6886,6 +6933,221 @@ class AdminPanelHandler {
       return interaction.followUp({
         content: `❌ Une erreur est survenue: ${error.message}`,
         flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour la sélection d'un mot-clé (modifier/supprimer)
+   * Note: deferUpdate() est déjà fait dans handleSelectMenu()
+   */
+  async handleMissionKeywordSelection(interaction) {
+    try {
+      const customId = interaction.customId;
+      const missionId = parseInt(customId.replace('mission_keyword_select_', ''));
+      const keywordId = parseInt(interaction.values[0]);
+      const guildId = interaction.guildId;
+
+      // Récupérer le mot-clé sélectionné
+      const keyword = await db.queryOne(
+        'SELECT * FROM mission_keywords WHERE id = $1 AND mission_id = $2',
+        [keywordId, missionId]
+      );
+
+      if (!keyword) {
+        return interaction.editReply({
+          content: '❌ Mot-clé introuvable.',
+          components: []
+        });
+      }
+
+      const difficultyLabels = {
+        easy: 'Facile',
+        medium: 'Moyen',
+        hard: 'Difficile'
+      };
+
+      const difficultyEmojis = {
+        easy: '🟢',
+        medium: '🟡',
+        hard: '🔴'
+      };
+
+      // Afficher les options pour ce mot-clé
+      const embed = new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle('🔤 Modifier le mot-clé')
+        .setDescription(`**Mot-clé sélectionné:** \`${keyword.keyword}\``)
+        .addFields(
+          { name: '📊 Difficulté', value: `${difficultyEmojis[keyword.difficulty] || '⚪'} ${difficultyLabels[keyword.difficulty] || keyword.difficulty}`, inline: true },
+          { name: '🆔 ID', value: `\`${keyword.id}\``, inline: true }
+        )
+        .setFooter({ text: 'Choisissez une action ci-dessous' });
+
+      const components = [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_keyword_edit_${missionId}_${keywordId}`)
+            .setLabel('✏️ Modifier')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`mission_keyword_delete_${missionId}_${keywordId}`)
+            .setLabel('🗑️ Supprimer')
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`mission_keywords_manage_${missionId}`)
+            .setLabel('↩️ Retour')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      ];
+
+      return interaction.editReply({
+        embeds: [embed],
+        components
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleMissionKeywordSelection:', error);
+      return interaction.editReply({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Handler pour ajouter un mot-clé à une mission
+   */
+  async handleMissionKeywordAdd(interaction) {
+    try {
+      const missionId = parseInt(interaction.customId.replace('mission_keyword_add_', ''));
+
+      // Créer et afficher le modal d'ajout
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_add_keyword_${missionId}`)
+        .setTitle('Ajouter un mot-clé');
+
+      const keywordInput = new TextInputBuilder()
+        .setCustomId('keyword_value')
+        .setLabel('Mot-clé')
+        .setPlaceholder('Entrez le mot-clé...')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const difficultyInput = new TextInputBuilder()
+        .setCustomId('keyword_difficulty')
+        .setLabel('Difficulté (easy, medium, hard)')
+        .setPlaceholder('easy')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(10);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(keywordInput),
+        new ActionRowBuilder().addComponents(difficultyInput)
+      );
+
+      return interaction.showModal(modal);
+    } catch (error) {
+      console.error('❌ Erreur handleMissionKeywordAdd:', error);
+      return interaction.reply({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour modifier un mot-clé
+   */
+  async handleMissionKeywordEdit(interaction) {
+    try {
+      const parts = interaction.customId.replace('mission_keyword_edit_', '').split('_');
+      const missionId = parseInt(parts[0]);
+      const keywordId = parseInt(parts[1]);
+
+      // Récupérer le mot-clé actuel
+      const keyword = await db.queryOne(
+        'SELECT * FROM mission_keywords WHERE id = $1',
+        [keywordId]
+      );
+
+      if (!keyword) {
+        await interaction.deferUpdate();
+        return interaction.editReply({
+          content: '❌ Mot-clé introuvable.',
+          components: []
+        });
+      }
+
+      // Créer et afficher le modal d'édition
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_edit_keyword_${missionId}_${keywordId}`)
+        .setTitle('Modifier le mot-clé');
+
+      const keywordInput = new TextInputBuilder()
+        .setCustomId('keyword_value')
+        .setLabel('Mot-clé')
+        .setValue(keyword.keyword)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const difficultyInput = new TextInputBuilder()
+        .setCustomId('keyword_difficulty')
+        .setLabel('Difficulté (easy, medium, hard)')
+        .setValue(keyword.difficulty || 'easy')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(10);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(keywordInput),
+        new ActionRowBuilder().addComponents(difficultyInput)
+      );
+
+      return interaction.showModal(modal);
+    } catch (error) {
+      console.error('❌ Erreur handleMissionKeywordEdit:', error);
+      return interaction.reply({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour supprimer un mot-clé
+   */
+  async handleMissionKeywordDelete(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const parts = interaction.customId.replace('mission_keyword_delete_', '').split('_');
+      const missionId = parseInt(parts[0]);
+      const keywordId = parseInt(parts[1]);
+
+      // Supprimer le mot-clé
+      await db.query(
+        'DELETE FROM mission_keywords WHERE id = $1',
+        [keywordId]
+      );
+
+      await interaction.followUp({
+        content: '✅ Mot-clé supprimé avec succès !',
+        flags: 64
+      });
+
+      // Retourner à la liste des mots-clés
+      interaction.customId = `mission_keywords_manage_${missionId}`;
+      return this.handleMissionKeywordsManage(interaction);
+
+    } catch (error) {
+      console.error('❌ Erreur handleMissionKeywordDelete:', error);
+      return interaction.editReply({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        components: []
       });
     }
   }

@@ -196,6 +196,18 @@ module.exports = {
         else if (customId.startsWith('mission_max_attempts_config_')) {
           await missionHandler.handleMaxAttemptsConfig(interaction);
         }
+        else if (customId.startsWith('mission_reward_config_')) {
+          await missionHandler.handleRewardConfig(interaction);
+        }
+        else if (customId.startsWith('mission_reward_type_')) {
+          await missionHandler.handleRewardTypeSelect(interaction);
+        }
+        else if (customId.startsWith('mission_reward_collectible_')) {
+          await missionHandler.handleRewardCollectibleSelect(interaction);
+        }
+        else if (customId.startsWith('mission_reward_back_')) {
+          await adminPanelHandler.handleMissionSelection(interaction);
+        }
         // Boutons admin des missions (add, delete, modify)
         else if (customId === 'mission_add' || customId.startsWith('mission_delete_confirm_') || customId === 'mission_modify') {
           await adminPanelHandler.handleAdminInteraction(interaction);
@@ -212,7 +224,7 @@ module.exports = {
         }
 
         // Boutons du panneau admin
-        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId === 'thread_cancel_collectible') {
+        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId.startsWith('select_trap_cancel_') || customId === 'thread_cancel_collectible') {
           await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
@@ -375,6 +387,13 @@ module.exports = {
         else if (interaction.customId.startsWith('mission_max_attempts_select_')) {
           await missionHandler.handleMaxAttemptsSelect(interaction);
         }
+        // Select menus de configuration des récompenses de missions
+        else if (interaction.customId.startsWith('mission_reward_type_')) {
+          await missionHandler.handleRewardTypeSelect(interaction);
+        }
+        else if (interaction.customId.startsWith('mission_reward_collectible_')) {
+          await missionHandler.handleRewardCollectibleSelect(interaction);
+        }
         // Select menus du panneau admin
         else if (interaction.customId.startsWith('select_') ||
             interaction.customId.startsWith('edit_bonus_duration_') ||
@@ -382,7 +401,8 @@ module.exports = {
             interaction.customId.startsWith('give_unique_') ||
             interaction.customId.startsWith('campaign_') ||
             interaction.customId.startsWith('trap_') ||
-            interaction.customId.startsWith('super_bonus_')) {
+            interaction.customId.startsWith('super_bonus_') ||
+            interaction.customId.startsWith('mission_keyword_select_')) {
           await adminPanelHandler.handleSelectMenu(interaction);
         }
         // Select menu Setup - Sélection de thème préconfigurés

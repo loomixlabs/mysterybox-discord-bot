@@ -4,11 +4,20 @@ const db = require('./database-pg');
  * Définition des 4 pièges par défaut
  * Ces textes sont génériques et pourront être personnalisés par thème
  */
+/**
+ * Sévérités des pièges:
+ * 1 = Minor (⭐) - Effets mineurs, aucune perte
+ * 2 = Low (⭐⭐) - Effets légers, inconvénients temporaires
+ * 3 = Medium (⭐⭐⭐) - Effets modérés, perte d'un item
+ * 4 = High (⭐⭐⭐⭐) - Effets sévères, pertes multiples
+ * 5 = Extreme (⭐⭐⭐⭐⭐) - Effets dévastateurs, perte totale
+ */
 const DEFAULT_TRAPS = [
   {
     trap_id: 'trap-cooldown',
     name: 'Piège Temporel',
     type: 'cooldown',
+    severity: 2, // Low - inconvénient temporaire
     description: 'Un piège qui bloque temporairement l\'ouverture de boîtes mystère.',
     image_url: 'https://i.imgur.com/placeholder-trap-cooldown.png',
     cooldown_duration: 30,
@@ -24,6 +33,7 @@ const DEFAULT_TRAPS = [
     trap_id: 'trap-lose-collectible',
     name: 'Piège Voleur',
     type: 'lose-collectible',
+    severity: 3, // Medium - perte d'un item
     description: 'Un piège qui vole un objet aléatoire de votre collection.',
     image_url: 'https://i.imgur.com/placeholder-trap-lose.png',
     cooldown_duration: 0,
@@ -39,6 +49,7 @@ const DEFAULT_TRAPS = [
     trap_id: 'trap-public-shame',
     name: 'Piège de la Honte',
     type: 'public-shame',
+    severity: 3, // Medium - impact social
     description: 'Un piège qui expose publiquement votre échec devant tout le serveur.',
     image_url: 'https://i.imgur.com/placeholder-trap-shame.png',
     cooldown_duration: 0,
@@ -54,6 +65,7 @@ const DEFAULT_TRAPS = [
     trap_id: 'trap-empty-box',
     name: 'La Boîte Vide',
     type: 'empty-box',
+    severity: 1, // Minor - aucune perte
     description: 'Sérieusement, qui peut bien avoir l\'idée d\'envoyer une boîte vide ?',
     image_url: 'https://i.imgur.com/placeholder-trap-empty.png',
     cooldown_duration: 0,
@@ -69,6 +81,7 @@ const DEFAULT_TRAPS = [
     trap_id: 'trap-lose-all-collectibles',
     name: 'Piège Dévastateur',
     type: 'lose-all-collectibles',
+    severity: 5, // Extreme - perte totale
     description: 'Un piège catastrophique qui fait perdre TOUS vos collectibles d\'un seul coup.',
     image_url: 'https://i.imgur.com/placeholder-trap-devastator.png',
     cooldown_duration: 0,
@@ -114,16 +127,17 @@ async function createDefaultTrapsForTheme(guildId, themeId) {
       if (!exists) {
         await db.query(
           `INSERT INTO traps (
-            guild_id, theme_id, trap_id, name, type, description, image_url,
+            guild_id, theme_id, trap_id, name, type, severity, description, image_url,
             cooldown_duration, malus_points, shame_message, removes_collectible,
             is_default, is_active, notif_title, notif_description, notif_color, notif_footer
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
           [
             guildId,
             themeId,
             trap.trap_id,
             trap.name,
             trap.type,
+            trap.severity || 3, // Sévérité (default: Medium)
             trap.description,
             trap.image_url,
             trap.cooldown_duration,
@@ -138,7 +152,7 @@ async function createDefaultTrapsForTheme(guildId, themeId) {
             trap.notif_footer
           ]
         );
-        console.log(`✅ Piège créé: ${trap.name} (${trap.type})`);
+        console.log(`✅ Piège créé: ${trap.name} (${trap.type}, sévérité ${trap.severity})`);
       } else {
         console.log(`⏭️  Piège déjà existant: ${trap.name}`);
       }
@@ -207,16 +221,17 @@ async function ensureAllDefaultTraps(guildId, themeId) {
     for (const trap of missingTraps) {
       await db.query(
         `INSERT INTO traps (
-          guild_id, theme_id, trap_id, name, type, description, image_url,
+          guild_id, theme_id, trap_id, name, type, severity, description, image_url,
           cooldown_duration, malus_points, shame_message, removes_collectible,
           is_default, is_active, notif_title, notif_description, notif_color, notif_footer
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           guildId,
           themeId,
           trap.trap_id,
           trap.name,
           trap.type,
+          trap.severity || 3, // Sévérité (default: Medium)
           trap.description,
           trap.image_url,
           trap.cooldown_duration,
@@ -231,7 +246,7 @@ async function ensureAllDefaultTraps(guildId, themeId) {
           trap.notif_footer
         ]
       );
-      console.log(`✅ Piège ajouté: ${trap.name} (${trap.type})`);
+      console.log(`✅ Piège ajouté: ${trap.name} (${trap.type}, sévérité ${trap.severity})`);
     }
 
   } catch (error) {
