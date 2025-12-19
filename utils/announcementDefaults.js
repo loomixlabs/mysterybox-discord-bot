@@ -175,6 +175,15 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     footer_text: 'Système de Super Bonus',
     image_url: null,
     thumbnail_url: null
+  },
+  {
+    type: 'super_bonus_joker_used',
+    title: '🃏✨ MYSTERYBOX JOKER UTILISÉ ✨🃏',
+    description: '╔═══════════════════════════════════╗\n║  🎰 **BONUS LÉGENDAIRE ACTIVÉ** 🎰  ║\n╚═══════════════════════════════════╝\n\n**{userName}** a utilisé son **MysteryBox Joker** !\n\n🎁 Collectible choisi:\n╭─────────────────────────╮\n│  ✨ **{collectibleName}**\n│  📊 Rareté: **{collectibleRarity}**\n╰─────────────────────────╯\n\n*Le pouvoir du Joker a été consommé !*',
+    color: '#FFD700',
+    footer_text: '🃏 MysteryBox Joker • Bonus Légendaire',
+    image_url: null,
+    thumbnail_url: null
   }
 ];
 
@@ -199,7 +208,8 @@ const DEFAULT_ANNOUNCEMENT_TOGGLES = {
   mission_rejected: true,
   theme_expired: true,
   theme_expiring_soon: true,
-  legendary_super_bonus: true
+  legendary_super_bonus: true,
+  super_bonus_joker_used: true
 };
 
 /**
@@ -297,9 +307,72 @@ async function ensureAllDefaultTemplates(guildId) {
   }
 }
 
+/**
+ * Créer les templates d'annonces par défaut pour un thème SPÉCIFIQUE
+ * Chaque nouveau thème aura ses propres templates (avec theme_id défini)
+ * @param {string} guildId - ID du serveur Discord
+ * @param {number} themeId - ID du thème (dans la table themes)
+ * @returns {Promise<number>} - Nombre de templates créés
+ */
+async function createDefaultTemplatesForTheme(guildId, themeId) {
+  console.log(`\n📢 Création des templates d'annonces par défaut pour le thème ${themeId} (serveur ${guildId})...`);
+
+  try {
+    // Vérifier si les templates existent déjà pour ce thème
+    const existingTemplates = await db.queryAll(
+      `SELECT type FROM announcement_templates WHERE guild_id = $1 AND theme_id = $2`,
+      [guildId, themeId]
+    );
+
+    const existingTypes = existingTemplates.map(t => t.type);
+
+    if (existingTypes.length >= DEFAULT_ANNOUNCEMENT_TEMPLATES.length) {
+      console.log(`✅ Les templates par défaut existent déjà pour ce thème (${existingTypes.length}/${DEFAULT_ANNOUNCEMENT_TEMPLATES.length})`);
+      return 0;
+    }
+
+    // Créer chaque template manquant pour ce thème spécifique
+    let created = 0;
+    for (const template of DEFAULT_ANNOUNCEMENT_TEMPLATES) {
+      // Vérifier si ce template spécifique existe déjà pour ce thème
+      if (existingTypes.includes(template.type)) {
+        console.log(`   ⏭️  Template ${template.type} déjà existant pour ce thème`);
+        continue;
+      }
+
+      await db.query(
+        `INSERT INTO announcement_templates (
+          guild_id, type, title, description, color, footer_text, image_url, thumbnail_url, theme_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          guildId,
+          template.type,
+          template.title,
+          template.description,
+          template.color,
+          template.footer_text,
+          template.image_url,
+          template.thumbnail_url,
+          themeId  // <-- Lié au thème spécifique
+        ]
+      );
+      created++;
+      console.log(`   ✅ Template ${template.type} créé pour thème ${themeId}`);
+    }
+
+    console.log(`\n✅ ${created} template(s) créé(s) pour le thème ${themeId}`);
+    return created;
+
+  } catch (error) {
+    console.error(`❌ Erreur lors de la création des templates pour le thème ${themeId}:`, error);
+    throw error;
+  }
+}
+
 module.exports = {
   DEFAULT_ANNOUNCEMENT_TEMPLATES,
   DEFAULT_ANNOUNCEMENT_TOGGLES,
   createDefaultTemplatesForGuild,
-  ensureAllDefaultTemplates
+  ensureAllDefaultTemplates,
+  createDefaultTemplatesForTheme
 };

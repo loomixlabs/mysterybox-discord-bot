@@ -10,6 +10,7 @@ const profileHandler = require('../handlers/profileHandler');
 const ServerConfigHandler = require('../handlers/serverConfigHandler');
 const progressionRoleAdminHandler = require('../handlers/progressionRoleAdminHandler');
 const subscriptionHandler = require('../handlers/subscriptionHandler');
+const tutorialView = require('../views/tutorialView');
 
 // Pour le tracking des connexions et badges Engagement
 const db = require('../utils/database-pg');
@@ -75,6 +76,11 @@ module.exports = {
         // Boutons de profil (profile_* et activate_bonus:*)
         if (customId.startsWith('profile_') || customId.startsWith('activate_bonus:')) {
           await profileHandler.handleProfileInteraction(interaction);
+        }
+
+        // 🃏 Boutons MysteryBox Joker (pagination/annulation)
+        else if (customId.startsWith('joker_page_') || customId === 'joker_cancel') {
+          await profileHandler.handleJokerInteraction(interaction);
         }
 
         // Bouton "Voir mes badges" depuis MP (view_my_badges:guildId)
@@ -166,6 +172,36 @@ module.exports = {
         else if (customId.startsWith('mission_quiz_delete_')) {
           await missionHandler.handleQuizDelete(interaction);
         }
+        // Boutons True-False missions
+        else if (customId.startsWith('mission_truefalse_questions_')) {
+          // Extraire la page si présente dans le customId (format: mission_truefalse_questions_123:page)
+          const page = customId.includes(':') ? parseInt(customId.split(':')[1]) : 0;
+          await missionHandler.handleTrueFalseQuestionsManagement(interaction, page);
+        }
+        else if (customId.startsWith('mission_truefalse_page_')) {
+          // Pagination true-false: mission_truefalse_page_123:page
+          const page = parseInt(customId.split(':')[1]);
+          await missionHandler.handleTrueFalseQuestionsManagement(interaction, page);
+        }
+        else if (customId.startsWith('mission_truefalse_add_')) {
+          await missionHandler.handleTrueFalseAdd(interaction);
+        }
+        // Boutons Emoji-Puzzle missions
+        else if (customId.startsWith('mission_emoji_puzzles_')) {
+          await missionHandler.handleEmojiPuzzleManagement(interaction, 0);
+        }
+        else if (customId.startsWith('mission_emoji_page_')) {
+          // Pagination: mission_emoji_page_123_0
+          const parts = customId.split('_');
+          const page = parseInt(parts[parts.length - 1]);
+          await missionHandler.handleEmojiPuzzleManagement(interaction, page);
+        }
+        else if (customId.startsWith('mission_emoji_add_')) {
+          await missionHandler.handleEmojiPuzzleAdd(interaction);
+        }
+        else if (customId.startsWith('mission_emoji_delete_')) {
+          await missionHandler.handleEmojiPuzzleDeleteSelect(interaction);
+        }
         else if (customId.startsWith('mission_keyword_add_')) {
           await missionHandler.handleKeywordAddMenu(interaction);
         }
@@ -180,6 +216,9 @@ module.exports = {
         }
         else if (customId.startsWith('mission_keyword_edit_')) {
           await missionHandler.handleKeywordEdit(interaction);
+        }
+        else if (customId.startsWith('mission_edit_info_')) {
+          await missionHandler.handleMissionEditInfo(interaction);
         }
         else if (customId.startsWith('mission_edit_')) {
           await missionHandler.handleMissionEdit(interaction);
@@ -293,6 +332,19 @@ module.exports = {
           await progressionRoleAdminHandler.handleInteraction(interaction);
         }
 
+        // 📚 Boutons Tutoriel (navigation entre sections)
+        else if (customId.startsWith('tutorial_')) {
+          await interaction.deferUpdate();
+
+          const viewFunction = tutorialView.VIEWS[customId];
+          if (viewFunction) {
+            const content = await viewFunction(interaction);
+            await interaction.editReply(content);
+          } else {
+            console.warn(`⚠️  Vue tutoriel non trouvée: ${customId}`);
+          }
+        }
+
         else {
           console.warn(`⚠️  Bouton non géré: ${customId}`);
         }
@@ -371,6 +423,13 @@ module.exports = {
         else if (interaction.customId.startsWith('profile_')) {
           await profileHandler.handleProfileInteraction(interaction);
         }
+        // Select menu du leaderboard
+        else if (interaction.customId === 'leaderboard_type_select') {
+          const leaderboardCommand = interaction.client.commands.get('leaderboard');
+          if (leaderboardCommand && leaderboardCommand.handleSelectMenu) {
+            await leaderboardCommand.handleSelectMenu(interaction);
+          }
+        }
         // Select menus des missions
         else if (interaction.customId.startsWith('select_keyword_delete_')) {
           await missionHandler.handleKeywordDeleteConfirm(interaction);
@@ -383,6 +442,20 @@ module.exports = {
         }
         else if (interaction.customId.startsWith('quiz_difficulty_select_')) {
           await missionHandler.handleQuizDifficultySelect(interaction);
+        }
+        // Select menus True-False missions
+        else if (interaction.customId.startsWith('truefalse_difficulty_select_')) {
+          await missionHandler.handleTrueFalseDifficultySelect(interaction);
+        }
+        else if (interaction.customId.startsWith('truefalse_answer_select_')) {
+          await missionHandler.handleTrueFalseAnswerSelect(interaction);
+        }
+        else if (interaction.customId.startsWith('select_truefalse_delete_')) {
+          await missionHandler.handleTrueFalseQuestionDelete(interaction);
+        }
+        // Select menus Emoji-Puzzle missions
+        else if (interaction.customId.startsWith('select_emoji_delete_')) {
+          await missionHandler.handleEmojiPuzzleDelete(interaction);
         }
         else if (interaction.customId.startsWith('mission_max_attempts_select_')) {
           await missionHandler.handleMaxAttemptsSelect(interaction);
@@ -417,6 +490,10 @@ module.exports = {
         else if (interaction.customId.startsWith('progression_role_select_')) {
           await progressionRoleAdminHandler.handleInteraction(interaction);
         }
+        // 🃏 Select menu MysteryBox Joker
+        else if (interaction.customId.startsWith('joker_collectible_select')) {
+          await profileHandler.handleJokerInteraction(interaction);
+        }
         else {
           console.warn(`⚠️ Select menu non géré: ${interaction.customId}`);
         }
@@ -447,6 +524,10 @@ module.exports = {
         }
         else if (interaction.customId.startsWith('give_unique_channels_select:')) {
           await giveUniqueHandler.handleGiveUniqueChannelsSelect(interaction);
+        }
+        // Ajouter un canal de distribution (admin panel)
+        else if (interaction.customId === 'select_add_channel') {
+          await adminPanelHandler.handleAddChannelSelection(interaction);
         }
         else {
           console.warn(`⚠️ Channel select menu non géré: ${interaction.customId}`);

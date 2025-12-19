@@ -99,9 +99,10 @@ client.login(process.env.DISCORD_TOKEN)
       console.error('🔴 Erreur lors de l\'initialisation de l\'expiration des thèmes:', error);
     }
 
-    // Activer le jeu de la pomme enchantée
+    // Activer le mini-jeu Harry Potter (Baguette de Sureau)
     const reactionHandler = require('./events/messageReactionAdd');
-    reactionHandler.setAppleGameMessageId('1437827377886658570');
+    reactionHandler.setHPGameMessageId('1450268822820094012');
+    console.log('🪄 Mini-jeu Harry Potter activé !');
   })
   .catch(error => {
     console.error('🔴 Erreur de connexion Discord:', error);

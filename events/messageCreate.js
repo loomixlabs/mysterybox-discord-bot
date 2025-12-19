@@ -1,6 +1,7 @@
 const db = require('../utils/database-pg');
 const { EmbedBuilder } = require('discord.js');
 const announcements = require('../utils/announcements');
+const quizAnswerMatcher = require('../utils/quizAnswerMatcher');
 
 module.exports = {
   name: 'messageCreate',
@@ -12,46 +13,59 @@ module.exports = {
     if (!message.guild) return;
 
     try {
-      // Extraire tous les mots du message (en minuscules pour comparaison)
-      // Utiliser [a-zA-ZÀ-ÿ] pour inclure les caractères accentués
-      const words = message.content.toLowerCase().match(/\b[a-zA-ZÀ-ÿ]+\b/g);
-      if (!words || words.length === 0) return;
+      // Récupérer toutes les missions "mot deviné" actives dans ce canal
+      const activeMissions = await db.getActiveKeywordMissionsInChannel(
+        message.guild.id,
+        message.channel.id
+      );
 
-      // Pour chaque mot, vérifier s'il correspond à une mission active
-      for (const word of words) {
-        const activeMissions = await db.getActiveKeywordMissions(
-          message.guild.id,
-          message.channel.id,
-          word
-        );
+      if (!activeMissions || activeMissions.length === 0) return;
 
-        if (!activeMissions || activeMissions.length === 0) continue;
+      // Normaliser le message complet pour comparaison (gère les accents)
+      const normalizedMessage = quizAnswerMatcher.normalizeAnswer(message.content);
 
-        // Traiter chaque mission correspondante
-        // FIX BUG #3: Limiter à UNE SEULE mission par mot-clé pour éviter les conflits
-        for (const missionProgress of activeMissions) {
-          // IMPORTANT: Vérifier que la mission n'est pas déjà terminée
-          // Cela empêche les duplications de validation
-          if (missionProgress.status === 'completed' || missionProgress.status === 'failed') {
-            console.log(`⏭️ Mission ${missionProgress.id} déjà traitée (status: ${missionProgress.status})`);
-            continue;
+      // Pour chaque mission active, vérifier si le mot-clé correspond
+      for (const missionProgress of activeMissions) {
+        // IMPORTANT: Vérifier que la mission n'est pas déjà terminée
+        if (missionProgress.status === 'completed' || missionProgress.status === 'failed') {
+          console.log(`⏭️ Mission ${missionProgress.id} déjà traitée (status: ${missionProgress.status})`);
+          continue;
+        }
+
+        // Normaliser le mot-clé de la mission (gère les accents)
+        const normalizedKeyword = quizAnswerMatcher.normalizeAnswer(missionProgress.target_keyword);
+
+        // Vérifier si le message contient le mot-clé (avec tolérance accents)
+        // Utiliser une regex pour trouver le mot comme mot entier
+        const keywordRegex = new RegExp(`\\b${normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+
+        if (!keywordRegex.test(normalizedMessage)) {
+          // Essayer aussi avec matchAnswer pour plus de tolérance
+          const matchResult = quizAnswerMatcher.matchAnswer(message.content, missionProgress.target_keyword);
+          if (!matchResult.isCorrect && !matchResult.isClose) {
+            continue; // Pas de correspondance
           }
+        }
 
-          // Récupérer le joueur (propriétaire de la mission)
-          const missionOwner = await db.getPlayer(message.guild.id, missionProgress.player_id);
-          if (!missionOwner) continue;
+        // Match trouvé ! Le mot du message est le mot-clé original (pour l'affichage)
+        const matchedWord = missionProgress.target_keyword;
 
-          // CAS 1: Le propriétaire de la mission dit le mot lui-même → ÉCHEC
-          // IMPORTANT: Comparer avec discord_id, pas player_id (qui est un INTEGER de la DB)
-          if (message.author.id === missionOwner.discord_id) {
-            await handleMissionFailure(message, missionProgress, missionOwner, word);
-            break; // Traiter seulement UNE mission par mot-clé
-          }
-          // CAS 2: Un autre joueur dit le mot → SUCCÈS
-          else {
-            await handleMissionSuccess(message, missionProgress, missionOwner, word);
-            break; // Traiter seulement UNE mission par mot-clé
-          }
+        // Récupérer le joueur (propriétaire de la mission)
+        const missionOwner = await db.getPlayer(message.guild.id, missionProgress.player_id);
+        if (!missionOwner) continue;
+
+        console.log(`🔤 Mot-clé détecté: "${matchedWord}" (normalisé: "${normalizedKeyword}") pour mission ${missionProgress.id}`);
+
+        // CAS 1: Le propriétaire de la mission dit le mot lui-même → ÉCHEC
+        // IMPORTANT: Comparer avec discord_id, pas player_id (qui est un INTEGER de la DB)
+        if (message.author.id === missionOwner.discord_id) {
+          await handleMissionFailure(message, missionProgress, missionOwner, matchedWord);
+          break; // Traiter seulement UNE mission par mot-clé
+        }
+        // CAS 2: Un autre joueur dit le mot → SUCCÈS
+        else {
+          await handleMissionSuccess(message, missionProgress, missionOwner, matchedWord);
+          break; // Traiter seulement UNE mission par mot-clé
         }
       }
     } catch (error) {

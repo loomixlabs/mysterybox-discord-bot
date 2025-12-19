@@ -754,6 +754,35 @@ async function onLoginStreak(guildId, playerId, currentStreak, client = null) {
   await checkLoginStreakBadges(guildId, playerId, currentStreak, client);
 }
 
+/**
+ * Hook appelé quand un joueur résout un emoji-puzzle avec 1 seul emoji
+ *
+ * @param {string} guildId - ID du serveur
+ * @param {number} playerId - ID du joueur
+ * @param {Object} client - Client Discord
+ */
+async function onEmojiPuzzleSolvedWithOneEmoji(guildId, playerId, client = null) {
+  try {
+    console.log(`🧩 [Badge] Emoji-puzzle résolu avec 1 emoji - Player ${playerId}`);
+
+    // Chercher le badge "EMOJI_PUZZLE_FIRST_TRY" ou équivalent
+    const badge = await db.queryOne(
+      `SELECT * FROM badges WHERE code = 'EMOJI_PUZZLE_FIRST_TRY' OR code = 'EMOJI_GENIUS'`
+    );
+
+    if (!badge) {
+      console.log('⚠️ Badge emoji-puzzle non trouvé en DB (sera créé plus tard)');
+      return;
+    }
+
+    // Débloquer directement le badge (condition = 1 occurrence)
+    await unlockBadge(guildId, playerId, badge.code, client);
+
+  } catch (error) {
+    console.error('🔴 Erreur hook onEmojiPuzzleSolvedWithOneEmoji:', error);
+  }
+}
+
 // ================================================================================
 // EXPORTS
 // ================================================================================
@@ -794,5 +823,6 @@ module.exports = {
   onMissionCompleted,
   onMysteryBoxOpened,
   onTrapSurvived,
-  onLoginStreak
+  onLoginStreak,
+  onEmojiPuzzleSolvedWithOneEmoji
 };

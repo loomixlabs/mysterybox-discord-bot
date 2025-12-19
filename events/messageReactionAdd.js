@@ -1,23 +1,27 @@
 const { Events, EmbedBuilder } = require('discord.js');
 const db = require('../utils/database-pg');
-const fs = require('fs');
-const path = require('path');
 
-// ID du message du jeu de la pomme (sera défini au lancement)
-let APPLE_GAME_MESSAGE_ID = null;
-const APPLE_GAME_CHANNEL_ID = '1428022811078688904';
-const APPLE_EMOJI = '🍎';
-const ENIGMATIC_HUNTER_ROLE_ID = '1437868343095722217';
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIGURATION DU MINI-JEU HARRY POTTER - Vif d'Or
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ID du message du jeu (sera défini au lancement)
+let HP_GAME_MESSAGE_ID = null;
+const HP_GAME_CHANNEL_ID = '1189233124064895096'; // Canal avec la VRAIE IMAGE (déclenche le mini-jeu)
+const HP_EMOJI = '🪄'; // Baguette magique
+const HP_ROLE_ID = '1450244510054355167'; // Rôle "Sorcier Perspicace"
+
+// Note: Canal 1339571870755717120 = Annonces officielles (message énigmatique avec indices)
 
 module.exports = {
   name: Events.MessageReactionAdd,
 
   /**
-   * Définir l'ID du message du jeu
+   * Définir l'ID du message du jeu HP
    */
-  setAppleGameMessageId(messageId) {
-    APPLE_GAME_MESSAGE_ID = messageId;
-    console.log(`🍎 Jeu de la pomme activé sur le message ${messageId}`);
+  setHPGameMessageId(messageId) {
+    HP_GAME_MESSAGE_ID = messageId;
+    console.log(`⚡ Jeu Harry Potter activé sur le message ${messageId}`);
   },
 
   async execute(reaction, user) {
@@ -35,9 +39,9 @@ module.exports = {
         }
       }
 
-      // Vérifier si c'est le message du jeu de la pomme
-      if (reaction.message.id !== APPLE_GAME_MESSAGE_ID) return;
-      if (reaction.message.channelId !== APPLE_GAME_CHANNEL_ID) return;
+      // Vérifier si c'est le message du jeu Harry Potter
+      if (reaction.message.id !== HP_GAME_MESSAGE_ID) return;
+      if (reaction.message.channelId !== HP_GAME_CHANNEL_ID) return;
 
       // Supprimer la réaction immédiatement (mystère total)
       try {
@@ -46,15 +50,15 @@ module.exports = {
         console.error('❌ Erreur lors de la suppression de la réaction:', error);
       }
 
-      // Vérifier si c'est la bonne réaction (🍎)
-      if (reaction.emoji.name !== APPLE_EMOJI) {
+      // Vérifier si c'est la bonne réaction (⚡)
+      if (reaction.emoji.name !== HP_EMOJI) {
         console.log(`❌ ${user.tag} a réagi avec ${reaction.emoji.name} (mauvais emoji)`);
         return;
       }
 
-      console.log(`🍎 ${user.tag} a réagi avec 🍎 !`);
+      console.log(`⚡ ${user.tag} a réagi avec ⚡ !`);
 
-      // Vérifier si le joueur a déjà gagné
+      // Vérifier si le joueur a déjà gagné (on utilise la même table apple_game_winners)
       const alreadyWon = await db.queryOne(
         `SELECT id FROM apple_game_winners
          WHERE user_id = $1 AND guild_id = $2`,
@@ -62,7 +66,7 @@ module.exports = {
       );
 
       if (alreadyWon) {
-        console.log(`⚠️ ${user.tag} a déjà gagné le jeu de la pomme`);
+        console.log(`⚠️ ${user.tag} a déjà gagné le jeu Harry Potter`);
         return;
       }
 
@@ -73,97 +77,122 @@ module.exports = {
         [user.id, reaction.message.guildId]
       );
 
-      // Attribuer le rôle "Chasseur énigmatique"
+      // Attribuer le rôle "Attrapeur de Vif d'Or"
       const guild = reaction.message.guild;
       try {
         const member = await guild.members.fetch(user.id);
-        const role = guild.roles.cache.get(ENIGMATIC_HUNTER_ROLE_ID);
+        const role = guild.roles.cache.get(HP_ROLE_ID);
 
         if (role) {
           await member.roles.add(role);
-          console.log(`🕵️ Rôle "Chasseur énigmatique" attribué à ${user.tag}`);
+          console.log(`🧙 Rôle "${role.name}" attribué à ${user.tag}`);
         } else {
-          console.error('❌ Rôle "Chasseur énigmatique" introuvable');
+          console.error('❌ Rôle HP introuvable');
         }
       } catch (error) {
         console.error(`❌ Erreur lors de l'attribution du rôle à ${user.tag}:`, error.message);
       }
 
-      // Créer l'embed de félicitations
+      // Créer les embeds de félicitations Harry Potter
       const congratsEmbed = new EmbedBuilder()
-        .setTitle('🍎 FÉLICITATIONS ! 🍎')
+        .setTitle('🪄 FÉLICITATIONS, SORCIER PERSPICACE ! 🪄')
         .setDescription(
-          '**Tu as découvert la pomme enchantée !**\n\n' +
-          'Comme dans le conte de Blanche-Neige, cette pomme n\'était pas qu\'un simple fruit... ' +
-          'Elle renferme un secret magique que seuls les plus astucieux peuvent découvrir !\n\n' +
-          '🕵️ **Tu reçois le rôle exclusif "Chasseur énigmatique"**\n' +
-          'Ce titre marque ton appartenance à une élite de détectives qui ont su déjouer les pièges et trouver le véritable arbre mystérieux !'
+          '**Tu as trouvé la Baguette de Sureau !**\n\n' +
+          'Parmi toutes les baguettes dispersées dans les couloirs de Poudlard, tu as su reconnaître la plus puissante de toutes... ' +
+          'La Baguette de Sureau, l\'une des trois **Reliques de la Mort** !\n\n' +
+          '🧙 **Tu reçois le rôle exclusif "Sorcier Perspicace"**\n' +
+          'Ce titre marque ton entrée officielle dans l\'école de magie de Poudlard !'
         )
-        .setColor('#FF0000')
-        .setThumbnail('https://popcinema.fr/wp-content/uploads/2025/05/Disney-vs-Pixar-Quel-studio-a-vraiment-le-meilleur-film-.png');
+        .setColor('#9B59B6')
+        .setThumbnail('http://72.60.185.62:8080/hp-images/Gemini_Generated_Image_iv93dwiv93dwiv93.png');
 
       const infoEmbed = new EmbedBuilder()
-        .setTitle('🏰 BIENVENUE DANS L\'UNIVERS DE BLANCHE-NEIGE')
+        .setTitle('🏰 BIENVENUE À POUDLARD - Comment ça marche ?')
         .setDescription(
-          'Notre serveur a été transformé en un royaume enchanté où tu vas pouvoir retrouver les **7 nains** disparus dans la forêt !\n\n' +
-          '**Pendant les 20 prochains jours**, des boîtes mystérieuses apparaîtront dans les canaux du serveur.'
+          'Le Choixpeau t\'a jugé digne ! Voici comment fonctionne ta quête de sorcier...\n\n' +
+          '**📦 DES BOÎTES MYSTÉRIEUSES** apparaîtront régulièrement dans les salons du serveur. ' +
+          'Clique sur le bouton **"Ouvrir"** pour découvrir ce qu\'elles contiennent !'
         )
         .addFields(
           {
-            name: '🎁 LES 7 NAINS - À retrouver et collectionner',
-            value: '• Prof, Simplet, Dormeur, Atchoum, Joyeux, Timide et Grincheux\n' +
-                   '• Chaque nain trouvé te rapproche de la collection complète !\n' +
-                   '• **7 nains uniques** à découvrir',
+            name: '🎁 QUE CONTIENNENT LES BOÎTES ?',
+            value: '**🏆 Reliques Magiques** → Collecte les 22 objets pour compléter ta collection !\n' +
+                   '• 3 **Légendaires** (Baguette de Sureau, Pierre de Résurrection, Cape d\'Invisibilité)\n' +
+                   '• 5 **Épiques** (Carte du Maraudeur, Éclair de Feu, Choixpeau...)\n' +
+                   '• 6 **Rares** (Vif d\'Or, Nimbus 2000, Pensine...)\n' +
+                   '• 8 **Communs** (Écharpes des maisons, Chocogrenouille...)\n\n' +
+                   '**⚠️ Maléfices** → Attention aux pièges des forces du mal !\n' +
+                   '• 💀 **Avada Kedavra** - Perte de TOUS tes objets\n' +
+                   '• 🦇 **Maléfice de Chauve-Furie** - Perte d\'un objet aléatoire\n' +
+                   '• 💀 **Baiser du Détraqueur** - Cooldown temporaire\n' +
+                   '• 📣 **Beuglante de Molly** - Humiliation publique',
             inline: false
           },
           {
-            name: '📋 MISSIONS - Défis thématiques',
-            value: '• Quiz sur le conte de Blanche-Neige\n' +
-                   '• Défis créatifs et interactifs\n' +
-                   '• Récompenses bonus pour les plus malins !',
+            name: '📜 MISSIONS - Épreuves du Tournoi',
+            value: 'Des **missions** seront postées régulièrement :\n' +
+                   '• **Quiz** sur l\'univers Harry Potter\n' +
+                   '• **Mots à deviner** (sortilèges, créatures magiques...)\n' +
+                   '• **Puzzle Emoji** à décrypter\n' +
+                   '• **Vrai ou Faux** sur le monde des sorciers\n' +
+                   '• Récompenses : reliques garanties ou super bonus !',
             inline: false
           },
           {
-            name: '⚠️ PIÈGES - Attention où tu mets les pieds !',
-            value: '• **Cooldown temporaire** : tu ne pourras pas ouvrir de boîte pendant un certain temps\n' +
-                   '• **Perte d\'un nain** : la reine peut te voler l\'un de tes précieux nains !\n' +
-                   '• Reste vigilant et stratégique !',
+            name: '✨ SUPER BONUS - Pouvoirs Spéciaux',
+            value: 'Tu peux gagner des **bonus temporaires** très puissants :\n' +
+                   '• 👁️ **Vision Divine** - Voir le contenu des boîtes avant de les ouvrir\n' +
+                   '• 🛡️ **Bouclier Anti-Piège** - Annule le prochain maléfice reçu\n' +
+                   '• 🧲 **Aimant à Légendaires** - Augmente tes chances de légendaires\n' +
+                   '• 💰 **Jackpot x2** - Double ta prochaine trouvaille',
             inline: false
           }
         )
-        .setColor('#FFD700');
+        .setColor('#740001'); // Rouge Gryffondor
 
       const rewardsEmbed = new EmbedBuilder()
-        .setTitle('🎯 TON OBJECTIF')
+        .setTitle('🏆 OBJECTIF & RÉCOMPENSES')
         .setDescription(
-          'Sois parmi les premiers à retrouver **LES 7 NAINS** pour obtenir le rôle légendaire et ses avantages exclusifs !'
+          'Sois parmi les premiers à rassembler **TOUTES LES RELIQUES** pour devenir un **Maître Sorcier** !'
         )
         .addFields(
           {
-            name: '🏆 RÉCOMPENSES FINALES',
-            value: '• 👑 **Rôle "Blanche neige"** exclusif\n' +
-                   '• 🎁 **Participations supplémentaires** aux giveaways du serveur\n' +
-                   '• 🌟 Reconnaissance éternelle dans le royaume !',
+            name: '🎖️ RÔLES DE PROGRESSION',
+            value: 'Plus tu collectes, plus tu montes en grade :\n' +
+                   '• **Apprenti Sorcier** → Première relique collectée\n' +
+                   '• **Sorcier Confirmé** → 50% de la collection\n' +
+                   '• **Maître Sorcier** → Collection complète (22/22)\n' +
+                   '→ Chaque rôle débloque des **participations bonus aux giveaways** !',
             inline: false
           },
           {
-            name: '⚡ COMMANDES DISPONIBLES',
-            value: '📊 `/profile` → Consulte ta progression et tes nains trouvés\n' +
-                   '🏅 `/leaderboard` → Classement des meilleurs collectionneurs\n' +
-                   '⏰ `/my-bonuses` → Vérifie tes pénalités actives',
+            name: '🏅 BADGES & SUCCÈS',
+            value: 'Débloque des **badges** en accomplissant des défis :\n' +
+                   '• Ouvrir X boîtes mystérieuses\n' +
+                   '• Collecter toutes les reliques d\'une rareté\n' +
+                   '• Utiliser des super bonus\n' +
+                   '• Survivre aux maléfices\n' +
+                   '• Et bien d\'autres...',
             inline: false
           },
           {
-            name: '💡 ASTUCES & STRATÉGIES',
-            value: '✅ Sois rapide ! Les boîtes sont limitées\n' +
-                   '✅ Utilise ta connaissance du conte pour les quiz\n' +
-                   '✅ Évite les pièges de la méchante reine\n' +
-                   '✅ Reste actif sur le serveur pour ne rien manquer',
+            name: '📱 COMMANDES',
+            value: '📊 `/profile` → Ta progression complète\n' +
+                   '  ↳ Inventaire, bonus actifs, historique, badges, personnalisation\n' +
+                   '🏅 `/leaderboard` → Classement des meilleurs collectionneurs',
+            inline: false
+          },
+          {
+            name: '💡 CONSEILS DE DUMBLEDORE',
+            value: '✅ Sois rapide ! Les boîtes disparaissent après un certain temps\n' +
+                   '✅ Garde tes super bonus pour les moments stratégiques\n' +
+                   '✅ Participe aux missions pour des récompenses garanties\n' +
+                   '✅ *"Ce sont nos choix qui montrent ce que nous sommes vraiment"*',
             inline: false
           }
         )
-        .setColor('#00FF00')
-        .setFooter({ text: '"Miroir, mon beau miroir, qui est le meilleur collectionneur ?"' });
+        .setColor('#1A472A') // Vert Serpentard
+        .setFooter({ text: '⚡ Que la magie soit avec toi, jeune sorcier !' });
 
       // Envoyer les embeds au gagnant
       try {
@@ -171,7 +200,7 @@ module.exports = {
         console.log(`✅ MP envoyé à ${user.tag} !`);
 
         // Log dans la console du serveur
-        console.log(`🎉 ${user.tag} (${user.id}) a trouvé la pomme enchantée dans ${guild.name} !`);
+        console.log(`🎉 ${user.tag} (${user.id}) a attrapé le Vif d'Or dans ${guild.name} !`);
 
       } catch (error) {
         console.error(`❌ Impossible d'envoyer le MP à ${user.tag}:`, error.message);

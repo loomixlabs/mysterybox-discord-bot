@@ -1,4 +1,5 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, AttachmentBuilder } = require('discord.js');
+const path = require('path');
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
 const superBonusHandler = require('./superBonusHandler');
@@ -1406,6 +1407,11 @@ class MysteryBoxHandler {
       // permanent: pas d'expiration
     } else {
       console.log(`📱 [SUPER BONUS] MANUEL - activated_at reste NULL`);
+      // Pour les bonus manuels de type 'charges', initialiser remaining_charges quand même
+      if (bonus.duration_type === 'charges') {
+        remaining_charges = bonus.duration_value;
+        console.log(`✅ [SUPER BONUS] MANUEL avec charges - remaining_charges initialisé: ${remaining_charges}`);
+      }
     }
     // else: MANUEL - activated_at et expires_at restent NULL jusqu'à activation via /profile
 
@@ -1495,6 +1501,74 @@ class MysteryBoxHandler {
       common: '⚪'
     }[bonus.rarity] || '⚪';
 
+    // ═══════════════════════════════════════════════════════════════════
+    // CAS SPÉCIAL: MYSTERYBOX JOKER - RÉVÉLATION LÉGENDAIRE
+    // ═══════════════════════════════════════════════════════════════════
+    if (bonus.effect_type === 'joker') {
+      // Créer l'attachment pour le GIF personnalisé
+      const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
+      const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+
+      const jokerEmbed = new EmbedBuilder()
+        .setTitle('🃏✨ MYSTERYBOX JOKER OBTENU ! ✨🃏')
+        .setDescription(
+          `╔═══════════════════════════════════════════════╗\n` +
+          `║     🎰 **BONUS ULTRA-LÉGENDAIRE** 🎰      ║\n` +
+          `╚═══════════════════════════════════════════════╝\n\n` +
+          `🌟 **FÉLICITATIONS** 🌟\n\n` +
+          `Tu viens d'obtenir le bonus le plus puissant du jeu !\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `🃏 **${bonus.name}**\n\n` +
+          `${bonus.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `📱 **Comment l'utiliser ?**\n` +
+          `Utilise la commande \`/profile\` puis clique sur\n` +
+          `**🎁 Mes Super Bonus** pour activer ton Joker !\n\n` +
+          `⚡ **Tu pourras choisir N'IMPORTE QUEL collectible**\n` +
+          `⚡ **qui te manque dans ta collection !**\n\n` +
+          `╭─────────────────────────────────────────╮\n` +
+          `│  💎 *Le pouvoir absolu est entre tes mains* 💎  │\n` +
+          `╰─────────────────────────────────────────╯`
+        )
+        .setColor('#FFD700') // Or légendaire
+        .setImage('attachment://joker-wow.gif') // GIF personnalisé attaché
+        .addFields(
+          {
+            name: '🏆 Rareté',
+            value: '🌟 **LÉGENDAIRE** 🌟',
+            inline: true
+          },
+          {
+            name: '⚡ Pouvoir',
+            value: '∞ **ILLIMITÉ** ∞',
+            inline: true
+          },
+          {
+            name: '🎯 Utilisation',
+            value: '1️⃣ **Unique**',
+            inline: true
+          }
+        )
+        .setFooter({ text: '🃏 MysteryBox Joker • Le bonus ultime des légendes' });
+
+      await interaction.followUp({ embeds: [jokerEmbed], files: [jokerAttachment], flags: 64 });
+
+      // Annonce publique ÉPIQUE du Joker (avec le même GIF attaché)
+      await announcements.announceSuperBonusWithAttachment(
+        interaction.client,
+        interaction.guildId,
+        interaction.user.username,
+        bonus.name,
+        bonus.icon,
+        jokerGifPath
+      );
+
+      return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTRES SUPER BONUS (comportement normal)
+    // ═══════════════════════════════════════════════════════════════════
     const embed = new EmbedBuilder()
       .setTitle(`${bonus.icon} Super Bonus Obtenu !`)
       .setDescription(description)

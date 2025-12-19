@@ -266,15 +266,21 @@ class DatabaseWrapper {
         // Ne pas bloquer la création du thème si les pièges échouent
       }
 
-      // Créer les templates d'annonces par défaut (si premier thème du serveur)
-      if (existingThemes.length === 0) {
-        try {
-          const { createDefaultTemplatesForGuild } = require('./announcementDefaults');
+      // Créer les templates d'annonces par défaut POUR CE THÈME SPÉCIFIQUE
+      // (chaque thème a ses propres templates, pas de réutilisation des anciens)
+      try {
+        const { createDefaultTemplatesForTheme, createDefaultTemplatesForGuild } = require('./announcementDefaults');
+
+        // Créer les templates spécifiques au thème (avec theme_id = theme.id)
+        await createDefaultTemplatesForTheme(guildId, theme.id);
+
+        // Si c'est le premier thème, aussi créer les settings d'annonces (toggles)
+        if (existingThemes.length === 0) {
           await createDefaultTemplatesForGuild(guildId);
-        } catch (error) {
-          console.error('⚠️ Erreur lors de la création des templates d\'annonces:', error);
-          // Ne pas bloquer la création du thème si les templates échouent
         }
+      } catch (error) {
+        console.error('⚠️ Erreur lors de la création des templates d\'annonces:', error);
+        // Ne pas bloquer la création du thème si les templates échouent
       }
 
       return theme;
@@ -577,6 +583,39 @@ class DatabaseWrapper {
   }
 
   /**
+   * Récupérer N questions true-false aléatoires pour une mission
+   * @param {string} guildId - ID du serveur
+   * @param {number} missionId - ID de la mission
+   * @param {number} themeId - ID du thème (optionnel)
+   * @param {number} count - Nombre de questions à récupérer
+   * @returns {Array} Liste de questions
+   */
+  async getRandomTrueFalseQuestions(guildId, missionId, themeId = null, count = 3) {
+    guildId = this._getGuildId(guildId);
+
+    // Pour true-false, correct_answer doit être 'vrai' ou 'faux'
+    if (themeId) {
+      return this.queryAll(
+        `SELECT * FROM quiz_questions
+         WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+         AND LOWER(correct_answer) IN ('vrai', 'faux', 'true', 'false')
+         ORDER BY RANDOM()
+         LIMIT $4`,
+        [guildId, missionId, themeId, count]
+      );
+    }
+
+    return this.queryAll(
+      `SELECT * FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2
+       AND LOWER(correct_answer) IN ('vrai', 'faux', 'true', 'false')
+       ORDER BY RANDOM()
+       LIMIT $3`,
+      [guildId, missionId, count]
+    );
+  }
+
+  /**
    * Ajouter une question de quiz (LEGACY sans mission_id)
    */
   async addQuizQuestion(guildId, themeId, questionText, correctAnswer, wrongAnswers = [], hint = null, difficulty = 'medium', missionId = null) {
@@ -674,7 +713,8 @@ class DatabaseWrapper {
   async addMission(guildId, themeId, missionId, name, type, description, validationData, timeout, imageUrl = null, rewardType = 'random-collectible', rewardData = null) {
     guildId = this._getGuildId(guildId);
     // Déterminer le type de validation selon le type de mission
-    const validationType = (type === 'quiz' || type === 'keyword-message') ? 'auto' : 'manual';
+    const autoValidationTypes = ['quiz', 'keyword-message', 'true-false', 'emoji-puzzle', 'wordle', 'unscramble', 'hangman'];
+    const validationType = autoValidationTypes.includes(type) ? 'auto' : 'manual';
 
     return this.queryOne(
       `INSERT INTO missions (guild_id, theme_id, mission_id, name, type, description, validation_type, validation_data, timeout, image_url, reward_type, reward_data)
@@ -698,6 +738,7 @@ class DatabaseWrapper {
   /**
    * Récupérer les missions "mot deviné" actives pour un canal et mot-clé
    * Filtre sur le mot-clé ASSIGNÉ au joueur (mp.target_keyword) pour éviter les collisions
+   * @deprecated Utiliser getActiveKeywordMissionsInChannel() + filtrage JS avec quizAnswerMatcher
    */
   async getActiveKeywordMissions(guildId, channelId, keyword) {
     guildId = this._getGuildId(guildId);
@@ -712,6 +753,26 @@ class DatabaseWrapper {
          AND LOWER(mp.target_keyword) = LOWER($3)
          AND (mp.expires_at IS NULL OR mp.expires_at > NOW())`,
       [guildId, channelId, keyword]
+    );
+  }
+
+  /**
+   * Récupérer TOUTES les missions "mot deviné" actives pour un canal
+   * Le filtrage par mot-clé se fait côté JS avec quizAnswerMatcher pour gérer les accents
+   */
+  async getActiveKeywordMissionsInChannel(guildId, channelId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryAll(
+      `SELECT mp.*, m.name as mission_name, m.reward_type, m.reward_data
+       FROM mission_progress mp
+       JOIN missions m ON mp.mission_id = m.id
+       WHERE mp.guild_id = $1
+         AND mp.status = 'in_progress'
+         AND m.type = 'keyword-message'
+         AND mp.target_channel_id = $2
+         AND mp.target_keyword IS NOT NULL
+         AND (mp.expires_at IS NULL OR mp.expires_at > NOW())`,
+      [guildId, channelId]
     );
   }
 
@@ -2016,30 +2077,29 @@ class DatabaseWrapper {
   // ==================== SUPER BONUS INSTALLATION ====================
 
   /**
-   * Installer les 11 super bonus fixes pour une guild
+   * Installer les 8 super bonus fixes pour une guild
    * Utilisé lors de l'invitation du bot sur un nouveau serveur
    * ⚠️ Utilise ON CONFLICT DO NOTHING pour éviter les doublons
+   *
+   * IMPLÉMENTÉS (4):
+   * - Vision Divine (reveal) - révèle contenu mystery box
+   * - Aimant à Légendaires (rarity_boost) - boost drops légendaires
+   * - Jackpot x2 (multiplier) - double les collectibles
+   * - Bouclier Anti-Piège (protection) - bloque 1 piège
+   *
+   * À IMPLÉMENTER (4):
+   * - Accélérateur de Cooldown (cooldown) - reset cooldowns
+   * - Aura de Célébrité (cosmetic) - effets visuels
+   * - Parrain/Marraine (transfer) - transfert bonus
+   * - MysteryBox Joker (joker) - choisir collectible manquant
    */
   async installSuperBonusesForGuild(guildId) {
     guildId = this._getGuildId(guildId);
 
     console.log(`🎁 Installation des super bonus pour guild ${guildId}...`);
 
-    // Définition des 11 super bonus fixes
+    // Définition des 7 super bonus
     const bonuses = [
-      {
-        bonus_id: 'chance_devil',
-        name: 'Chance du Diable',
-        description: '+20% de chance sur toutes les mystery boxes !',
-        icon: '🎰',
-        bonus_type: 'boost',
-        effect_type: 'probability',
-        effect_config: { boost_percentage: 20, applies_to: 'all' },
-        duration_type: 'temporary',
-        duration_value: 604800, // 7 jours
-        color: '#e74c3c',
-        rarity: 'epic'
-      },
       {
         bonus_id: 'divine_vision',
         name: 'Vision Divine',
@@ -2067,17 +2127,17 @@ class DatabaseWrapper {
         rarity: 'legendary'
       },
       {
-        bonus_id: 'celebrity_aura',
-        name: 'Aura de Célébrité',
-        description: 'Nom en GOLD et réaction ⭐ automatique sur tous tes messages',
-        icon: '👑',
-        bonus_type: 'social',
-        effect_type: 'cosmetic',
-        effect_config: { name_color: 'gold', auto_reaction: '⭐' },
-        duration_type: 'temporary',
-        duration_value: 172800, // 48h
-        color: '#f39c12',
-        rarity: 'rare'
+        bonus_id: 'jackpot_x2',
+        name: 'Jackpot x2',
+        description: 'La prochaine mystery box donnera DOUBLE récompense si collectible !',
+        icon: '💵',
+        bonus_type: 'economy',
+        effect_type: 'multiplier',
+        effect_config: { multiplier: 2, applies_to: 'collectible' },
+        duration_type: 'charges',
+        duration_value: 5,
+        color: '#27ae60',
+        rarity: 'epic'
       },
       {
         bonus_id: 'trap_shield',
@@ -2093,19 +2153,6 @@ class DatabaseWrapper {
         rarity: 'epic'
       },
       {
-        bonus_id: 'collector_insurance',
-        name: 'Assurance Collector',
-        description: 'Si tu perds un collectible (piège), récupération automatique GRATUITE',
-        icon: '💎',
-        bonus_type: 'protection',
-        effect_type: 'protection',
-        effect_config: { protects_from: 'lose_collectible', auto_recover: true },
-        duration_type: 'permanent',
-        duration_value: null,
-        color: '#1abc9c',
-        rarity: 'legendary'
-      },
-      {
         bonus_id: 'cooldown_accelerator',
         name: 'Accélérateur de Cooldown',
         description: 'Enlève TOUS tes cooldowns actifs immédiatement',
@@ -2119,43 +2166,17 @@ class DatabaseWrapper {
         rarity: 'rare'
       },
       {
-        bonus_id: 'jackpot_x2',
-        name: 'Jackpot x2',
-        description: 'La prochaine mystery box donnera DOUBLE récompense si collectible !',
-        icon: '💵',
-        bonus_type: 'economy',
-        effect_type: 'multiplier',
-        effect_config: { multiplier: 2, applies_to: 'collectible' },
-        duration_type: 'charges',
-        duration_value: 5,
-        color: '#27ae60',
-        rarity: 'epic'
-      },
-      {
-        bonus_id: 'trap_detector',
-        name: 'Détecteur de Pièges',
-        description: 'Les mystery boxes pièges sont marquées 💀 (visible que pour toi)',
-        icon: '🔍',
-        bonus_type: 'economy',
-        effect_type: 'detector',
-        effect_config: { detects: 'trap', marker: '💀', visible_only_to_user: true },
+        bonus_id: 'celebrity_aura',
+        name: 'Aura de Célébrité',
+        description: 'Nom en GOLD et réaction ⭐ automatique sur tous tes messages',
+        icon: '👑',
+        bonus_type: 'social',
+        effect_type: 'cosmetic',
+        effect_config: { name_color: 'gold', auto_reaction: '⭐' },
         duration_type: 'temporary',
         duration_value: 172800, // 48h
-        color: '#95a5a6',
+        color: '#f39c12',
         rarity: 'rare'
-      },
-      {
-        bonus_id: 'back_to_future',
-        name: 'Retour dans le Futur',
-        description: 'Relance UNE mystery box déjà ouverte (garde le meilleur résultat des 2)',
-        icon: '⏪',
-        bonus_type: 'time',
-        effect_type: 'reroll',
-        effect_config: { reroll_count: 1, keeps_best: true, time_limit_minutes: 10 },
-        duration_type: 'charges',
-        duration_value: 1,
-        color: '#34495e',
-        rarity: 'legendary'
       },
       {
         bonus_id: 'godparent',
@@ -2169,6 +2190,19 @@ class DatabaseWrapper {
         duration_value: 432000, // 5 jours
         color: '#16a085',
         rarity: 'epic'
+      },
+      {
+        bonus_id: 'mystery_joker',
+        name: 'MysteryBox Joker',
+        description: 'Choisissez N\'IMPORTE QUEL collectible manquant de votre collection !',
+        icon: '🃏',
+        bonus_type: 'choice',
+        effect_type: 'joker',
+        effect_config: { allows_choice: true, choice_from: 'missing_collectibles', shows_rarity: true },
+        duration_type: 'charges',
+        duration_value: 1,
+        color: '#9b59b6',
+        rarity: 'legendary'
       }
     ];
 

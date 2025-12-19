@@ -5,6 +5,219 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+### ✨ Added
+
+- **[Tutoriel]**: Nouvelle commande `/tutoriel` - Guide interactif complet du jeu MysteryBox
+  - 8 sections navigables par boutons: Accueil, MysteryBox, Collectibles, Pièges, Missions, Super Bonus, Profile, FAQ
+  - Informations dynamiques basées sur le thème actif (collectibles, pièges, rôles)
+  - Documentation des 5 types de pièges (cooldown, voleur, dévastateur, honte publique, boîte vide)
+  - Documentation des 4 types de missions avec explications (Quiz, Vrai/Faux, Emoji Puzzle, Mot-Clé)
+  - Documentation complète des Super Bonus incluant le JOKER légendaire
+  - Affichage des rôles de progression (intermédiaires + rôle final)
+  - **Fichiers créés**:
+    - `commands/player/tutoriel.js`: Commande slash
+    - `views/tutorialView.js`: 8 fonctions de vue avec embeds et navigation
+
+### 🐛 Fixed
+
+- **[Tutoriel]**: Correction de l'affichage des rôles de progression
+  - **Problème**: Les rôles intermédiaires ne s'affichaient pas (Débutant, Explorateur, Expert)
+  - **Cause**: Requête vers la table `progression_roles` qui est vide - les données sont dans `theme_config.progression_roles` (JSON)
+  - **Solution**: Requête vers `theme_config.progression_roles` avec parsing JSON et fallback vers l'ancienne table
+  - **Fichier modifié**: `views/tutorialView.js` (lignes 575-603)
+
+- **[Super Bonus]**: Nouveau bonus légendaire "MysteryBox Joker" 🃏
+  - Permet de choisir N'IMPORTE QUEL collectible manquant de sa collection
+  - Activation manuelle via `/profile` → Mes Bonus
+  - Interface de sélection avec:
+    - Liste des collectibles manquants triés par rareté (légendaire → commun)
+    - Indicateurs de rareté (🌟 💜 💙 ⚪)
+    - Pagination si plus de 25 collectibles
+    - Bouton d'annulation (bonus non consommé)
+  - 1 charge unique - utilisation définitive
+  - Source `joker` dans l'historique de collection
+  - **Fichiers modifiés**:
+    - `utils/database-pg.js`: Ajout dans `installSuperBonusesForGuild()`
+    - `handlers/superBonusHandler.js`: Nouvelles fonctions (`hasJokerBonus`, `getMissingCollectibles`, `consumeJokerBonus`, `createJokerSelectionEmbed`, `createJokerSelectMenu`)
+    - `handlers/profileHandler.js`: Import superBonusHandler + handler joker + export `handleJokerInteraction`
+    - `events/interactionCreate.js`: Routing des interactions joker (buttons + select menu)
+  - **Contraintes DB**: Ajout `joker` à `effect_type`, `choice` à `bonus_type`
+
+### 💄 Enhanced
+
+- **[Super Bonus Joker]**: Expérience WOW légendaire avec GIFs animés
+  - **Révélation à l'ouverture MysteryBox** (`mysteryBoxHandler.js`):
+    - Embed épique avec cadre ASCII art doré
+    - GIF Jackpot animé (Tenor) en image principale
+    - GIF Joker card en thumbnail
+    - Couleur or légendaire (#FFD700)
+    - Message dramatique "BONUS ULTRA-LÉGENDAIRE"
+    - Instructions d'activation via `/profile`
+    - Annonce publique automatique
+  - **Interface de sélection** (`superBonusHandler.js`):
+    - Nouveau design avec cadre ASCII "POUVOIR LÉGENDAIRE DÉBLOQUÉ"
+    - GIF coffre au trésor animé
+    - GIF carte Joker en thumbnail
+    - Messages immersifs personnalisés
+  - **Embed de succès** (`superBonusHandler.js`):
+    - Design différent selon la rareté choisie
+    - GIF Jackpot pour légendaire
+    - GIF Confetti pour épique
+    - GIF Sparkles pour rare
+    - Cadres ASCII personnalisés par rareté
+    - Messages de félicitations adaptés
+  - **Migration VPS** (`scripts/migration-joker-system-vps.js`):
+    - Colonne `super_bonus_joker_used` dans announcement_settings
+    - Contrainte `joker` dans collections.source
+    - Template d'annonce joker pour tous les serveurs
+
+### 🐛 Fixed
+
+- **[Templates d'annonces]**: Correction du bug de persistance entre thèmes
+  - **Problème**: Les templates personnalisés d'un ancien thème (ex: "pomme empoisonnée") persistaient pour les nouveaux thèmes
+  - **Cause**: Templates créés UNIQUEMENT pour le premier thème (`theme_id = NULL`), réutilisés par tous les thèmes suivants
+  - **Solution**: Chaque nouveau thème reçoit maintenant ses propres templates par défaut (`theme_id = nouveau_theme.id`)
+  - **Fichiers modifiés**:
+    - `utils/announcementDefaults.js`: Nouvelle fonction `createDefaultTemplatesForTheme(guildId, themeId)`
+    - `utils/database-pg.js`: `createTheme()` appelle maintenant `createDefaultTemplatesForTheme()` pour chaque nouveau thème
+  - **Impact**: Les propriétaires peuvent personnaliser les templates indépendamment par thème
+
+- **[Admin Panel]**: Correction du bug de sauvegarde des templates (titre, description, couleur, image)
+  - **Problème**: Les modifications de templates via l'admin panel ne se sauvegardaient pas correctement pour le thème actif
+  - **Cause**: `updateAnnouncementTemplate()` mettait à jour les templates globaux (`theme_id = NULL`) au lieu des templates du thème actif
+  - **Solution**: Vérifier `template.theme_id` et utiliser `updateAnnouncementTemplateForTheme()` quand le template appartient à un thème spécifique
+  - **Fichiers modifiés**:
+    - `handlers/modalHandler.js`: Correction de `handleTemplateText()` (lignes 1039-1056), `handleTemplateColor()` (lignes 1105-1116), et handler d'image URL (lignes 1216-1221)
+    - `handlers/adminPanelHandler.js`: Correction de `handleTemplateColorSelection()` (lignes 5092-5103) et upload d'image (lignes 2447-2452)
+  - **Impact**: Les modifications de templates sont maintenant correctement sauvegardées pour le thème actif
+
+### 🔧 Changed
+
+- **[Super Bonus]**: Nettoyage du système - passage de 11 à 8 bonus
+  - Bonus supprimés: Chance du Diable, Détecteur de Pièges, Retour dans le Futur, Assurance Collector, Voix de Dieu
+  - Bonus conservés: Vision Divine, Aimant à Légendaires, Jackpot x2, Bouclier Anti-Piège, Accélérateur de Cooldown, Aura de Célébrité, Parrain/Marraine, MysteryBox Joker
+
+---
+
+## [2.1.1] - 2025-12-14
+
+### ✨ Added
+
+- **[Admin Panel]**: Bouton "Modifier Nom/Description" pour toutes les missions
+  - Permet d'éditer le nom et la description de n'importe quelle mission
+  - Modal avec champs pré-remplis avec les valeurs actuelles
+  - Fichiers modifiés:
+    - `handlers/adminPanelHandler.js`: Ajout du bouton `mission_edit_info_`
+    - `handlers/missionHandler.js`: Handler `handleMissionEditInfo()` (modal)
+    - `handlers/modalHandler.js`: Handler `handleMissionEditInfoSubmit()`
+    - `events/interactionCreate.js`: Routing du bouton
+
+### 🐛 Fixed
+
+- **[Mission Mot Deviné]**: Correction du bug des accents
+  - Problème: "café" n'était pas reconnu si le joueur écrivait "cafe"
+  - Solution: Utilisation de `quizAnswerMatcher.normalizeAnswer()` pour comparer les mots
+  - Fichiers modifiés:
+    - `events/messageCreate.js`: Utilise quizAnswerMatcher pour la comparaison
+    - `utils/database-pg.js`: Nouvelle fonction `getActiveKeywordMissionsInChannel()`
+
+### 💄 Changed
+
+- **[Admin Panel]**: Lifting de l'embed "GESTION DES MISSIONS"
+  - Nouveau design avec résumé par type de mission
+  - Affichage du timeout et max_attempts par mission
+  - Support de tous les types de missions (9 types)
+  - Select menu avec emojis appropriés par type
+  - Fichier modifié: `handlers/adminPanelHandler.js` (lignes 2944-3063)
+
+- **[Emoji-Puzzle]**: Ajout du système de catégories
+  - 8 catégories: Film, Personnage, Musique, Nourriture, Lieu, Expression, Jeu, Autre
+  - Utilise la colonne `hint` existante (pas de nouvelle colonne)
+  - Catégorie affichée dans l'embed du mini-jeu
+
+- **[Admin Panel]**: Lifting des embeds de détail mission true-false et emoji-puzzle
+  - Embed spécialisé pour true-false avec:
+    - Nombre de questions configurées
+    - Questions par session (max_attempts)
+    - Temps par question (timeout)
+    - Répartition par difficulté (Facile/Moyen/Difficile)
+    - Équilibre Vrai/Faux
+  - Embed spécialisé pour emoji-puzzle avec:
+    - Nombre de puzzles configurés
+    - Essais max et temps par emoji
+    - Répartition par difficulté
+  - Couleurs distinctives (vert pour V/F, violet pour emoji-puzzle)
+  - Fichier modifié: `handlers/adminPanelHandler.js` (lignes 6501-6691)
+
+---
+
+## [2.1.0] - 2025-12-14
+
+### ✨ Added
+
+- **[Mini-jeu Emoji Devinette]**: Nouveau type de mission `emoji-puzzle`
+  - **Révélation Progressive**: Les emojis apparaissent un par un
+  - **Timing dynamique**: `timeout` = secondes entre chaque emoji, dernier tour = timeout × 3
+  - **Essais limités**: `max_attempts` = nombre total de tentatives
+  - **Badge bonus**: "Génie des Emojis" pour résolution avec 1 seul emoji
+  - **Input par message**: Utilise le picker d'emojis Discord (pas de modal)
+  - **Fonctionnalités**:
+    - Interface intuitive avec emojis révélés progressivement
+    - Compteur d'essais restants en temps réel
+    - Réactions de feedback (🎉/🔶/❌) sur les réponses
+    - Fuzzy matching pour tolérance aux fautes de frappe
+    - Archivage automatique du thread après échec/succès
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js`:
+      - `validateEmojiPuzzle()` (lignes 978-1234) - Logique révélation progressive
+      - `handleEmojiPuzzleManagement()` (lignes 3855-3956) - Liste puzzles admin
+      - `handleEmojiPuzzleAdd()` (lignes 3962-4130) - Wizard ajout 3 étapes
+      - `handleEmojiPuzzleDeleteSelect()` (lignes 4136-4179) - Select suppression
+      - `handleEmojiPuzzleDelete()` (lignes 4185-4214) - Suppression puzzle
+    - `handlers/adminPanelHandler.js`: Bouton "🧩 Gérer les Puzzles", type selector
+    - `handlers/modalHandler.js`: Configuration timeout/max_attempts
+    - `handlers/badgeHandler.js`: Hook `onEmojiPuzzleSolvedWithOneEmoji()`
+    - `events/interactionCreate.js`: Routing boutons et select menus emoji-puzzle
+  - **Storage**: Réutilise `quiz_questions` (question_text = emojis, correct_answer = réponse)
+  - **Badge créé**: EMOJI_PUZZLE_FIRST_TRY (epic, mission category)
+
+- **[Mini-jeu Vrai ou Faux]**: Nouveau type de mission `true-false`
+  - **Migration DB**: `database/migrations/add-new-mission-types.sql`
+  - **Nouvelles colonnes**:
+    - `mission_progress.game_state` (JSONB) : État du jeu en cours
+  - **Contrainte mise à jour**: 12 types de missions (7 existants + 5 nouveaux)
+  - **Nouveaux types**: `emoji-puzzle`, `wordle`, `unscramble`, `hangman`, `true-false`
+  - **Fonctionnalités true-false**:
+    - Nombre de questions configurable via `max_attempts`
+    - Temps par question via `timeout` (en secondes)
+    - Interface boutons ✅ Vrai / ❌ Faux
+    - 100% de bonnes réponses requis pour réussir
+    - Affichage difficulté (Facile/Moyen/Difficile)
+    - Indices optionnels par question
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js` :
+      - Fonction `validateTrueFalse()` (lignes 716-964) - Logique de jeu
+      - Fonction `handleTrueFalseQuestionsManagement()` (lignes 3145-3263) - Liste questions admin
+      - Fonction `handleTrueFalseAdd()` (lignes 3270-3354) - Sélecteur difficulté
+      - Fonction `handleTrueFalseDifficultySelect()` (lignes 3361-3429) - Sélecteur réponse
+      - Fonction `handleTrueFalseAnswerSelect()` (lignes 3436-3485) - Modal création
+      - Fonction `handleTrueFalseQuestionDelete()` (lignes 3491-3542) - Suppression question
+      - Fonction `handleMaxAttemptsConfig()` modifiée : "questions" au lieu de "essais" pour true-false
+    - `utils/database-pg.js` : Fonction `getRandomTrueFalseQuestions()` (lignes 579-610)
+    - `handlers/modalHandler.js` : Fonction `handleAddTrueFalseQuestion()` (lignes 2076-2193)
+    - `handlers/adminPanelHandler.js` : Bouton section true-false dans l'embed de mission
+    - `events/interactionCreate.js` : Routing complet pour boutons et select menus true-false
+  - **Storage**: Réutilise la table `quiz_questions` avec `correct_answer = 'vrai'/'faux'`
+  - **Admin Panel UX**:
+    - Wizard de création en 3 étapes : Difficulté → Réponse (Vrai/Faux) → Affirmation
+    - Liste paginée des questions avec emojis ✅/❌ selon la réponse
+    - Suppression via select menu
+    - Labels adaptés : "Nombre de questions" au lieu de "Nombre d'essais"
+
+---
+
 ## [2.0.0] - 2025-12-14
 
 ### ✨ Added

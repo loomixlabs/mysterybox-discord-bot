@@ -1,5 +1,7 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
+const path = require('path');
 const db = require('../utils/database-pg');
+const superBonusHandler = require('./superBonusHandler');
 const { showOverview, showInventory, showHistory, showAchievements, showBonuses, showBadges } = require('../views/profileView');
 const {
   getRarityEmoji,
@@ -230,9 +232,9 @@ async function handleActivateBonus(interaction, player, theme, state) {
   const guildId = interaction.guildId;
 
   try {
-    // Récupérer le bonus à activer
+    // Récupérer le bonus à activer (avec effect_type pour détecter le joker)
     const activeBonusRecord = await db.query(
-      `SELECT pab.*, sb.name, sb.description, sb.icon, sb.duration_type, sb.duration_value
+      `SELECT pab.*, sb.name, sb.description, sb.icon, sb.duration_type, sb.duration_value, sb.effect_type
        FROM player_active_bonuses pab
        JOIN super_bonuses sb ON pab.bonus_id = sb.id
        WHERE pab.id = $1 AND pab.user_id = $2 AND pab.guild_id = $3`,
@@ -248,7 +250,51 @@ async function handleActivateBonus(interaction, player, theme, state) {
 
     const bonus = activeBonusRecord[0];
 
-    // Vérifier si déjà activé
+    // === CAS SPÉCIAL: MYSTERYBOX JOKER ===
+    // Le joker est un bonus à USAGE MANUEL - même s'il est "activé", il peut être UTILISÉ
+    // tant qu'il reste des charges. Le check d'activation doit être APRÈS le check joker.
+    if (bonus.effect_type === 'joker') {
+      // Vérifier s'il reste des charges (avec fallback sur duration_value)
+      const effectiveCharges = bonus.remaining_charges !== null ? bonus.remaining_charges : bonus.duration_value;
+      if (effectiveCharges <= 0) {
+        return interaction.editReply({
+          content: `❌ Tu n'as plus de charges pour le **${bonus.name}** !`,
+          components: []
+        });
+      }
+
+      console.log(`🃏 [JOKER] ${interaction.user.tag} utilise le MysteryBox Joker (${effectiveCharges} charge(s) restante(s))`);
+
+      // Récupérer les collectibles manquants
+      const missingCollectibles = await superBonusHandler.getMissingCollectibles(guildId, interaction.user.id);
+
+      if (missingCollectibles.length === 0) {
+        return interaction.editReply({
+          content: '🎉 **Félicitations !** Tu possèdes déjà tous les collectibles du thème actif !\n\nLe MysteryBox Joker n\'a pas été consommé.',
+          components: []
+        });
+      }
+
+      // Afficher l'interface de sélection avec le GIF personnalisé
+      const embed = superBonusHandler.createJokerSelectionEmbed(missingCollectibles, interaction.user.username);
+      const components = superBonusHandler.createJokerSelectMenu(missingCollectibles, 0);
+
+      // Créer l'attachment pour le GIF personnalisé
+      const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
+      const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+
+      // Stocker le bonusId pour la sélection
+      state.pendingJokerBonusId = bonusId;
+      saveProfileState(interaction.user.id, state);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: components,
+        files: [jokerAttachment]
+      });
+    }
+
+    // Vérifier si déjà activé (pour les autres bonus)
     if (bonus.activated_at !== null) {
       return interaction.editReply({
         content: `❌ Le bonus **${bonus.name}** est déjà actif !`,
@@ -256,6 +302,7 @@ async function handleActivateBonus(interaction, player, theme, state) {
       });
     }
 
+    // === CAS NORMAL: Autres bonus ===
     // Activer le bonus
     const now = new Date();
     let expiresAt = null;
@@ -286,7 +333,7 @@ async function handleActivateBonus(interaction, player, theme, state) {
     if (bonus.duration_type === 'permanent') {
       durationText = '♾️ **Permanent** - Actif sans limite de temps';
     } else if (bonus.duration_type === 'charges') {
-      durationText = `🔢 **${bonus.remaining_charges} charge(s)** disponibles`;
+      durationText = `🔢 **${remainingCharges} charge(s)** disponibles`;
     } else if (bonus.duration_type === 'temporary') {
       const hours = Math.floor(bonus.duration_value / 3600);
       const minutes = Math.floor((bonus.duration_value % 3600) / 60);
@@ -721,6 +768,162 @@ function cleanupProfileState() {
 // Nettoyer toutes les heures
 setInterval(cleanupProfileState, 3600000);
 
+// =====================================================
+// JOKER HANDLERS - Gestion de la sélection de collectible
+// =====================================================
+
+/**
+ * 🃏 Handler: Sélection d'un collectible via le joker
+ */
+async function handleJokerCollectibleSelect(interaction) {
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const state = getProfileState(userId);
+
+  // Récupérer l'ID du collectible sélectionné
+  const selectedValue = interaction.values[0]; // Format: joker_select_123
+  const collectibleId = parseInt(selectedValue.replace('joker_select_', ''));
+
+  console.log(`🃏 [JOKER] ${interaction.user.tag} sélectionne collectible ID ${collectibleId}`);
+
+  // Consommer le joker et donner le collectible
+  const result = await superBonusHandler.consumeJokerBonus(guildId, userId, collectibleId);
+
+  if (!result.success) {
+    let errorMessage = '❌ Erreur lors de l\'utilisation du joker.';
+
+    switch (result.error) {
+      case 'no_bonus':
+        errorMessage = '❌ Tu n\'as pas de MysteryBox Joker actif.';
+        break;
+      case 'invalid_collectible':
+        errorMessage = '❌ Ce collectible n\'existe pas.';
+        break;
+      case 'already_owned':
+        errorMessage = '❌ Tu possèdes déjà ce collectible !';
+        break;
+      case 'player_not_found':
+        errorMessage = '❌ Joueur non trouvé.';
+        break;
+    }
+
+    return interaction.editReply({
+      content: errorMessage,
+      embeds: [],
+      components: []
+    });
+  }
+
+  // Succès ! Afficher le collectible gagné avec l'UI légendaire
+  const { collectible } = result;
+  const successEmbed = superBonusHandler.createJokerSuccessEmbed(interaction.user.username, collectible);
+
+  // Créer l'attachment pour le GIF de succès
+  const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
+  const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+
+  // Nettoyer le state
+  delete state.pendingJokerBonusId;
+  saveProfileState(userId, state);
+
+  // Envoyer l'annonce publique pour l'UTILISATION du Joker (avec le collectible choisi)
+  try {
+    const announcements = require('../utils/announcements');
+    await announcements.announceJokerUsed(
+      interaction.client,
+      guildId,
+      interaction.user.username,
+      collectible.name,
+      collectible.rarity,
+      jokerGifPath
+    );
+  } catch (announceError) {
+    console.error('⚠️ Erreur envoi annonce joker utilisé:', announceError);
+  }
+
+  return interaction.editReply({
+    embeds: [successEmbed],
+    components: [],
+    files: [jokerAttachment]
+  });
+}
+
+/**
+ * 🃏 Handler: Pagination du menu joker
+ */
+async function handleJokerPagination(interaction, page) {
+  await interaction.deferUpdate();
+
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+
+  // Récupérer les collectibles manquants (re-fetch pour avoir les données à jour)
+  const missingCollectibles = await superBonusHandler.getMissingCollectibles(guildId, userId);
+
+  if (missingCollectibles.length === 0) {
+    return interaction.editReply({
+      content: '🎉 Tu possèdes déjà tous les collectibles !',
+      embeds: [],
+      components: []
+    });
+  }
+
+  // Mettre à jour l'interface avec la nouvelle page
+  const embed = superBonusHandler.createJokerSelectionEmbed(missingCollectibles, interaction.user.username);
+  const components = superBonusHandler.createJokerSelectMenu(missingCollectibles, page);
+
+  // Ajouter le GIF personnalisé
+  const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
+  const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+
+  return interaction.editReply({
+    embeds: [embed],
+    components: components,
+    files: [jokerAttachment]
+  });
+}
+
+/**
+ * 🃏 Handler: Annulation du joker
+ */
+async function handleJokerCancel(interaction) {
+  await interaction.deferUpdate();
+
+  const userId = interaction.user.id;
+  const state = getProfileState(userId);
+
+  // Nettoyer le state
+  delete state.pendingJokerBonusId;
+  saveProfileState(userId, state);
+
+  return interaction.editReply({
+    content: '❌ Utilisation du MysteryBox Joker annulée.\n\n💡 Le bonus n\'a pas été consommé, tu peux l\'utiliser plus tard !',
+    embeds: [],
+    components: []
+  });
+}
+
+/**
+ * 🃏 Router pour les interactions joker
+ */
+async function handleJokerInteraction(interaction) {
+  const customId = interaction.customId;
+
+  if (customId.startsWith('joker_collectible_select')) {
+    return handleJokerCollectibleSelect(interaction);
+  } else if (customId.startsWith('joker_page_')) {
+    const page = parseInt(customId.replace('joker_page_', ''));
+    return handleJokerPagination(interaction, page);
+  } else if (customId === 'joker_cancel') {
+    return handleJokerCancel(interaction);
+  }
+
+  console.warn(`⚠️ [JOKER] CustomId non géré: ${customId}`);
+}
+
 module.exports = {
-  handleProfileInteraction
+  handleProfileInteraction,
+  handleJokerInteraction
 };

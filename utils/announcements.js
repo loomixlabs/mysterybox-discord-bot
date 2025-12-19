@@ -1,5 +1,6 @@
 const db = require('./database-pg');
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
+const path = require('path');
 
 /**
  * Système d'annonces pour les événements du bot
@@ -280,6 +281,132 @@ class AnnouncementSystem {
       bonusIcon,
       bonusImage
     });
+  }
+
+  /**
+   * Annoncer un super bonus avec un GIF local attaché
+   */
+  async announceSuperBonusWithAttachment(client, guildId, userName, bonusName, bonusIcon, gifPath) {
+    try {
+      // Récupérer le canal d'annonces
+      const announcementChannel = await db.getAnnouncementChannel(guildId);
+      if (!announcementChannel) {
+        return;
+      }
+
+      // Récupérer les paramètres
+      const settings = await db.getAnnouncementSettings(guildId);
+      if (!settings || !settings.legendary_super_bonus) {
+        return;
+      }
+
+      // Récupérer le canal Discord
+      const channel = await client.channels.fetch(announcementChannel.channel_id).catch(() => null);
+      if (!channel) {
+        console.warn(`⚠️ Canal d'annonces introuvable: ${announcementChannel.channel_id}`);
+        return;
+      }
+
+      // Créer l'attachment pour le GIF
+      const attachment = new AttachmentBuilder(gifPath, { name: 'joker-wow.gif' });
+
+      // Créer l'embed épique pour le joker
+      const embed = new EmbedBuilder()
+        .setTitle('🃏✨ MYSTERYBOX JOKER OBTENU ! ✨🃏')
+        .setDescription(
+          `╔═══════════════════════════════════════════════╗\n` +
+          `║     🎰 **BONUS ULTRA-LÉGENDAIRE** 🎰      ║\n` +
+          `╚═══════════════════════════════════════════════╝\n\n` +
+          `🌟 **${userName}** vient d'obtenir le **MysteryBox Joker** !\n\n` +
+          `Le bonus le plus puissant du jeu est maintenant sien ! 🃏\n\n` +
+          `*Il pourra choisir N'IMPORTE QUEL collectible manquant !*`
+        )
+        .setColor('#FFD700')
+        .setImage('attachment://joker-wow.gif')
+        .setFooter({ text: '🃏 MysteryBox Joker • Bonus Légendaire' })
+        .setTimestamp();
+
+      await channel.send({ embeds: [embed], files: [attachment] });
+      console.log(`📢 Annonce Joker OBTENTION envoyée avec GIF (Serveur: ${guildId})`);
+
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'envoi de l\'annonce Joker:', error);
+    }
+  }
+
+  /**
+   * Annoncer l'UTILISATION du Joker avec le collectible choisi
+   */
+  async announceJokerUsed(client, guildId, userName, collectibleName, collectibleRarity, gifPath) {
+    try {
+      // Récupérer le canal d'annonces
+      const announcementChannel = await db.getAnnouncementChannel(guildId);
+      if (!announcementChannel) {
+        return;
+      }
+
+      // Récupérer les paramètres - vérifier le toggle super_bonus_joker_used
+      const settings = await db.getAnnouncementSettings(guildId);
+      if (!settings || !settings.super_bonus_joker_used) {
+        return;
+      }
+
+      // Récupérer le canal Discord
+      const channel = await client.channels.fetch(announcementChannel.channel_id).catch(() => null);
+      if (!channel) {
+        console.warn(`⚠️ Canal d'annonces introuvable: ${announcementChannel.channel_id}`);
+        return;
+      }
+
+      // Créer l'attachment pour le GIF
+      const attachment = new AttachmentBuilder(gifPath, { name: 'joker-wow.gif' });
+
+      // Mapping rareté vers label français
+      const rarityLabels = {
+        legendary: 'LÉGENDAIRE',
+        epic: 'ÉPIQUE',
+        rare: 'RARE',
+        common: 'COMMUN'
+      };
+      const rarityLabel = rarityLabels[collectibleRarity] || collectibleRarity.toUpperCase();
+
+      // Mapping rareté vers emoji
+      const rarityEmojis = {
+        legendary: '👑',
+        epic: '💜',
+        rare: '💙',
+        common: '⚪'
+      };
+      const rarityEmoji = rarityEmojis[collectibleRarity] || '✨';
+
+      // Créer l'embed pour l'UTILISATION du joker
+      const embed = new EmbedBuilder()
+        .setTitle('🃏✨ MYSTERYBOX JOKER UTILISÉ ✨🃏')
+        .setDescription(
+          `╔═══════════════════════════════════════════════╗\n` +
+          `║     🎰 **BONUS LÉGENDAIRE ACTIVÉ** 🎰      ║\n` +
+          `╚═══════════════════════════════════════════════╝\n\n` +
+          `🃏 **${userName}** a utilisé son **MysteryBox Joker** !\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `🎁 **Collectible choisi:**\n\n` +
+          `╭─────────────────────────────────────────╮\n` +
+          `│  ${rarityEmoji} **${collectibleName}**\n` +
+          `│  \n` +
+          `│  📊 Rareté: **${rarityLabel}**\n` +
+          `╰─────────────────────────────────────────╯\n\n` +
+          `*Le pouvoir du Joker a été consommé !* ✨`
+        )
+        .setColor('#FFD700')
+        .setImage('attachment://joker-wow.gif')
+        .setFooter({ text: '🃏 MysteryBox Joker • Le pouvoir a été consommé' })
+        .setTimestamp();
+
+      await channel.send({ embeds: [embed], files: [attachment] });
+      console.log(`📢 Annonce Joker UTILISATION envoyée: ${collectibleName} (${collectibleRarity}) pour ${userName}`);
+
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'envoi de l\'annonce Joker utilisé:', error);
+    }
   }
 }
 

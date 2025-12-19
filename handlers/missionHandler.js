@@ -182,6 +182,16 @@ class MissionHandler {
         await this.validateVoiceJoin(interaction, mission, player, progress, validationData);
         break;
 
+      case 'true-false':
+        console.log('✅ Matched true-false case');
+        await this.validateTrueFalse(interaction, mission, player, progress);
+        break;
+
+      case 'emoji-puzzle':
+        console.log('✅ Matched emoji-puzzle case');
+        await this.validateEmojiPuzzle(interaction, mission, player, progress);
+        break;
+
       default:
         // Type inconnu, demander validation manuelle
         console.log('⚠️ Went to default case - calling handleManualValidation');
@@ -706,6 +716,561 @@ class MissionHandler {
   async validateVoiceJoin(interaction, mission, player, progress, validationData) {
     // TODO: Implémenter la validation par rejoindre vocal
     await this.handleManualValidation(interaction, mission, player, progress);
+  }
+
+  /**
+   * Validation True/False - Série de questions Vrai/Faux
+   * - Nombre de questions = mission.max_attempts
+   * - Temps par question = mission.timeout (en secondes)
+   * - 100% de bonnes réponses requises pour réussir
+   */
+  async validateTrueFalse(interaction, mission, player, progress) {
+    const guildId = interaction.guildId;
+    const numberOfQuestions = mission.max_attempts || 3;
+    const timePerQuestion = (mission.timeout || 30) * 1000; // Convertir en ms
+
+    // Récupérer les questions true-false pour cette mission
+    const questions = await db.getRandomTrueFalseQuestions(
+      guildId,
+      mission.id,
+      mission.theme_id,
+      numberOfQuestions
+    );
+
+    if (!questions || questions.length === 0) {
+      await interaction.followUp({
+        content: '❌ **Erreur:** Aucune question Vrai/Faux n\'est configurée pour cette mission.\nContacte un administrateur.'
+      });
+      return;
+    }
+
+    const actualQuestionCount = questions.length;
+    if (actualQuestionCount < numberOfQuestions) {
+      console.warn(`⚠️ Mission ${mission.id}: Seulement ${actualQuestionCount}/${numberOfQuestions} questions disponibles`);
+    }
+
+    // Labels de difficulté
+    const difficultyLabels = {
+      'easy': '🟢 Facile',
+      'medium': '🟡 Moyen',
+      'hard': '🔴 Difficile'
+    };
+
+    // Initialiser le game_state dans mission_progress
+    await db.query(
+      `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify({
+        currentQuestion: 0,
+        correctAnswers: 0,
+        totalQuestions: actualQuestionCount,
+        answers: []
+      }), progress.id]
+    );
+
+    // Introduction
+    const introMsg = await interaction.followUp({
+      content: `🎮 **Vrai ou Faux**\n\n` +
+        `Tu vas répondre à **${actualQuestionCount} question${actualQuestionCount > 1 ? 's' : ''}**.\n` +
+        `⏱️ Tu as **${mission.timeout || 30} secondes** par question.\n` +
+        `🎯 Tu dois avoir **100% de bonnes réponses** pour réussir.\n\n` +
+        `Prêt ? La première question arrive dans 3 secondes...`
+    });
+
+    // Attendre 3 secondes avant de commencer
+    await this.sleep(3000);
+
+    let correctCount = 0;
+    let answeredCount = 0;
+
+    // Parcourir chaque question
+    for (let i = 0; i < actualQuestionCount; i++) {
+      const question = questions[i];
+      const questionNumber = i + 1;
+      const difficulty = difficultyLabels[question.difficulty] || '🟡 Moyen';
+
+      // Déterminer la bonne réponse (normaliser)
+      const correctAnswer = question.correct_answer.toLowerCase().trim();
+      const isTrue = ['vrai', 'true', 'v', 't'].includes(correctAnswer);
+
+      // Créer les boutons Vrai/Faux
+      const trueButton = new ButtonBuilder()
+        .setCustomId(`tf_answer_true_${progress.id}_${i}`)
+        .setLabel('✅ Vrai')
+        .setStyle(ButtonStyle.Success);
+
+      const falseButton = new ButtonBuilder()
+        .setCustomId(`tf_answer_false_${progress.id}_${i}`)
+        .setLabel('❌ Faux')
+        .setStyle(ButtonStyle.Danger);
+
+      const row = new ActionRowBuilder().addComponents(trueButton, falseButton);
+
+      // Afficher la question
+      const questionEmbed = new EmbedBuilder()
+        .setTitle(`❓ Question ${questionNumber}/${actualQuestionCount}`)
+        .setDescription(`**${question.question_text}**`)
+        .addFields({ name: 'Difficulté', value: difficulty, inline: true })
+        .setColor('#3498DB')
+        .setFooter({ text: `⏱️ ${mission.timeout || 30} secondes pour répondre` });
+
+      if (question.hint) {
+        questionEmbed.addFields({ name: '💡 Indice', value: question.hint, inline: false });
+      }
+
+      const questionMsg = await interaction.channel.send({
+        embeds: [questionEmbed],
+        components: [row]
+      });
+
+      // Attendre la réponse du joueur
+      try {
+        const filter = (btnInteraction) =>
+          btnInteraction.user.id === interaction.user.id &&
+          btnInteraction.customId.startsWith(`tf_answer_`) &&
+          btnInteraction.customId.includes(`_${progress.id}_${i}`);
+
+        const collected = await questionMsg.awaitMessageComponent({
+          filter,
+          time: timePerQuestion
+        });
+
+        await collected.deferUpdate();
+        answeredCount++;
+
+        const userAnsweredTrue = collected.customId.includes('_true_');
+        const isCorrect = userAnsweredTrue === isTrue;
+
+        if (isCorrect) {
+          correctCount++;
+          // Mettre à jour le bouton pour montrer la bonne réponse
+          const correctEmbed = questionEmbed
+            .setColor('#2ECC71')
+            .setTitle(`✅ Question ${questionNumber}/${actualQuestionCount} - Correct !`);
+
+          await questionMsg.edit({
+            embeds: [correctEmbed],
+            components: [] // Retirer les boutons
+          });
+
+          await interaction.channel.send({
+            content: `✅ **Bonne réponse !** (${correctCount}/${answeredCount} correct)`
+          });
+        } else {
+          // Mauvaise réponse
+          const wrongEmbed = questionEmbed
+            .setColor('#E74C3C')
+            .setTitle(`❌ Question ${questionNumber}/${actualQuestionCount} - Incorrect`);
+
+          await questionMsg.edit({
+            embeds: [wrongEmbed],
+            components: []
+          });
+
+          const correctText = isTrue ? 'Vrai' : 'Faux';
+          await interaction.channel.send({
+            content: `❌ **Mauvaise réponse !** La bonne réponse était: **${correctText}**\n(${correctCount}/${answeredCount} correct)`
+          });
+        }
+
+        // Mettre à jour le game_state
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            currentQuestion: i + 1,
+            correctAnswers: correctCount,
+            totalQuestions: actualQuestionCount,
+            answers: questions.slice(0, i + 1).map((q, idx) => ({
+              questionId: q.id,
+              correct: idx < correctCount
+            }))
+          }), progress.id]
+        );
+
+        // Petite pause entre les questions
+        if (i < actualQuestionCount - 1) {
+          await this.sleep(2000);
+        }
+
+      } catch (error) {
+        // Timeout - le joueur n'a pas répondu à temps
+        answeredCount++;
+        await questionMsg.edit({
+          embeds: [questionEmbed.setColor('#95A5A6').setTitle(`⏰ Question ${questionNumber}/${actualQuestionCount} - Temps écoulé`)],
+          components: []
+        });
+
+        const correctText = isTrue ? 'Vrai' : 'Faux';
+        await interaction.channel.send({
+          content: `⏰ **Temps écoulé !** La bonne réponse était: **${correctText}**`
+        });
+
+        if (i < actualQuestionCount - 1) {
+          await this.sleep(2000);
+        }
+      }
+    }
+
+    // Calculer le résultat final
+    const successRate = Math.round((correctCount / actualQuestionCount) * 100);
+    const isPerfect = correctCount === actualQuestionCount;
+
+    await this.sleep(1500);
+
+    if (isPerfect) {
+      // Mission réussie !
+      const successEmbed = new EmbedBuilder()
+        .setTitle('🎉 Mission Réussie !')
+        .setDescription(`Bravo ! Tu as répondu correctement à **toutes les questions** !`)
+        .addFields(
+          { name: 'Score', value: `${correctCount}/${actualQuestionCount} (${successRate}%)`, inline: true }
+        )
+        .setColor('#2ECC71');
+
+      await interaction.channel.send({ embeds: [successEmbed] });
+      await this.completeMission(interaction, mission, player, progress);
+
+    } else {
+      // Mission échouée
+      const failEmbed = new EmbedBuilder()
+        .setTitle('❌ Mission Échouée')
+        .setDescription(`Tu devais avoir **100% de bonnes réponses** pour réussir.`)
+        .addFields(
+          { name: 'Score', value: `${correctCount}/${actualQuestionCount} (${successRate}%)`, inline: true },
+          { name: 'Requis', value: `${actualQuestionCount}/${actualQuestionCount} (100%)`, inline: true }
+        )
+        .setColor('#E74C3C')
+        .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+
+      await interaction.channel.send({ embeds: [failEmbed] });
+
+      await db.query(
+        `UPDATE mission_progress SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+        [progress.id]
+      );
+
+      // Annonce mission échouée
+      await announcements.announceMissionFailed(
+        interaction.client,
+        guildId,
+        interaction.user.username,
+        mission.name,
+        `Score: ${correctCount}/${actualQuestionCount} (${successRate}%)`
+      );
+
+      // Fermer le thread après 5 secondes
+      setTimeout(async () => {
+        try {
+          await interaction.channel.setArchived(true);
+        } catch (error) {
+          console.warn('⚠️ Impossible d\'archiver le thread');
+        }
+      }, 5000);
+    }
+  }
+
+  /**
+   * Validation emoji-puzzle avec RÉVÉLATION PROGRESSIVE
+   * Les emojis apparaissent un par un. Plus le joueur devine tôt, mieux c'est !
+   * Stockage: question_text = "🦁 👑 🌍" (séparés par espaces)
+   * timeout = secondes entre chaque emoji (dernier tour = x3)
+   * max_attempts = essais erronés autorisés au total
+   */
+  async validateEmojiPuzzle(interaction, mission, player, progress) {
+    const guildId = interaction.guildId;
+
+    // Récupérer un puzzle pour cette mission
+    const puzzle = await db.getRandomQuizQuestionByMission(
+      guildId,
+      mission.id,
+      mission.theme_id
+    );
+
+    if (!puzzle) {
+      console.log(`❌ [Emoji-Puzzle] Aucun puzzle configuré pour mission ${mission.id}`);
+      await interaction.followUp({
+        content: '❌ **Erreur:** Aucun puzzle emoji n\'est configuré pour cette mission.\nContacte un administrateur.'
+      });
+      return;
+    }
+
+    // Parser les emojis (séparés par espaces)
+    const emojiString = puzzle.question_text.trim();
+    // Utiliser une regex pour extraire les emojis (caractères emoji ou séquences)
+    const emojiRegex = /(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?)/gu;
+    const emojiMatches = emojiString.match(emojiRegex);
+
+    // Fallback: séparer par espaces si pas d'emojis détectés
+    const emojiParts = emojiMatches && emojiMatches.length > 0
+      ? emojiMatches
+      : emojiString.split(/\s+/).filter(e => e);
+
+    if (emojiParts.length === 0) {
+      console.log(`❌ [Emoji-Puzzle] Format emojis invalide: "${emojiString}"`);
+      await interaction.followUp({
+        content: '❌ **Erreur:** Format des emojis invalide.\nContacte un administrateur.'
+      });
+      return;
+    }
+
+    const answer = puzzle.correct_answer;
+    const category = puzzle.hint; // hint stocke la catégorie
+    const difficulty = puzzle.difficulty || 'medium';
+    const totalEmojis = emojiParts.length;
+
+    // Config timing
+    const timeBetweenEmojis = (mission.timeout || 15) * 1000; // ms entre chaque emoji
+    const lastRoundMultiplier = 3; // x3 pour le dernier tour
+
+    const maxAttempts = mission.max_attempts || 5;
+
+    console.log(`🧩 [Emoji-Puzzle] Démarrage: ${totalEmojis} emojis, ${timeBetweenEmojis/1000}s/tour, ${maxAttempts} essais max`);
+
+    // Labels de difficulté
+    const difficultyLabels = {
+      'easy': '🟢 Facile',
+      'medium': '🟡 Moyen',
+      'hard': '🔴 Difficile'
+    };
+    const difficultyLabel = difficultyLabels[difficulty] || '🟡 Moyen';
+
+    // Message d'introduction
+    const introEmbed = new EmbedBuilder()
+      .setTitle('🧩 Emoji Devinette - Révélation Progressive')
+      .setDescription(
+        `Les emojis vont apparaître **un par un** !\n\n` +
+        `🏆 **Défi bonus** : Devine avec le **moins d'emojis possible** !\n\n` +
+        `⏱️ Tu as **${mission.timeout || 15}s** après chaque emoji (x3 au dernier)\n` +
+        `🎯 **${maxAttempts} essais** maximum au total\n` +
+        `📊 Difficulté : ${difficultyLabel}`
+      )
+      .setColor('#9B59B6')
+      .setFooter({ text: 'Premier emoji dans 3 secondes...' });
+
+    if (category) {
+      introEmbed.addFields({ name: '📂 Catégorie', value: category, inline: false });
+    }
+
+    await interaction.followUp({ embeds: [introEmbed] });
+    await this.sleep(3000);
+
+    // Variables de tracking
+    let attemptCount = 0;
+    let currentEmojiIndex = 0;
+    let missionCompleted = false;
+    let missionFailed = false;
+    let revealedEmojis = [];
+
+    // Fonction pour afficher les emojis révélés
+    const getRevealedDisplay = () => revealedEmojis.join(' ');
+
+    // Boucle de révélation progressive
+    for (let i = 0; i < totalEmojis && !missionCompleted && !missionFailed; i++) {
+      currentEmojiIndex = i + 1;
+      revealedEmojis.push(emojiParts[i]);
+
+      const isLastRound = (i === totalEmojis - 1);
+      const timeForThisRound = isLastRound
+        ? timeBetweenEmojis * lastRoundMultiplier
+        : timeBetweenEmojis;
+
+      console.log(`🧩 [Emoji-Puzzle] Tour ${currentEmojiIndex}/${totalEmojis}: "${getRevealedDisplay()}" (${timeForThisRound/1000}s)`);
+
+      // Créer l'embed du tour
+      const roundEmbed = new EmbedBuilder()
+        .setTitle(`🧩 Emoji ${currentEmojiIndex}/${totalEmojis}`)
+        .setDescription(`# ${getRevealedDisplay()}`)
+        .addFields(
+          { name: '⏱️ Temps', value: `${timeForThisRound/1000}s${isLastRound ? ' (dernier tour!)' : ''}`, inline: true },
+          { name: '🎯 Essais restants', value: `${maxAttempts - attemptCount}/${maxAttempts}`, inline: true }
+        )
+        .setColor(isLastRound ? '#E74C3C' : '#9B59B6')
+        .setFooter({ text: 'Tape ta réponse !' });
+
+      if (currentEmojiIndex === 1) {
+        roundEmbed.addFields({ name: '🏆 Défi', value: 'Devine avec 1 seul emoji = Badge spécial !', inline: false });
+      }
+
+      await interaction.channel.send({ embeds: [roundEmbed] });
+
+      // Attendre les réponses pendant ce tour
+      const roundResult = await new Promise((resolve) => {
+        const filter = m => m.author.id === interaction.user.id;
+        const collector = interaction.channel.createMessageCollector({
+          filter,
+          time: timeForThisRound
+        });
+
+        collector.on('collect', async msg => {
+          if (missionCompleted || missionFailed) return;
+
+          attemptCount++;
+          const userAnswer = msg.content.trim();
+
+          console.log(`🧩 [Emoji-Puzzle] Essai #${attemptCount}: "${userAnswer}"`);
+
+          const matchResult = quizAnswerMatcher.matchAnswer(userAnswer, answer, []);
+
+          if (matchResult.isCorrect) {
+            await msg.react('🎉');
+            missionCompleted = true;
+            collector.stop('success');
+
+            const emojisNeeded = currentEmojiIndex;
+            const isFirstEmoji = emojisNeeded === 1;
+
+            console.log(`✅ [Emoji-Puzzle] Succès avec ${emojisNeeded} emoji(s)!`);
+
+            const successEmbed = new EmbedBuilder()
+              .setTitle(isFirstEmoji ? '🏆 INCROYABLE !' : '🎉 Bravo !')
+              .setDescription(
+                `Tu as trouvé avec **${emojisNeeded}/${totalEmojis} emoji${emojisNeeded > 1 ? 's' : ''}** !\n\n` +
+                `${emojiString} = **${answer}**`
+              )
+              .setColor(isFirstEmoji ? '#FFD700' : '#2ECC71');
+
+            if (isFirstEmoji) {
+              successEmbed.addFields({
+                name: '🏆 Badge Débloqué !',
+                value: 'Tu as deviné avec 1 seul emoji !',
+                inline: false
+              });
+
+              // Déclencher le badge (si badgeHandler a cette méthode)
+              try {
+                if (typeof badgeHandler.onEmojiPuzzleSolvedWithOneEmoji === 'function') {
+                  await badgeHandler.onEmojiPuzzleSolvedWithOneEmoji(guildId, player.id, interaction.client);
+                }
+              } catch (badgeError) {
+                console.error('⚠️ Erreur badge emoji-puzzle:', badgeError);
+              }
+            }
+
+            await interaction.channel.send({ embeds: [successEmbed] });
+
+            // Sauvegarder le résultat
+            await db.query(
+              `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+              [JSON.stringify({ emojisNeeded, totalEmojis, attempts: attemptCount }), progress.id]
+            );
+
+            await this.completeMission(interaction, mission, player, progress, msg.url);
+            resolve('success');
+
+          } else if (matchResult.isClose) {
+            await msg.react('🔶');
+
+            if (attemptCount >= maxAttempts) {
+              missionFailed = true;
+              collector.stop('max_attempts');
+              resolve('failed');
+            } else {
+              await interaction.channel.send(
+                `🔶 **${matchResult.feedback || 'Tu es très proche !'}**\n` +
+                `🎯 Essais restants : **${maxAttempts - attemptCount}/${maxAttempts}**`
+              );
+            }
+
+          } else {
+            await msg.react('❌');
+
+            if (attemptCount >= maxAttempts) {
+              missionFailed = true;
+              collector.stop('max_attempts');
+              resolve('failed');
+            } else {
+              await interaction.channel.send(
+                `❌ **Ce n'est pas ça !**\n` +
+                `🎯 Essais restants : **${maxAttempts - attemptCount}/${maxAttempts}**`
+              );
+            }
+          }
+        });
+
+        collector.on('end', (collected, reason) => {
+          if (reason === 'success') resolve('success');
+          else if (reason === 'max_attempts') resolve('failed');
+          else resolve('next'); // Timeout de ce tour
+        });
+      });
+
+      if (roundResult === 'success' || roundResult === 'failed') break;
+
+      // Annoncer le prochain emoji si ce n'est pas le dernier
+      if (!isLastRound && !missionCompleted && !missionFailed) {
+        await interaction.channel.send(`⏱️ Prochain emoji dans 2 secondes...`);
+        await this.sleep(2000);
+      }
+    }
+
+    // Gérer l'échec
+    if (missionFailed) {
+      await this.handleEmojiPuzzleFailed(interaction, mission, player, progress, emojiString, answer, maxAttempts, attemptCount);
+    } else if (!missionCompleted) {
+      console.log(`❌ [Emoji-Puzzle] Échec - tous les emojis révélés sans succès`);
+
+      const failEmbed = new EmbedBuilder()
+        .setTitle('⏰ Temps écoulé !')
+        .setDescription(`Tu n'as pas trouvé la réponse.\n\n${emojiString} = **${answer}**`)
+        .setColor('#E74C3C')
+        .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+
+      await interaction.channel.send({ embeds: [failEmbed] });
+
+      await db.query(
+        `UPDATE mission_progress SET status = 'failed', game_state = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify({ emojisNeeded: null, totalEmojis, attempts: attemptCount, reason: 'timeout' }), progress.id]
+      );
+
+      await announcements.announceMissionFailed(
+        interaction.client, guildId, interaction.user.username, mission.name,
+        'Temps écoulé - Tous les emojis révélés'
+      );
+
+      setTimeout(async () => {
+        try { await interaction.channel.setArchived(true); }
+        catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+      }, 5000);
+    }
+  }
+
+  /**
+   * Helper: gérer échec emoji-puzzle (max attempts)
+   */
+  async handleEmojiPuzzleFailed(interaction, mission, player, progress, emojis, answer, maxAttempts, attemptCount) {
+    console.log(`❌ [Emoji-Puzzle] Échec - ${attemptCount} essais épuisés`);
+
+    const failEmbed = new EmbedBuilder()
+      .setTitle('❌ Mission Échouée')
+      .setDescription(
+        `Tu as épuisé tes **${maxAttempts} essais**.\n\n` +
+        `La bonne réponse était : **${answer}**\n\n${emojis} = ${answer}`
+      )
+      .setColor('#E74C3C')
+      .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+
+    await interaction.channel.send({ embeds: [failEmbed] });
+
+    await db.query(
+      `UPDATE mission_progress SET status = 'failed', game_state = $1, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify({ emojisNeeded: null, totalEmojis: emojis.split(/\s+/).length, attempts: attemptCount, reason: 'max_attempts' }), progress.id]
+    );
+
+    await announcements.announceMissionFailed(
+      interaction.client, interaction.guildId, interaction.user.username, mission.name,
+      `${maxAttempts} essais épuisés`
+    );
+
+    setTimeout(async () => {
+      try { await interaction.channel.setArchived(true); }
+      catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+    }, 5000);
+  }
+
+  /**
+   * Utilitaire: attendre N millisecondes
+   */
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
@@ -1854,7 +2419,8 @@ class MissionHandler {
   }
 
   /**
-   * Admin clique sur "🎯 Nombre d'essais" pour configurer max_attempts
+   * Admin clique sur "🎯 Nombre d'essais/questions" pour configurer max_attempts
+   * Adapte les textes selon le type de mission (quiz = essais, true-false = questions)
    */
   async handleMaxAttemptsConfig(interaction) {
     try {
@@ -1876,38 +2442,65 @@ class MissionHandler {
         });
       }
 
-      // Créer l'embed
-      const currentValue = mission.max_attempts === null ? 'Illimité' : `${mission.max_attempts} essai(s)`;
+      // Adapter les textes selon le type de mission
+      const isTrueFalse = mission.type === 'true-false';
+      const isQuestionBased = ['true-false', 'emoji-puzzle', 'wordle', 'unscramble', 'hangman'].includes(mission.type);
 
-      const embed = new EmbedBuilder()
-        .setTitle('🎯 Configurer le Nombre d\'Essais')
-        .setDescription(
-          `**Mission:** ${mission.name}\n\n` +
-          `**Valeur actuelle:** ${currentValue}\n\n` +
+      let title, description, currentValueText, placeholder, optionLabel, optionDesc;
+
+      if (isTrueFalse || isQuestionBased) {
+        // Pour true-false et autres mini-jeux: max_attempts = nombre de questions
+        title = '🎯 Configurer le Nombre de Questions';
+        currentValueText = mission.max_attempts === null ? '3 (défaut)' : `${mission.max_attempts} question(s)`;
+        description = `**Mission:** ${mission.name}\n\n` +
+          `**Valeur actuelle:** ${currentValueText}\n\n` +
+          '📝 Choisis combien de questions le joueur devra répondre.\n\n' +
+          '• Le joueur doit répondre correctement à **toutes les questions** pour réussir\n' +
+          '• Chaque question a un temps limité (configuré via Timeout)';
+        placeholder = '🎯 Choisir le nombre de questions';
+        optionLabel = (i) => `${i} question${i > 1 ? 's' : ''}`;
+        optionDesc = (i) => `Série de ${i} question${i > 1 ? 's' : ''}`;
+      } else {
+        // Pour quiz classique: max_attempts = nombre d'essais
+        title = '🎯 Configurer le Nombre d\'Essais';
+        currentValueText = mission.max_attempts === null ? 'Illimité' : `${mission.max_attempts} essai(s)`;
+        description = `**Mission:** ${mission.name}\n\n` +
+          `**Valeur actuelle:** ${currentValueText}\n\n` +
           '📝 Choisis le nombre maximum d\'essais que le joueur aura pour cette mission quiz.\n\n' +
           '• **Illimité**: Le joueur peut essayer autant de fois qu\'il veut (limité par le timeout)\n' +
-          '• **1-10**: Nombre d\'essais fixes avant échec automatique'
-        )
+          '• **1-10**: Nombre d\'essais fixes avant échec automatique';
+        placeholder = '🎯 Choisir le nombre d\'essais';
+        optionLabel = (i) => `${i} essai${i > 1 ? 's' : ''}`;
+        optionDesc = (i) => `Maximum ${i} tentative${i > 1 ? 's' : ''}`;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(title)
+        .setDescription(description)
         .setColor(branding.secondary_color)
         .setFooter(await getLoomixFooter(interaction.guildId));
 
       // Créer le select menu
-      const options = [
-        { label: '♾️ Illimité', description: 'Essais illimités (limité par timeout)', value: 'unlimited' }
-      ];
+      const options = [];
 
-      // Ajouter les options 1-10
-      for (let i = 1; i <= 10; i++) {
+      // Option illimité seulement pour quiz classique
+      if (!isQuestionBased) {
+        options.push({ label: '♾️ Illimité', description: 'Essais illimités (limité par timeout)', value: 'unlimited' });
+      }
+
+      // Ajouter les options 1-10 (ou 3-10 pour mini-jeux)
+      const startValue = isQuestionBased ? 1 : 1;
+      for (let i = startValue; i <= 10; i++) {
         options.push({
-          label: `${i} essai${i > 1 ? 's' : ''}`,
-          description: `Maximum ${i} tentative${i > 1 ? 's' : ''}`,
+          label: optionLabel(i),
+          description: optionDesc(i),
           value: i.toString()
         });
       }
 
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(`mission_max_attempts_select_${missionId}`)
-        .setPlaceholder('🎯 Choisir le nombre d\'essais')
+        .setPlaceholder(placeholder)
         .addOptions(options);
 
       const row1 = new ActionRowBuilder().addComponents(selectMenu);
@@ -2137,6 +2730,62 @@ class MissionHandler {
 
     } catch (error) {
       console.error('🔴 Erreur handleMissionEdit:', error);
+      await interaction.reply({
+        content: '❌ Une erreur est survenue.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Admin clique sur "Modifier Nom/Description" - Affiche le modal d'édition
+   */
+  async handleMissionEditInfo(interaction) {
+    const missionId = parseInt(interaction.customId.split('_')[3]);
+
+    try {
+      // Récupérer la mission
+      const mission = await db.getMissionById(interaction.guildId, missionId);
+
+      if (!mission) {
+        return interaction.reply({
+          content: '❌ Mission introuvable.',
+          flags: 64
+        });
+      }
+
+      // Créer le modal d'édition
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_mission_edit_info_${missionId}`)
+        .setTitle('✏️ Modifier la mission');
+
+      const nameInput = new TextInputBuilder()
+        .setCustomId('mission_name')
+        .setLabel('Nom de la mission')
+        .setStyle(TextInputStyle.Short)
+        .setValue(mission.name || '')
+        .setPlaceholder('Ex: Quiz Harry Potter')
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const descriptionInput = new TextInputBuilder()
+        .setCustomId('mission_description')
+        .setLabel('Description de la mission')
+        .setStyle(TextInputStyle.Paragraph)
+        .setValue(mission.description || '')
+        .setPlaceholder('Décris le but de cette mission...')
+        .setRequired(false)
+        .setMaxLength(500);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(descriptionInput)
+      );
+
+      return interaction.showModal(modal);
+
+    } catch (error) {
+      console.error('🔴 Erreur handleMissionEditInfo:', error);
       await interaction.reply({
         content: '❌ Une erreur est survenue.',
         flags: 64
@@ -2842,6 +3491,824 @@ class MissionHandler {
         // Ignorer
       }
     }
+  }
+
+  // ============================================================
+  // SECTION: TRUE-FALSE ADMIN HANDLERS
+  // ============================================================
+
+  /**
+   * Admin clique sur "Gérer les Questions V/F" (True-False mission)
+   * Affiche la liste des questions Vrai/Faux pour cette mission
+   */
+  async handleTrueFalseQuestionsManagement(interaction, page = 0) {
+    const missionId = parseInt(interaction.customId.split('_')[3]);
+
+    try {
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
+
+      if (!mission || mission.type !== 'true-false') {
+        return interaction.reply({
+          content: '❌ Cette mission n\'est pas de type Vrai ou Faux.',
+          flags: 64
+        });
+      }
+
+      // Récupérer toutes les questions V/F de cette mission spécifique
+      // On utilise la même table quiz_questions mais filtré par correct_answer IN ('vrai', 'faux')
+      const questions = await db.queryAll(
+        `SELECT * FROM quiz_questions
+         WHERE guild_id = $1 AND mission_id = $2
+         AND LOWER(correct_answer) IN ('vrai', 'faux', 'true', 'false')
+         ORDER BY id`,
+        [interaction.guildId, mission.id]
+      );
+
+      // Pagination (20 questions par page pour rester sous la limite de 25 fields)
+      const questionsPerPage = 20;
+      const totalPages = Math.ceil(questions.length / questionsPerPage) || 1;
+      const currentPage = Math.min(Math.max(0, page), totalPages - 1);
+      const startIndex = currentPage * questionsPerPage;
+      const endIndex = startIndex + questionsPerPage;
+      const paginatedQuestions = questions.slice(startIndex, endIndex);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`✅ Questions Vrai/Faux - ${mission.name}`)
+        .setDescription(questions.length === 0
+          ? '**Aucune question n\'a encore été créée.**\n\nCliquez sur "Ajouter une Question" pour commencer.\n\n💡 **Info:** Pour les missions Vrai/Faux, la réponse doit être "Vrai" ou "Faux".'
+          : `**${questions.length} question(s) enregistrée(s)** (Page ${currentPage + 1}/${totalPages})`)
+        .setColor(branding.secondary_color);
+
+      if (paginatedQuestions.length > 0) {
+        paginatedQuestions.forEach((q, i) => {
+          const answerEmoji = q.correct_answer.toLowerCase() === 'vrai' || q.correct_answer.toLowerCase() === 'true' ? '✅' : '❌';
+          const answerText = q.correct_answer.toLowerCase() === 'vrai' || q.correct_answer.toLowerCase() === 'true' ? 'VRAI' : 'FAUX';
+
+          embed.addFields({
+            name: `${startIndex + i + 1}. ${q.question_text}`,
+            value: `${answerEmoji} Réponse: **${answerText}**\n💡 Difficulté: ${q.difficulty}${q.hint ? `\n💭 Indice: ${q.hint}` : ''}`,
+            inline: false
+          });
+        });
+      }
+
+      embed.setFooter(await getLoomixFooter(interaction.guildId));
+
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_truefalse_add_${missionId}`)
+          .setLabel('➕ Ajouter une Question')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`mission_truefalse_questions_${missionId}:${currentPage}`)
+          .setLabel('🔄 Rafraîchir')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`select_mission_${missionId}`)
+          .setLabel('↩️ Retour')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const components = [row1];
+
+      // Ajouter select menu pour supprimer (seulement questions de la page actuelle)
+      if (paginatedQuestions.length > 0) {
+        const deleteMenu = new StringSelectMenuBuilder()
+          .setCustomId(`select_truefalse_delete_${missionId}`)
+          .setPlaceholder('🗑️ Supprimer une question de cette page')
+          .addOptions(
+            paginatedQuestions.map((q, index) => ({
+              label: `Q${startIndex + index + 1}: ${q.question_text.substring(0, 80)}${q.question_text.length > 80 ? '...' : ''}`,
+              value: q.id.toString(),
+              description: `Réponse: ${q.correct_answer}`
+            }))
+          );
+
+        components.push(new ActionRowBuilder().addComponents(deleteMenu));
+      }
+
+      // Ajouter boutons de pagination si nécessaire
+      if (totalPages > 1) {
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_truefalse_page_${missionId}:${Math.max(0, currentPage - 1)}`)
+            .setLabel('◀️ Précédent')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(currentPage === 0),
+          new ButtonBuilder()
+            .setCustomId(`mission_truefalse_page_${missionId}:${Math.min(totalPages - 1, currentPage + 1)}`)
+            .setLabel('Suivant ▶️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(currentPage >= totalPages - 1)
+        );
+        components.push(row2);
+      }
+
+      await interaction.update({
+        embeds: [embed],
+        components
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleTrueFalseQuestionsManagement:', error);
+      await interaction.reply({
+        content: '❌ Une erreur est survenue.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Admin clique sur "Ajouter une Question" (True-False mission)
+   * Étape 1: Afficher le sélecteur de difficulté
+   */
+  async handleTrueFalseAdd(interaction) {
+    const missionId = parseInt(interaction.customId.split('_')[3]);
+
+    try {
+      await interaction.deferUpdate();
+
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
+
+      if (!mission || mission.type !== 'true-false') {
+        return interaction.editReply({
+          content: '❌ Cette mission n\'est pas de type Vrai ou Faux.',
+          components: []
+        });
+      }
+
+      // Créer l'embed avec les instructions
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Ajouter une Question Vrai/Faux')
+        .setDescription(
+          '**Instructions:**\n\n' +
+          '1️⃣ Choisis la **difficulté** de la question dans le menu ci-dessous\n' +
+          '2️⃣ Un formulaire s\'ouvrira pour saisir:\n' +
+          '   • L\'affirmation (ex: La Terre est plate)\n' +
+          '   • La réponse correcte (Vrai ou Faux)\n' +
+          '   • Un indice optionnel\n\n' +
+          '**Niveaux de difficulté:**\n' +
+          '🟢 **Facile** - Affirmations évidentes (ex: Le soleil brille le jour)\n' +
+          '🟡 **Moyen** - Affirmations standard (ex: Paris est en Allemagne)\n' +
+          '🔴 **Difficile** - Affirmations subtiles (ex: dates précises, détails)\n\n' +
+          '💡 Le joueur aura un temps limité pour répondre Vrai ou Faux.'
+        )
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
+
+      // Menu de sélection de difficulté
+      const difficultySelect = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`truefalse_difficulty_select_${missionId}`)
+          .setPlaceholder('🎯 Choisir la difficulté de la question')
+          .addOptions([
+            {
+              label: 'Facile',
+              description: 'Affirmation évidente',
+              value: 'easy',
+              emoji: '🟢'
+            },
+            {
+              label: 'Moyen',
+              description: 'Difficulté standard',
+              value: 'medium',
+              emoji: '🟡'
+            },
+            {
+              label: 'Difficile',
+              description: 'Affirmation subtile',
+              value: 'hard',
+              emoji: '🔴'
+            }
+          ])
+      );
+
+      // Bouton retour
+      const backButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_truefalse_questions_${missionId}`)
+          .setLabel('↩️ Retour à la liste')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: [difficultySelect, backButton]
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleTrueFalseAdd:', error);
+      await interaction.reply({
+        content: '❌ Une erreur est survenue.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Admin sélectionne une difficulté pour une question Vrai/Faux
+   * Étape 2: Afficher le sélecteur de réponse (Vrai ou Faux)
+   */
+  async handleTrueFalseDifficultySelect(interaction) {
+    const missionId = parseInt(interaction.customId.split('_')[3]);
+    const difficulty = interaction.values[0]; // easy, medium ou hard
+
+    try {
+      await interaction.deferUpdate();
+
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
+
+      const difficultyEmojis = { 'easy': '🟢', 'medium': '🟡', 'hard': '🔴' };
+      const difficultyLabels = { 'easy': 'Facile', 'medium': 'Moyen', 'hard': 'Difficile' };
+
+      // Créer l'embed pour le choix de la réponse
+      const embed = new EmbedBuilder()
+        .setTitle(`${difficultyEmojis[difficulty]} Question Vrai/Faux (${difficultyLabels[difficulty]})`)
+        .setDescription(
+          '**Étape 2:** Choisis la réponse correcte\n\n' +
+          'Sélectionne si ta prochaine affirmation sera **vraie** ou **fausse**.\n\n' +
+          '✅ **Vrai** - L\'affirmation que tu vas saisir est correcte\n' +
+          '❌ **Faux** - L\'affirmation que tu vas saisir est incorrecte'
+        )
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId));
+
+      // Menu de sélection de la réponse
+      const answerSelect = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`truefalse_answer_select_${missionId}_${difficulty}`)
+          .setPlaceholder('🎯 Choisir la réponse correcte')
+          .addOptions([
+            {
+              label: 'Vrai',
+              description: 'L\'affirmation est correcte',
+              value: 'vrai',
+              emoji: '✅'
+            },
+            {
+              label: 'Faux',
+              description: 'L\'affirmation est incorrecte',
+              value: 'faux',
+              emoji: '❌'
+            }
+          ])
+      );
+
+      // Bouton retour
+      const backButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_truefalse_add_${missionId}`)
+          .setLabel('↩️ Retour au choix de difficulté')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: [answerSelect, backButton]
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleTrueFalseDifficultySelect:', error);
+      await interaction.reply({
+        content: '❌ Une erreur est survenue.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Admin sélectionne Vrai ou Faux comme réponse
+   * Étape 3: Ouvrir le modal pour saisir l'affirmation
+   */
+  async handleTrueFalseAnswerSelect(interaction) {
+    // customId format: truefalse_answer_select_{missionId}_{difficulty}
+    const parts = interaction.customId.split('_');
+    const missionId = parseInt(parts[3]);
+    const difficulty = parts[4];
+    const answer = interaction.values[0]; // vrai ou faux
+
+    try {
+      const difficultyEmojis = { 'easy': '🟢', 'medium': '🟡', 'hard': '🔴' };
+      const difficultyLabels = { 'easy': 'Facile', 'medium': 'Moyen', 'hard': 'Difficile' };
+      const answerEmoji = answer === 'vrai' ? '✅' : '❌';
+      const answerLabel = answer === 'vrai' ? 'VRAI' : 'FAUX';
+
+      // Afficher un modal pour saisir l'affirmation
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_truefalse_add_${missionId}_${difficulty}_${answer}`)
+        .setTitle(`${difficultyEmojis[difficulty]} Question V/F - ${answerLabel}`);
+
+      const questionInput = new TextInputBuilder()
+        .setCustomId('question')
+        .setLabel(`Affirmation (réponse: ${answerLabel})`)
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder(answer === 'vrai'
+          ? 'Ex: La Terre tourne autour du Soleil'
+          : 'Ex: La Terre est plate')
+        .setRequired(true)
+        .setMaxLength(500);
+
+      const hintInput = new TextInputBuilder()
+        .setCustomId('hint')
+        .setLabel('Indice (optionnel)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: Pensez à la forme de la Terre')
+        .setRequired(false)
+        .setMaxLength(200);
+
+      const row1 = new ActionRowBuilder().addComponents(questionInput);
+      const row2 = new ActionRowBuilder().addComponents(hintInput);
+
+      modal.addComponents(row1, row2);
+
+      await interaction.showModal(modal);
+
+    } catch (error) {
+      console.error('🔴 Erreur handleTrueFalseAnswerSelect:', error);
+      await interaction.reply({
+        content: '❌ Une erreur est survenue.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Supprimer une question Vrai/Faux
+   */
+  async handleTrueFalseQuestionDelete(interaction) {
+    const questionId = parseInt(interaction.values[0]);
+    const missionId = parseInt(interaction.customId.split('_')[3]);
+
+    try {
+      await interaction.deferUpdate();
+
+      // Récupérer la question avant suppression
+      const question = await db.queryOne(
+        'SELECT * FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+        [questionId, interaction.guildId]
+      );
+
+      if (!question) {
+        return interaction.editReply({
+          content: '❌ Question introuvable.',
+          components: []
+        });
+      }
+
+      // Supprimer la question
+      await db.query(
+        'DELETE FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+        [questionId, interaction.guildId]
+      );
+
+      // Logger l'action
+      await audit.logMissionQuizQuestionDeleted(
+        interaction.guildId,
+        interaction.user.id,
+        missionId,
+        question.question_text
+      );
+
+      // Rafraîchir la liste
+      // Créer une fausse interaction avec le bon customId pour réutiliser handleTrueFalseQuestionsManagement
+      const fakeInteraction = {
+        ...interaction,
+        customId: `mission_truefalse_questions_${missionId}`,
+        update: interaction.editReply.bind(interaction),
+        reply: interaction.reply.bind(interaction)
+      };
+
+      return this.handleTrueFalseQuestionsManagement(fakeInteraction, 0);
+
+    } catch (error) {
+      console.error('🔴 Erreur handleTrueFalseQuestionDelete:', error);
+      await interaction.reply({
+        content: '❌ Une erreur est survenue lors de la suppression.',
+        flags: 64
+      });
+    }
+  }
+
+  // ============================================
+  // GESTION DES PUZZLES EMOJI (Admin Panel)
+  // ============================================
+
+  /**
+   * Afficher la liste des puzzles emoji pour une mission
+   */
+  async handleEmojiPuzzleManagement(interaction, page = 0) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({
+        content: '❌ Aucun thème actif.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const mission = await db.getMissionById(guildId, missionId);
+    if (!mission) {
+      return interaction.editReply({
+        content: '❌ Mission introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Récupérer les puzzles
+    const puzzles = await db.queryAll(
+      `SELECT * FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+       ORDER BY created_at DESC`,
+      [guildId, missionId, theme.id]
+    );
+
+    const itemsPerPage = 5;
+    const totalPages = Math.ceil(puzzles.length / itemsPerPage) || 1;
+    const currentPage = Math.min(page, totalPages - 1);
+    const startIdx = currentPage * itemsPerPage;
+    const pagePuzzles = puzzles.slice(startIdx, startIdx + itemsPerPage);
+
+    // Créer l'embed
+    const embed = new EmbedBuilder()
+      .setTitle(`🧩 Puzzles Emoji - ${mission.name}`)
+      .setDescription(
+        `**${puzzles.length}** puzzle(s) configuré(s)\n\n` +
+        `⏱️ Temps par emoji: **${mission.timeout || 15}s** (x3 au dernier)\n` +
+        `🎯 Essais max: **${mission.max_attempts || 5}**\n\n` +
+        `🏆 **Défi bonus**: Le joueur peut gagner un badge s'il devine avec 1 seul emoji !`
+      )
+      .setColor('#9B59B6');
+
+    if (pagePuzzles.length > 0) {
+      const puzzlesList = pagePuzzles.map((p, idx) => {
+        const diffEmoji = p.difficulty === 'easy' ? '🟢' : p.difficulty === 'hard' ? '🔴' : '🟡';
+        const categoryTag = p.hint ? ` [${p.hint}]` : '';
+        return `${diffEmoji} **${p.question_text}** → ${p.correct_answer}${categoryTag}`;
+      }).join('\n');
+
+      embed.addFields({
+        name: `📋 Puzzles (Page ${currentPage + 1}/${totalPages})`,
+        value: puzzlesList
+      });
+    } else {
+      embed.addFields({
+        name: '📋 Puzzles',
+        value: '*Aucun puzzle configuré. Clique sur "➕ Ajouter" pour en créer un.*'
+      });
+    }
+
+    // Boutons
+    const buttons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_emoji_add_${missionId}`)
+        .setLabel('➕ Ajouter')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`mission_emoji_delete_${missionId}`)
+        .setLabel('🗑️ Supprimer')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(puzzles.length === 0)
+    );
+
+    // Pagination
+    const pagination = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_emoji_page_${missionId}_${currentPage - 1}`)
+        .setLabel('◀️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0),
+      new ButtonBuilder()
+        .setCustomId(`mission_emoji_page_${missionId}_${currentPage + 1}`)
+        .setLabel('▶️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage >= totalPages - 1),
+      new ButtonBuilder()
+        .setCustomId('admin_missions')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [buttons, pagination]
+    });
+  }
+
+  /**
+   * Démarrer le flow d'ajout d'un puzzle emoji (basé sur message, pas modal)
+   */
+  async handleEmojiPuzzleAdd(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.followUp({ content: '❌ Aucun thème actif.', flags: 64 });
+    }
+
+    const mission = await db.getMissionById(guildId, missionId);
+    if (!mission) {
+      return interaction.followUp({ content: '❌ Mission introuvable.', flags: 64 });
+    }
+
+    // Étape 1: Demander les emojis
+    const step1Embed = new EmbedBuilder()
+      .setTitle('🧩 Ajouter un Puzzle Emoji - Étape 1/3')
+      .setDescription(
+        '**Envoie les emojis** qui représentent ta devinette.\n\n' +
+        '💡 **Utilise le sélecteur d\'emojis Discord !**\n' +
+        'Ex: 🦁👑 pour "Le Roi Lion"\n\n' +
+        '⏱️ Tu as 2 minutes pour répondre.'
+      )
+      .setColor('#9B59B6')
+      .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+    await interaction.editReply({
+      content: '',
+      embeds: [step1Embed],
+      components: []
+    });
+
+    const filter = m => m.author.id === interaction.user.id;
+
+    // Collecter les emojis
+    try {
+      const emojiCollector = await interaction.channel.awaitMessages({
+        filter,
+        max: 1,
+        time: 120000,
+        errors: ['time']
+      });
+
+      const emojiMsg = emojiCollector.first();
+      if (emojiMsg.content.toLowerCase() === 'annuler') {
+        return interaction.editReply({ content: '❌ Annulé.', embeds: [], components: [] });
+      }
+
+      const emojis = emojiMsg.content.trim();
+      await emojiMsg.delete().catch(() => {});
+
+      // Étape 2: Demander la réponse
+      const step2Embed = new EmbedBuilder()
+        .setTitle('🧩 Ajouter un Puzzle Emoji - Étape 2/3')
+        .setDescription(
+          `**Emojis enregistrés:** ${emojis}\n\n` +
+          '**Quelle est la réponse ?**\n' +
+          'Ex: Le Roi Lion\n\n' +
+          '⏱️ Tu as 2 minutes pour répondre.'
+        )
+        .setColor('#9B59B6')
+        .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+      await interaction.editReply({ embeds: [step2Embed] });
+
+      const answerCollector = await interaction.channel.awaitMessages({
+        filter,
+        max: 1,
+        time: 120000,
+        errors: ['time']
+      });
+
+      const answerMsg = answerCollector.first();
+      if (answerMsg.content.toLowerCase() === 'annuler') {
+        return interaction.editReply({ content: '❌ Annulé.', embeds: [], components: [] });
+      }
+
+      const answer = answerMsg.content.trim();
+      await answerMsg.delete().catch(() => {});
+
+      // Étape 3: Demander la catégorie
+      const categorySelect = new StringSelectMenuBuilder()
+        .setCustomId(`emoji_category_temp_${missionId}`)
+        .setPlaceholder('Choisis la catégorie')
+        .addOptions([
+          { label: '🎬 Film', value: 'Film 🎬', description: 'Film ou série' },
+          { label: '👤 Personnage', value: 'Personnage 👤', description: 'Personnage célèbre' },
+          { label: '🎵 Musique', value: 'Musique 🎵', description: 'Chanson ou artiste' },
+          { label: '🍕 Nourriture', value: 'Nourriture 🍕', description: 'Plat ou aliment' },
+          { label: '🏟️ Lieu', value: 'Lieu 🏟️', description: 'Pays, ville, monument' },
+          { label: '📖 Expression', value: 'Expression 📖', description: 'Expression ou dicton' },
+          { label: '🎮 Jeu', value: 'Jeu 🎮', description: 'Jeu vidéo ou de société' },
+          { label: '❓ Autre', value: 'Autre ❓', description: 'Autre catégorie' }
+        ]);
+
+      const step3Embed = new EmbedBuilder()
+        .setTitle('🧩 Ajouter un Puzzle Emoji - Étape 3/4')
+        .setDescription(
+          `**Emojis:** ${emojis}\n` +
+          `**Réponse:** ${answer}\n\n` +
+          '**Choisis la catégorie:**'
+        )
+        .setColor('#9B59B6');
+
+      await interaction.editReply({
+        embeds: [step3Embed],
+        components: [new ActionRowBuilder().addComponents(categorySelect)]
+      });
+
+      // Attendre la sélection de catégorie
+      const catInteraction = await interaction.channel.awaitMessageComponent({
+        filter: i => i.user.id === interaction.user.id && i.customId.startsWith('emoji_category_temp_'),
+        time: 60000
+      });
+
+      await catInteraction.deferUpdate();
+      const category = catInteraction.values[0]; // Stocké dans hint
+
+      // Étape 4: Demander la difficulté
+      const difficultySelect = new StringSelectMenuBuilder()
+        .setCustomId(`emoji_difficulty_temp_${missionId}`)
+        .setPlaceholder('Choisis la difficulté')
+        .addOptions([
+          { label: '🟢 Facile', value: 'easy', description: 'Emoji évident' },
+          { label: '🟡 Moyen', value: 'medium', description: 'Réflexion nécessaire' },
+          { label: '🔴 Difficile', value: 'hard', description: 'Très abstrait' }
+        ]);
+
+      const step4Embed = new EmbedBuilder()
+        .setTitle('🧩 Ajouter un Puzzle Emoji - Étape 4/4')
+        .setDescription(
+          `**Emojis:** ${emojis}\n` +
+          `**Réponse:** ${answer}\n` +
+          `**Catégorie:** ${category}\n\n` +
+          '**Choisis la difficulté:**'
+        )
+        .setColor('#9B59B6');
+
+      await interaction.editReply({
+        embeds: [step4Embed],
+        components: [new ActionRowBuilder().addComponents(difficultySelect)]
+      });
+
+      // Attendre la sélection de difficulté
+      const diffInteraction = await interaction.channel.awaitMessageComponent({
+        filter: i => i.user.id === interaction.user.id && i.customId.startsWith('emoji_difficulty_temp_'),
+        time: 60000
+      });
+
+      await diffInteraction.deferUpdate();
+      const difficulty = diffInteraction.values[0];
+
+      // Sauvegarder le puzzle
+      await db.addQuizQuestion(
+        guildId,
+        theme.id,
+        emojis,   // question_text = emojis
+        answer,   // correct_answer
+        [],       // wrong_answers (pas utilisé)
+        category, // hint = catégorie
+        difficulty,
+        missionId
+      );
+
+      console.log(`✅ [Emoji-Puzzle] Puzzle ajouté: "${emojis}" → "${answer}" [${category}] (${difficulty})`);
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ Puzzle Ajouté !')
+        .setDescription(
+          `**Emojis:** ${emojis}\n` +
+          `**Réponse:** ${answer}\n` +
+          `**Catégorie:** ${category}\n` +
+          `**Difficulté:** ${difficulty === 'easy' ? '🟢 Facile' : difficulty === 'hard' ? '🔴 Difficile' : '🟡 Moyen'}`
+        )
+        .setColor('#2ECC71');
+
+      await interaction.editReply({
+        embeds: [successEmbed],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`mission_emoji_puzzles_${missionId}`)
+              .setLabel('📋 Voir les puzzles')
+              .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+              .setCustomId(`mission_emoji_add_${missionId}`)
+              .setLabel('➕ Ajouter un autre')
+              .setStyle(ButtonStyle.Success)
+          )
+        ]
+      });
+
+    } catch (error) {
+      if (error.message === 'time') {
+        return interaction.editReply({
+          content: '⏰ Temps écoulé. Opération annulée.',
+          embeds: [],
+          components: []
+        });
+      }
+      console.error('🔴 Erreur handleEmojiPuzzleAdd:', error);
+      return interaction.editReply({
+        content: '❌ Une erreur est survenue.',
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Afficher le sélecteur pour supprimer un puzzle emoji
+   */
+  async handleEmojiPuzzleDeleteSelect(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    const puzzles = await db.queryAll(
+      `SELECT id, question_text, correct_answer FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+       ORDER BY created_at DESC LIMIT 25`,
+      [guildId, missionId, theme.id]
+    );
+
+    if (puzzles.length === 0) {
+      return interaction.editReply({
+        content: '❌ Aucun puzzle à supprimer.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`select_emoji_delete_${missionId}`)
+      .setPlaceholder('Choisis le puzzle à supprimer')
+      .addOptions(puzzles.map(p => ({
+        label: `${p.question_text.substring(0, 50)} → ${p.correct_answer.substring(0, 30)}`,
+        value: p.id.toString(),
+        description: `ID: ${p.id}`
+      })));
+
+    return interaction.editReply({
+      content: '🗑️ **Sélectionne le puzzle à supprimer:**',
+      embeds: [],
+      components: [
+        new ActionRowBuilder().addComponents(select),
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_emoji_puzzles_${missionId}`)
+            .setLabel('🔙 Retour')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      ]
+    });
+  }
+
+  /**
+   * Supprimer un puzzle emoji
+   */
+  async handleEmojiPuzzleDelete(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    const puzzleId = parseInt(interaction.values[0]);
+    const guildId = interaction.guildId;
+
+    // Extraire missionId du customId
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    await db.query(
+      'DELETE FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [puzzleId, guildId]
+    );
+
+    console.log(`🗑️ [Emoji-Puzzle] Puzzle #${puzzleId} supprimé`);
+
+    await interaction.editReply({
+      content: '✅ Puzzle supprimé !',
+      flags: 64
+    });
+
+    // Retourner à la liste
+    const fakeInteraction = {
+      ...interaction,
+      customId: `mission_emoji_puzzles_${missionId}`,
+      deferUpdate: async () => {},
+      editReply: interaction.message.edit.bind(interaction.message)
+    };
+
+    return this.handleEmojiPuzzleManagement(fakeInteraction, 0);
   }
 }
 

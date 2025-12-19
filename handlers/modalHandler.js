@@ -103,9 +103,17 @@ class ModalHandler {
     else if (customId.startsWith('modal_quiz_add_')) {
       await this.handleAddQuizQuestion(interaction);
     }
+    // Gestion des modals de questions Vrai/Faux
+    else if (customId.startsWith('modal_truefalse_add_')) {
+      await this.handleAddTrueFalseQuestion(interaction);
+    }
     // Gestion du timeout de mission
     else if (customId.startsWith('modal_mission_timeout_')) {
       await this.handleMissionTimeout(interaction);
+    }
+    // Gestion de l'édition nom/description de mission
+    else if (customId.startsWith('modal_mission_edit_info_')) {
+      await this.handleMissionEditInfoSubmit(interaction);
     }
     // Gestion des modals super-admin (délégation)
     else if (customId.startsWith('superadmin_add_role_modal_')) {
@@ -1018,7 +1026,7 @@ class ModalHandler {
       const description = interaction.fields.getTextInputValue('template_description');
       const footer = interaction.fields.getTextInputValue('template_footer');
 
-      // Récupérer le template actuel
+      // Récupérer le template actuel (qui peut être lié au thème actif)
       const template = await db.getAnnouncementTemplate(templateType, interaction.guildId);
 
       if (!template) {
@@ -1028,13 +1036,24 @@ class ModalHandler {
         });
       }
 
-      // Mettre à jour le template
-      await db.updateAnnouncementTemplate(templateType, {
-        ...template,
-        title,
-        description,
-        footer_text: footer
-      });
+      // Mettre à jour le template - utiliser le bon theme_id
+      // Si le template a un theme_id, mettre à jour le template du thème
+      // Sinon, mettre à jour le template global
+      if (template.theme_id) {
+        await db.updateAnnouncementTemplateForTheme(templateType, {
+          ...template,
+          title,
+          description,
+          footer_text: footer
+        }, interaction.guildId, template.theme_id);
+      } else {
+        await db.updateAnnouncementTemplate(templateType, {
+          ...template,
+          title,
+          description,
+          footer_text: footer
+        }, interaction.guildId);
+      }
 
       return interaction.editReply({
         content: '✅ Template mis à jour avec succès!',
@@ -1073,7 +1092,7 @@ class ModalHandler {
         });
       }
 
-      // Récupérer le template actuel
+      // Récupérer le template actuel (qui peut être lié au thème actif)
       const template = await db.getAnnouncementTemplate(templateType, interaction.guildId);
 
       if (!template) {
@@ -1083,11 +1102,18 @@ class ModalHandler {
         });
       }
 
-      // Mettre à jour le template
-      await db.updateAnnouncementTemplate(templateType, {
-        ...template,
-        color
-      });
+      // Mettre à jour le template - utiliser le bon theme_id
+      if (template.theme_id) {
+        await db.updateAnnouncementTemplateForTheme(templateType, {
+          ...template,
+          color
+        }, interaction.guildId, template.theme_id);
+      } else {
+        await db.updateAnnouncementTemplate(templateType, {
+          ...template,
+          color
+        }, interaction.guildId);
+      }
 
       return interaction.editReply({
         content: `✅ Couleur mise à jour avec succès!\n\n🎨 **Nouvelle couleur:** ${color}`,
@@ -1187,7 +1213,12 @@ class ModalHandler {
         updates.thumbnail_url = imageUrl;
       }
 
-      await db.updateAnnouncementTemplate(templateType, updates);
+      // Mettre à jour le template - utiliser le bon theme_id
+      if (template.theme_id) {
+        await db.updateAnnouncementTemplateForTheme(templateType, updates, interaction.guildId, template.theme_id);
+      } else {
+        await db.updateAnnouncementTemplate(templateType, updates, interaction.guildId);
+      }
 
       await interaction.editReply({
         content: `✅ ${isImage ? 'Image principale' : 'Thumbnail'} mise à jour avec succès!\n\n📷 **URL:** ${imageUrl}`,
@@ -1391,6 +1422,8 @@ class ModalHandler {
       let validationData = {};
       let timeout = 60;
 
+      let maxAttempts = null;
+
       if (missionType === 'keyword-message') {
         const keyword = interaction.fields.getTextInputValue('mission_keyword');
         timeout = parseInt(interaction.fields.getTextInputValue('mission_timeout')) || 60;
@@ -1400,10 +1433,20 @@ class ModalHandler {
         const answer = interaction.fields.getTextInputValue('mission_answer');
         validationData = { question, answer };
         timeout = 300; // 5 minutes par défaut pour quiz
+      } else if (missionType === 'true-false') {
+        // Pour true-false : timeout = temps par question, maxAttempts = nombre de questions
+        timeout = parseInt(interaction.fields.getTextInputValue('mission_timeout')) || 15;
+        maxAttempts = parseInt(interaction.fields.getTextInputValue('mission_max_attempts')) || 3;
+        validationData = { questions_count: maxAttempts };
+      } else if (missionType === 'emoji-puzzle') {
+        // Pour emoji-puzzle : timeout = temps par emoji (x3 au dernier), maxAttempts = essais totaux
+        timeout = parseInt(interaction.fields.getTextInputValue('mission_timeout')) || 15;
+        maxAttempts = parseInt(interaction.fields.getTextInputValue('mission_max_attempts')) || 5;
+        validationData = { puzzles_count: 1, reveal_mode: 'progressive' };
       }
 
       // Ajouter la mission
-      await db.addMission(
+      const newMission = await db.addMission(
         interaction.guildId,  // guildId en premier
         theme.id,             // themeId
         missionId,
@@ -1416,6 +1459,14 @@ class ModalHandler {
         'random-collectible', // reward_type
         null                  // reward_data
       );
+
+      // Mettre à jour max_attempts si spécifié (pour true-false et autres mini-jeux)
+      if (maxAttempts !== null && newMission) {
+        await db.query(
+          'UPDATE missions SET max_attempts = $1 WHERE id = $2 AND guild_id = $3',
+          [maxAttempts, newMission.id, interaction.guildId]
+        );
+      }
 
       // Logger l'action
       await audit.logMissionAdded(
@@ -1807,6 +1858,61 @@ class ModalHandler {
   }
 
   /**
+   * Handler pour modifier le nom et la description d'une mission
+   */
+  async handleMissionEditInfoSubmit(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    try {
+      // Extraire missionId depuis le customId: modal_mission_edit_info_{missionId}
+      const missionId = parseInt(interaction.customId.split('_')[4]);
+      const newName = interaction.fields.getTextInputValue('mission_name').trim();
+      const newDescription = interaction.fields.getTextInputValue('mission_description').trim();
+
+      // Validation: nom requis
+      if (!newName) {
+        return interaction.editReply({
+          content: '❌ **Erreur:** Le nom de la mission est requis.',
+          flags: 64
+        });
+      }
+
+      // Récupérer la mission pour vérifier qu'elle existe
+      const mission = await db.getMissionById(interaction.guildId, missionId);
+
+      if (!mission) {
+        return interaction.editReply({
+          content: '❌ **Erreur:** Mission introuvable.',
+          flags: 64
+        });
+      }
+
+      // Mettre à jour le nom et la description dans la base de données
+      await db.query(
+        `UPDATE missions
+         SET name = $1, description = $2
+         WHERE id = $3 AND guild_id = $4`,
+        [newName, newDescription || '', missionId, interaction.guildId]
+      );
+
+      // Message de succès
+      return interaction.editReply({
+        content: `✅ **Mission mise à jour avec succès !**\n\n` +
+          `📝 **Nouveau nom:** ${newName}\n` +
+          `📄 **Description:** ${newDescription || '*Aucune description*'}`,
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur lors de la mise à jour de la mission:', error);
+      return interaction.editReply({
+        content: `❌ **Erreur:** Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
    * Gérer la saisie manuelle du canal d'annonces (ID ou nom)
    */
   async handleManualAnnouncementChannel(interaction) {
@@ -1858,8 +1964,8 @@ class ModalHandler {
         });
       }
 
-      // Enregistrer le canal
-      await db.setAnnouncementChannel(interaction.guildId, channel.id);
+      // Enregistrer le canal (avec le nom pour éviter la contrainte NOT NULL)
+      await db.setAnnouncementChannel(interaction.guildId, channel.id, channel.name);
 
       // Message de confirmation
       return interaction.editReply({
@@ -2062,6 +2168,129 @@ class ModalHandler {
         content: `❌ **Erreur:** ${error.message}`,
         flags: 64
       });
+    }
+  }
+
+  /**
+   * Handler pour ajouter une question Vrai/Faux
+   * Format customId: modal_truefalse_add_{missionId}_{difficulty}_{answer}
+   */
+  async handleAddTrueFalseQuestion(interaction) {
+    try {
+      // Extraire les parties du customId
+      const parts = interaction.customId.split('_');
+      // modal_truefalse_add_123_easy_vrai -> [modal, truefalse, add, 123, easy, vrai]
+      const missionId = parseInt(parts[3]);
+      const difficulty = parts[4] || 'medium';
+      const correctAnswer = parts[5] || 'vrai'; // vrai ou faux
+
+      // Extraire les valeurs des champs
+      const questionText = interaction.fields.getTextInputValue('question').trim();
+      const hint = interaction.fields.getTextInputValue('hint')?.trim() || null;
+
+      // Validation de base
+      if (!questionText || questionText.length === 0) {
+        return interaction.reply({
+          content: '❌ **Erreur:** L\'affirmation ne peut pas être vide.',
+          flags: 64
+        });
+      }
+
+      // Valider la difficulté
+      const validDifficulties = ['easy', 'medium', 'hard'];
+      const finalDifficulty = validDifficulties.includes(difficulty) ? difficulty : 'medium';
+
+      // Normaliser la réponse en français
+      const normalizedAnswer = correctAnswer.toLowerCase() === 'vrai' || correctAnswer.toLowerCase() === 'true'
+        ? 'vrai'
+        : 'faux';
+
+      // Récupérer la mission et le branding
+      const [mission, branding] = await Promise.all([
+        db.getMissionById(interaction.guildId, missionId),
+        db.getGuildBranding(interaction.guildId)
+      ]);
+
+      if (!mission || mission.type !== 'true-false') {
+        return interaction.reply({
+          content: '❌ **Erreur:** Mission introuvable ou n\'est pas de type Vrai/Faux.',
+          flags: 64
+        });
+      }
+
+      // Ajouter la question (utilise la même table quiz_questions)
+      await db.addQuizQuestion(
+        interaction.guildId,
+        mission.theme_id,
+        questionText,
+        normalizedAnswer, // "vrai" ou "faux"
+        [], // Pas de mauvaises réponses (binaire V/F)
+        hint,
+        finalDifficulty,
+        mission.id // mission_id pour lier à cette mission
+      );
+
+      // Logger l'action
+      await audit.logMissionQuizQuestionAdded(
+        interaction.guildId,
+        interaction.user.id,
+        missionId,
+        questionText,
+        finalDifficulty
+      );
+
+      // Message de succès éphémère
+      const difficultyEmoji = {
+        'easy': '🟢',
+        'medium': '🟡',
+        'hard': '🔴'
+      };
+
+      const answerEmoji = normalizedAnswer === 'vrai' ? '✅' : '❌';
+      const answerLabel = normalizedAnswer === 'vrai' ? 'VRAI' : 'FAUX';
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ Question Vrai/Faux ajoutée avec succès !')
+        .setDescription('La question a été ajoutée à la mission.\n\n💡 Le joueur devra répondre Vrai ou Faux dans le temps imparti.\n\n**Utilise le bouton "Rafraîchir" pour voir la liste actualisée.**')
+        .addFields(
+          { name: '📝 Affirmation', value: questionText.substring(0, 100) + (questionText.length > 100 ? '...' : ''), inline: false },
+          { name: `${answerEmoji} Réponse`, value: `**${answerLabel}**`, inline: true },
+          { name: '💡 Difficulté', value: `${difficultyEmoji[finalDifficulty]} ${finalDifficulty}`, inline: true }
+        )
+        .setColor(branding.secondary_color)
+        .setFooter(await getLoomixFooter(interaction.guildId))
+        .setTimestamp();
+
+      if (hint) {
+        successEmbed.addFields({
+          name: '💭 Indice',
+          value: hint,
+          inline: false
+        });
+      }
+
+      await interaction.reply({
+        embeds: [successEmbed],
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleAddTrueFalseQuestion:', error);
+      try {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.editReply({
+            content: `❌ **Erreur:** ${error.message}`,
+            flags: 64
+          });
+        } else {
+          await interaction.reply({
+            content: `❌ **Erreur:** ${error.message}`,
+            flags: 64
+          });
+        }
+      } catch (e) {
+        // Ignorer
+      }
     }
   }
 }

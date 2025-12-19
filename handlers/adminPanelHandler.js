@@ -2444,7 +2444,12 @@ class AdminPanelHandler {
                 updates.thumbnail_url = imageUrl;
               }
 
-              await db.updateAnnouncementTemplate(templateType, updates);
+              // Mettre à jour le bon template selon theme_id
+              if (template.theme_id) {
+                await db.updateAnnouncementTemplateForTheme(templateType, updates, interaction.guildId, template.theme_id);
+              } else {
+                await db.updateAnnouncementTemplate(templateType, updates, interaction.guildId);
+              }
 
               await thread.send({
                 content: `✅ **${isImage ? 'Image principale' : 'Thumbnail'} mise à jour avec succès!**\n\n` +
@@ -2945,36 +2950,75 @@ class AdminPanelHandler {
     const theme = await db.getActiveTheme(interaction.guildId);
     const missions = await db.getMissionsByTheme(interaction.guildId, theme.id);
 
-    const embed = new EmbedBuilder()
-      .setTitle('📋 GESTION DES MISSIONS')
-      .setDescription(
-        `**Thème actuel:** ${theme.name}\n` +
-        `**Missions configurées:** ${missions.length}\n\n` +
-        `Ajoute, modifie ou supprime des missions pour ton jeu.`
-      )
-      .setColor('#3498db');
+    // Types de missions avec leurs emojis
+    const missionTypes = {
+      'keyword-message': { emoji: '🔤', label: 'Mot Deviné' },
+      'quiz': { emoji: '❓', label: 'Quiz' },
+      'true-false': { emoji: '✅', label: 'Vrai/Faux' },
+      'emoji-puzzle': { emoji: '🧩', label: 'Emoji Devinette' },
+      'wordle': { emoji: '🟩', label: 'Wordle' },
+      'unscramble': { emoji: '🔀', label: 'Anagramme' },
+      'hangman': { emoji: '☠️', label: 'Pendu' },
+      'reaction-message': { emoji: '👍', label: 'Réaction' },
+      'voice-join': { emoji: '🔊', label: 'Vocal' }
+    };
 
-    // Afficher la liste des missions
+    // Compter les missions par type
+    const typeCounts = {};
+    missions.forEach(m => {
+      typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+    });
+
+    // Construire le résumé par type
+    let typesSummary = '';
     if (missions.length > 0) {
-      const missionTypes = {
-        'keyword-message': '🔤 Mot-clé',
-        'quiz': '❓ Quiz',
-        'reaction-message': '👍 Réaction',
-        'voice-join': '🔊 Vocal'
-      };
+      const typeLines = Object.entries(typeCounts)
+        .map(([type, count]) => {
+          const typeInfo = missionTypes[type] || { emoji: '📋', label: type };
+          return `${typeInfo.emoji} ${typeInfo.label}: **${count}**`;
+        });
+      typesSummary = typeLines.join(' • ');
+    }
 
-      missions.forEach(mission => {
-        const typeLabel = missionTypes[mission.type] || mission.type;
+    const embed = new EmbedBuilder()
+      .setTitle('🎯 GESTION DES MISSIONS')
+      .setDescription(
+        `**🎨 Thème:** ${theme.name}\n` +
+        `**📊 Total:** ${missions.length} mission${missions.length > 1 ? 's' : ''}\n\n` +
+        (typesSummary ? `${typesSummary}\n\n` : '') +
+        `*Sélectionne une mission pour la modifier ou en créer une nouvelle.*`
+      )
+      .setColor('#9B59B6')
+      .setFooter({ text: `🎮 Types disponibles: Mot Deviné, Quiz, Vrai/Faux, Emoji Devinette...` });
+
+    // Afficher la liste des missions (max 10 pour éviter surcharge)
+    if (missions.length > 0) {
+      const displayMissions = missions.slice(0, 10);
+
+      displayMissions.forEach(mission => {
+        const typeInfo = missionTypes[mission.type] || { emoji: '📋', label: mission.type };
+        const timeoutDisplay = mission.timeout ? `⏱️${mission.timeout}s` : '';
+        const attemptsDisplay = mission.max_attempts ? `🎯${mission.max_attempts}` : '';
+        const extras = [timeoutDisplay, attemptsDisplay].filter(x => x).join(' ');
+
         embed.addFields({
-          name: `${typeLabel} - ${mission.name}`,
-          value: `**ID:** \`${mission.mission_id}\`\n**Description:** ${mission.description.substring(0, 60)}...`,
+          name: `${typeInfo.emoji} ${mission.name}`,
+          value: `\`${mission.mission_id}\` ${extras ? `• ${extras}` : ''}`,
           inline: true
         });
       });
+
+      if (missions.length > 10) {
+        embed.addFields({
+          name: '📦 Et plus...',
+          value: `+${missions.length - 10} autres missions`,
+          inline: true
+        });
+      }
     } else {
       embed.addFields({
-        name: 'Aucune mission',
-        value: 'Clique sur "➕ Ajouter" pour créer ta première mission !'
+        name: '📭 Aucune mission',
+        value: 'Clique sur **➕ Ajouter** pour créer ta première mission !'
       });
     }
 
@@ -2992,15 +3036,31 @@ class AdminPanelHandler {
 
     // Si des missions existent, afficher le select menu
     if (missions.length > 0) {
+      // Fonction pour obtenir l'emoji du type de mission
+      const getTypeEmoji = (type) => {
+        const emojis = {
+          'keyword-message': '🔤',
+          'quiz': '❓',
+          'true-false': '✅',
+          'emoji-puzzle': '🧩',
+          'wordle': '🟩',
+          'unscramble': '🔀',
+          'hangman': '☠️',
+          'reaction-message': '👍',
+          'voice-join': '🔊'
+        };
+        return emojis[type] || '📋';
+      };
+
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId('select_mission')
-        .setPlaceholder('Sélectionne une mission à modifier/supprimer')
+        .setPlaceholder('📝 Sélectionne une mission à modifier')
         .addOptions(
-          missions.map(mission => ({
-            label: mission.name,
+          missions.slice(0, 25).map(mission => ({
+            label: mission.name.substring(0, 100),
             value: mission.id.toString(),
-            description: `${mission.type} - ${mission.mission_id}`,
-            emoji: mission.type === 'keyword-message' ? '🔤' : mission.type === 'quiz' ? '❓' : '📋'
+            description: `${missionTypes[mission.type]?.label || mission.type} • ${mission.mission_id}`.substring(0, 100),
+            emoji: getTypeEmoji(mission.type)
           }))
         );
 
@@ -3461,51 +3521,23 @@ class AdminPanelHandler {
   }
 
   /**
-   * Sélecteur pour ajouter un canal
+   * Sélecteur pour ajouter un canal (avec recherche native Discord)
    */
   async showAddChannelSelector(interaction) {
-    // Récupérer tous les canaux textuels du serveur
-    const allChannels = interaction.guild.channels.cache.filter(ch => ch.isTextBased() && ch.type !== 4);
-
-    // Récupérer les canaux déjà configurés
-    const configuredChannels = await db.getGiveChannelsList(interaction.guildId);
-    const configuredIds = new Set(configuredChannels.map(c => c.discord_id));
-
-    // Filtrer pour ne garder que ceux qui ne sont pas déjà configurés
-    const availableChannels = allChannels.filter(ch => !configuredIds.has(ch.id));
-
-    if (availableChannels.size === 0) {
-      return interaction.update({
-        content: '❌ Aucun canal disponible. Tous les canaux textuels du serveur sont déjà configurés.',
-        embeds: [],
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId('admin_channels')
-              .setLabel('🔙 Retour')
-              .setStyle(ButtonStyle.Secondary)
-          )
-        ]
-      });
-    }
-
-    const selectMenu = new StringSelectMenuBuilder()
+    // Utiliser le ChannelSelectMenuBuilder natif Discord avec recherche
+    const selectMenu = new ChannelSelectMenuBuilder()
       .setCustomId('select_add_channel')
-      .setPlaceholder('Choisir un canal à ajouter')
-      .addOptions(
-        Array.from(availableChannels.values()).slice(0, 25).map(ch => ({
-          label: ch.name,
-          value: ch.id,
-          description: ch.parent ? `Catégorie: ${ch.parent.name}` : 'Aucune catégorie',
-          emoji: '📍'
-        }))
-      );
+      .setPlaceholder('🔍 Rechercher et sélectionner un canal...')
+      .setChannelTypes([ChannelType.GuildText, ChannelType.GuildAnnouncement]); // Canaux textuels et annonces
 
     const embed = new EmbedBuilder()
       .setTitle('📍 AJOUTER UN CANAL')
-      .setDescription('**Sélectionne un canal à ajouter:**\n\nLes canaux déjà configurés sont filtrés automatiquement.')
-      .setColor('#9b59b6')
-      .setFooter({ text: `${availableChannels.size} canal/canaux disponible(s)` });
+      .setDescription(
+        '**Sélectionne un canal à ajouter:**\n\n' +
+        '🔍 **Tape pour rechercher** parmi tous les canaux du serveur.\n\n' +
+        '> ⚠️ Si le canal est déjà configuré, un message d\'erreur s\'affichera.'
+      )
+      .setColor('#9b59b6');
 
     const row1 = new ActionRowBuilder().addComponents(selectMenu);
     const row2 = new ActionRowBuilder().addComponents(
@@ -3650,12 +3682,24 @@ class AdminPanelHandler {
   }
 
   /**
-   * Handler pour l'ajout d'un canal
+   * Handler pour l'ajout d'un canal (via ChannelSelectMenu natif Discord)
    */
   async handleAddChannelSelection(interaction) {
-    // Note: deferUpdate() est déjà fait dans handleSelectMenu()
+    // Defer immédiatement (appelé directement depuis interactionCreate.js)
+    await interaction.deferUpdate();
 
-    const channelId = interaction.values[0];
+    // ChannelSelectMenu natif: utilise interaction.channels (Collection de canaux)
+    const channel = interaction.channels?.first();
+
+    if (!channel) {
+      await interaction.followUp({
+        content: '❌ Aucun canal sélectionné.',
+        flags: 64
+      });
+      return this.showChannelsMenu(interaction);
+    }
+
+    const channelId = channel.id;
 
     try {
       // Vérifier que le canal n'est pas déjà configuré
@@ -3668,12 +3712,9 @@ class AdminPanelHandler {
         return this.showChannelsMenu(interaction);
       }
 
-      // Récupérer le canal depuis Discord
-      const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
-
-      if (!channel || !channel.isTextBased()) {
+      if (!channel.isTextBased()) {
         await interaction.followUp({
-          content: '❌ ID invalide ou ce n\'est pas un canal textuel.',
+          content: '❌ Ce n\'est pas un canal textuel.',
           flags: 64
         });
         return this.showChannelsMenu(interaction);
@@ -4301,12 +4342,36 @@ class AdminPanelHandler {
 
   /**
    * Afficher le sélecteur pour changer de canal d'annonces
-   * Note: Utilise un modal au lieu de ChannelSelectMenu (limité à 25 canaux)
+   * Utilise ChannelSelectMenuBuilder natif Discord avec recherche
    */
   async showChangeAnnouncementChannelSelector(interaction) {
-    // Ouvrir directement le modal pour saisir le nom ou ID du canal
-    // (Remplace le ChannelSelectMenu limité à 25 canaux)
-    return this.showManualAnnouncementChannelModal(interaction);
+    // Utiliser le ChannelSelectMenuBuilder natif Discord avec recherche
+    const selectMenu = new ChannelSelectMenuBuilder()
+      .setCustomId('select_announcement_channel')
+      .setPlaceholder('🔍 Rechercher et sélectionner un canal...')
+      .setChannelTypes([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
+
+    const embed = new EmbedBuilder()
+      .setTitle('📢 CHANGER LE CANAL D\'ANNONCES')
+      .setDescription(
+        '**Sélectionne le canal pour les annonces:**\n\n' +
+        '🔍 **Tape pour rechercher** parmi tous les canaux du serveur.\n\n' +
+        '> Les annonces du bot (collectibles, pièges, missions...) seront envoyées dans ce canal.'
+      )
+      .setColor('#3498db');
+
+    const row1 = new ActionRowBuilder().addComponents(selectMenu);
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_announcements')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.update({
+      embeds: [embed],
+      components: [row1, row2]
+    });
   }
 
   /**
@@ -5034,11 +5099,18 @@ class AdminPanelHandler {
         });
       }
 
-      // Mettre à jour la couleur
-      await db.updateAnnouncementTemplate(templateType, {
-        ...template,
-        color: selectedColor
-      });
+      // Mettre à jour la couleur - utiliser le bon theme_id
+      if (template.theme_id) {
+        await db.updateAnnouncementTemplateForTheme(templateType, {
+          ...template,
+          color: selectedColor
+        }, interaction.guildId, template.theme_id);
+      } else {
+        await db.updateAnnouncementTemplate(templateType, {
+          ...template,
+          color: selectedColor
+        }, interaction.guildId);
+      }
 
       await interaction.followUp({
         content: `✅ Couleur mise à jour avec succès!\n\n🎨 **Nouvelle couleur:** ${selectedColor}`,
@@ -6212,20 +6284,47 @@ class AdminPanelHandler {
       .setPlaceholder('Choisis le type de mission')
       .addOptions([
         {
-          label: '🔤 Mot-clé (keyword-message)',
+          label: 'Mot Deviné',
           value: 'keyword-message',
-          description: 'Le joueur doit écrire un mot-clé dans un canal'
+          description: 'Le joueur doit écrire un mot-clé dans un canal',
+          emoji: '🔤'
         },
         {
-          label: '❓ Quiz',
+          label: 'Quiz',
           value: 'quiz',
-          description: 'Le joueur doit répondre correctement à une question'
+          description: 'Le joueur répond à des questions à choix multiples',
+          emoji: '❓'
+        },
+        {
+          label: 'Vrai ou Faux',
+          value: 'true-false',
+          description: 'Le joueur répond Vrai ou Faux à des affirmations',
+          emoji: '✅'
+        },
+        {
+          label: 'Emoji Devinette',
+          value: 'emoji-puzzle',
+          description: 'Deviner ce que représentent des emojis révélés progressivement',
+          emoji: '🧩'
         }
       ]);
 
+    const embed = new EmbedBuilder()
+      .setTitle('➕ Créer une nouvelle mission')
+      .setDescription(
+        'Sélectionne le type de mini-jeu que tu veux créer.\n\n' +
+        '**Types disponibles:**\n' +
+        '🔤 **Mot Deviné** - Deviner un mot caché\n' +
+        '❓ **Quiz** - Questions à choix multiples\n' +
+        '✅ **Vrai/Faux** - Répondre à des affirmations\n' +
+        '🧩 **Emoji Devinette** - Deviner à partir d\'emojis'
+      )
+      .setColor('#5865F2')
+      .setFooter({ text: '💡 D\'autres types seront bientôt disponibles !' });
+
     return interaction.update({
-      content: '**Sélectionne le type de mission à créer:**',
-      embeds: [],
+      content: null,
+      embeds: [embed],
       components: [
         new ActionRowBuilder().addComponents(selectMenu),
         new ActionRowBuilder().addComponents(
@@ -6328,6 +6427,54 @@ class AdminPanelHandler {
       );
 
       modal.addComponents(row1, row2, row3, row4, row5);
+    } else if (missionType === 'true-false') {
+      // Pour true-false, on n'a besoin que des champs de base
+      // Les questions seront ajoutées via le bouton "Gérer les Questions V/F"
+      const row4 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_timeout')
+          .setLabel('Temps par question (en secondes)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 15')
+          .setValue('15')
+          .setRequired(true)
+      );
+
+      const row5 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_max_attempts')
+          .setLabel('Nombre de questions')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 3')
+          .setValue('3')
+          .setRequired(true)
+      );
+
+      modal.addComponents(row1, row2, row3, row4, row5);
+    } else if (missionType === 'emoji-puzzle') {
+      // Pour emoji-puzzle: temps entre chaque emoji et nombre d'essais
+      // Les puzzles seront ajoutés via le bouton "Gérer les Puzzles"
+      const row4 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_timeout')
+          .setLabel('Temps par emoji (en secondes)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 15 (x3 au dernier)')
+          .setValue('15')
+          .setRequired(true)
+      );
+
+      const row5 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_max_attempts')
+          .setLabel('Nombre d\'essais maximum')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 5')
+          .setValue('5')
+          .setRequired(true)
+      );
+
+      modal.addComponents(row1, row2, row3, row4, row5);
     }
 
     return interaction.showModal(modal);
@@ -6376,63 +6523,205 @@ class AdminPanelHandler {
     const missionTypes = {
       'keyword-message': '🔤 Mot-clé',
       'quiz': '❓ Quiz',
+      'true-false': '✅ Vrai ou Faux',
+      'emoji-puzzle': '🎭 Emoji Devinette',
+      'wordle': '🟩 Wordle',
+      'unscramble': '🔀 Anagramme',
+      'hangman': '☠️ Pendu',
       'reaction-message': '👍 Réaction',
       'voice-join': '🔊 Vocal'
     };
 
-    // Amélioration visuelle de l'embed - Design moderne
-    const embed = new EmbedBuilder()
-      .setTitle(`${missionTypes[mission.type] || mission.type} - ${mission.name}`)
-      .setDescription(
-        `${mission.description}\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `**Informations de la mission:**`
-      )
-      .setColor('#5865F2')
-      .addFields(
-        {
-          name: '🆔 Identifiant',
-          value: `\`${mission.mission_id}\``,
-          inline: true
-        },
-        {
-          name: '📋 Type',
-          value: `\`${mission.type}\``,
-          inline: true
-        },
-        {
-          name: '⏱️ Timeout',
-          value: `**${mission.timeout}** secondes`,
-          inline: true
+    // Créer l'embed selon le type de mission
+    let embed;
+
+    // Embed spécialisé pour true-false
+    if (mission.type === 'true-false') {
+      // Récupérer les questions V/F pour cette mission
+      const questions = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
+
+      // Compter par difficulté
+      const byDifficulty = {
+        easy: questions.filter(q => q.difficulty === 'easy').length,
+        medium: questions.filter(q => q.difficulty === 'medium').length,
+        hard: questions.filter(q => q.difficulty === 'hard').length
+      };
+      const totalQuestions = questions.length;
+
+      // Compter Vrai vs Faux
+      const vraiCount = questions.filter(q =>
+        q.correct_answer && q.correct_answer.toLowerCase() === 'vrai'
+      ).length;
+      const fauxCount = totalQuestions - vraiCount;
+
+      embed = new EmbedBuilder()
+        .setTitle(`✅ ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+        )
+        .setColor('#2ECC71') // Vert pour Vrai/Faux
+        .addFields(
+          {
+            name: '📊 Questions configurées',
+            value: totalQuestions > 0
+              ? `**${totalQuestions}** question${totalQuestions > 1 ? 's' : ''}`
+              : `⚠️ *Aucune question*`,
+            inline: true
+          },
+          {
+            name: '🎯 Questions/Session',
+            value: `**${mission.max_attempts || 5}** questions`,
+            inline: true
+          },
+          {
+            name: '⏱️ Temps/Question',
+            value: `**${mission.timeout || 15}** secondes`,
+            inline: true
+          }
+        );
+
+      // Ajouter la répartition par difficulté si des questions existent
+      if (totalQuestions > 0) {
+        embed.addFields(
+          {
+            name: '📈 Répartition par difficulté',
+            value: `🟢 Facile: **${byDifficulty.easy}**\n🟡 Moyen: **${byDifficulty.medium}**\n🔴 Difficile: **${byDifficulty.hard}**`,
+            inline: true
+          },
+          {
+            name: '⚖️ Équilibre Vrai/Faux',
+            value: `✅ Vrai: **${vraiCount}**\n❌ Faux: **${fauxCount}**`,
+            inline: true
+          },
+          {
+            name: '🆔 Identifiant',
+            value: `\`${mission.mission_id}\``,
+            inline: true
+          }
+        );
+      } else {
+        embed.addFields({
+          name: '💡 Astuce',
+          value: 'Utilisez le bouton **Gérer les Questions V/F** pour ajouter des questions !',
+          inline: false
+        });
+      }
+
+    // Embed spécialisé pour emoji-puzzle
+    } else if (mission.type === 'emoji-puzzle') {
+      const puzzles = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
+      const totalPuzzles = puzzles.length;
+
+      const byDifficulty = {
+        easy: puzzles.filter(q => q.difficulty === 'easy').length,
+        medium: puzzles.filter(q => q.difficulty === 'medium').length,
+        hard: puzzles.filter(q => q.difficulty === 'hard').length
+      };
+
+      embed = new EmbedBuilder()
+        .setTitle(`🧩 ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+        )
+        .setColor('#9B59B6') // Violet pour Emoji Puzzle
+        .addFields(
+          {
+            name: '🧩 Puzzles configurés',
+            value: totalPuzzles > 0
+              ? `**${totalPuzzles}** puzzle${totalPuzzles > 1 ? 's' : ''}`
+              : `⚠️ *Aucun puzzle*`,
+            inline: true
+          },
+          {
+            name: '🎯 Essais max',
+            value: `**${mission.max_attempts || 3}** essais`,
+            inline: true
+          },
+          {
+            name: '⏱️ Temps/Emoji',
+            value: `**${mission.timeout || 10}** secondes`,
+            inline: true
+          }
+        );
+
+      if (totalPuzzles > 0) {
+        embed.addFields(
+          {
+            name: '📈 Répartition par difficulté',
+            value: `🟢 Facile: **${byDifficulty.easy}**\n🟡 Moyen: **${byDifficulty.medium}**\n🔴 Difficile: **${byDifficulty.hard}**`,
+            inline: true
+          },
+          {
+            name: '🆔 Identifiant',
+            value: `\`${mission.mission_id}\``,
+            inline: true
+          }
+        );
+      } else {
+        embed.addFields({
+          name: '💡 Astuce',
+          value: 'Utilisez le bouton **Gérer les Puzzles** pour ajouter des devinettes emoji !',
+          inline: false
+        });
+      }
+
+    // Embed générique pour les autres types
+    } else {
+      embed = new EmbedBuilder()
+        .setTitle(`${missionTypes[mission.type] || mission.type} - ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `**Informations de la mission:**`
+        )
+        .setColor('#5865F2')
+        .addFields(
+          {
+            name: '🆔 Identifiant',
+            value: `\`${mission.mission_id}\``,
+            inline: true
+          },
+          {
+            name: '📋 Type',
+            value: `\`${mission.type}\``,
+            inline: true
+          },
+          {
+            name: '⏱️ Timeout',
+            value: `**${mission.timeout}** secondes`,
+            inline: true
+          }
+        );
+
+      // Afficher les données de validation pour types génériques
+      if (mission.validation_data) {
+        try {
+          const validationData = JSON.parse(mission.validation_data);
+          if (validationData.keyword) {
+            embed.addFields({
+              name: '🔑 Mot-clé',
+              value: `\`${validationData.keyword}\``
+            });
+          }
+          if (validationData.question) {
+            embed.addFields({
+              name: '❓ Question',
+              value: validationData.question
+            });
+          }
+        } catch (e) {
+          // Ignore
         }
-      );
+      }
+    }
 
     // Badge pour missions hardcodées
     if (isHardcodedMission) {
       embed.setFooter({
         text: '🔒 Mission système - Recréée automatiquement avec chaque nouveau thème'
       });
-    }
-
-    // Afficher les données de validation
-    if (mission.validation_data) {
-      try {
-        const validationData = JSON.parse(mission.validation_data);
-        if (validationData.keyword) {
-          embed.addFields({
-            name: '🔑 Mot-clé',
-            value: `\`${validationData.keyword}\``
-          });
-        }
-        if (validationData.question) {
-          embed.addFields({
-            name: '❓ Question',
-            value: validationData.question
-          });
-        }
-      } catch (e) {
-        // Ignore
-      }
     }
 
     const components = [];
@@ -6448,6 +6737,42 @@ class AdminPanelHandler {
           new ButtonBuilder()
             .setCustomId(`mission_timeout_config_${missionId}`)
             .setLabel('⏱️ Configurer le Timeout')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`mission_max_attempts_config_${missionId}`)
+            .setLabel('🎯 Nombre d\'essais')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+    } else if (mission.type === 'true-false') {
+      // Mission Vrai ou Faux - boutons spécifiques
+      components.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_truefalse_questions_${missionId}`)
+            .setLabel('✅ Gérer les Questions V/F')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`mission_timeout_config_${missionId}`)
+            .setLabel('⏱️ Temps par question')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`mission_max_attempts_config_${missionId}`)
+            .setLabel('🎯 Nombre de questions')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+    } else if (mission.type === 'emoji-puzzle') {
+      // Mission Emoji Devinette - boutons spécifiques
+      components.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_emoji_puzzles_${missionId}`)
+            .setLabel('🧩 Gérer les Puzzles')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`mission_timeout_config_${missionId}`)
+            .setLabel('⏱️ Temps par emoji')
             .setStyle(ButtonStyle.Secondary),
           new ButtonBuilder()
             .setCustomId(`mission_max_attempts_config_${missionId}`)
@@ -6487,9 +6812,13 @@ class AdminPanelHandler {
       );
     }
 
-    // Bouton Configurer la Récompense (commun à tous les types de missions)
+    // Boutons communs à tous les types de missions (Éditer infos + Récompense)
     components.push(
       new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_edit_info_${missionId}`)
+          .setLabel('✏️ Modifier Nom/Description')
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`mission_reward_config_${missionId}`)
           .setLabel('🎁 Configurer la Récompense')
