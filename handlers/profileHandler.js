@@ -2,7 +2,8 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBu
 const path = require('path');
 const db = require('../utils/database-pg');
 const superBonusHandler = require('./superBonusHandler');
-const { showOverview, showInventory, showHistory, showAchievements, showBonuses, showBadges } = require('../views/profileView');
+const dailyClaimHandler = require('./dailyClaimHandler');
+const { showOverview, showInventory, showHistory, showAchievements, showBonuses, showBadges, showFavorites, showFrames } = require('../views/profileView');
 const {
   getRarityEmoji,
   createProgressBar,
@@ -14,6 +15,7 @@ const {
 const { getInventoryGrouped, getActivityTimeline } = require('../utils/profileQueries');
 const { getLoomixFooter, LOOMIX_BRANDING } = require('../utils/footerHelper');
 const profileColorHandler = require('./profileColorHandler');
+const mysteryBoxHandler = require('./mysteryBoxHandler');
 
 /**
  * 🎯 PROFILE HANDLER - Router principal pour toutes les interactions du profil
@@ -78,6 +80,11 @@ async function handleProfileInteraction(interaction) {
       return profileColorHandler.showCustomColorModal(interaction);
     }
 
+    // Daily claim/calendar/catchup - déléguer au handler qui défère lui-même
+    if (customId.startsWith('daily_')) {
+      return dailyClaimHandler.handleDailyClaimInteraction(interaction);
+    }
+
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT
     await interaction.deferUpdate();
 
@@ -130,6 +137,8 @@ async function handleProfileInteraction(interaction) {
       await handleShare(interaction, player, theme, progress);
     } else if (customId.startsWith('activate_bonus:')) {
       await handleActivateBonus(interaction, player, theme, state);
+    } else if (customId.startsWith('deactivate_bonus:')) {
+      await handleDeactivateBonus(interaction, player, theme, state);
     } else if (customId === 'profile_inventory_filter') {
       await handleInventoryFilter(interaction, player, theme, progress, state);
     } else if (customId === 'profile_inventory_first') {
@@ -158,6 +167,26 @@ async function handleProfileInteraction(interaction) {
       await handleBadgesLeaderboard(interaction, player, theme, state);
     } else if (customId === 'profile_badges_refresh') {
       await handleBadges(interaction, player, theme, state);
+    } else if (customId === 'profile_daily_rewards') {
+      await handleDailyRewards(interaction, player, theme, progress, state);
+    } else if (customId === 'profile_mysterybox') {
+      await handleMysteryBoxInventory(interaction, player, theme, state);
+    } else if (customId.startsWith('mb_open:')) {
+      await handleMysteryBoxOpen(interaction, player, theme, state);
+    }
+    // ========== FAVORIS & FRAMES ==========
+    else if (customId === 'profile_favorites') {
+      await handleFavorites(interaction, player, theme, state);
+    } else if (customId.startsWith('profile_favorite_pos:')) {
+      await handleFavoritePosition(interaction, player, theme, state);
+    } else if (customId.startsWith('profile_favorite_select:')) {
+      await handleFavoriteSelect(interaction, player, theme, state);
+    } else if (customId === 'profile_frames') {
+      await handleFrames(interaction, player, theme, state);
+    } else if (customId.startsWith('profile_frame_equip:')) {
+      await handleFrameEquip(interaction, player, theme, state);
+    } else if (customId === 'profile_frame_unequip') {
+      await handleFrameUnequip(interaction, player, theme, state);
     }
 
   } catch (error) {
@@ -294,6 +323,49 @@ async function handleActivateBonus(interaction, player, theme, state) {
       });
     }
 
+    // === CAS SPÉCIAL: ACCÉLÉRATEUR DE COOLDOWN ===
+    if (bonus.effect_type === 'cooldown') {
+      // Vérifier s'il reste des charges
+      const effectiveCharges = bonus.remaining_charges !== null ? bonus.remaining_charges : bonus.duration_value;
+      if (effectiveCharges <= 0) {
+        // Message éphémère séparé - ne pas toucher à l'interface
+        await interaction.followUp({
+          content: `❌ Tu n'as plus de charges pour l'**${bonus.name}** !`,
+          flags: 64
+        });
+        return;
+      }
+
+      console.log(`⚡ [COOLDOWN] ${interaction.user.tag} utilise l'Accélérateur de Cooldown (${effectiveCharges} charge(s) restante(s))`);
+
+      // Activer l'Accélérateur de Cooldown
+      const result = await superBonusHandler.activateCooldownAccelerator(guildId, interaction.user.id);
+
+      if (!result.success) {
+        // Pas de cooldown actif - message éphémère séparé, ne pas toucher à l'interface
+        await interaction.followUp({
+          content: result.message,
+          flags: 64
+        });
+        return;
+      }
+
+      // Succès - cooldown supprimé - rafraîchir la vue des bonus
+      state.currentView = 'bonuses';
+      saveProfileState(interaction.user.id, state);
+
+      // Rafraîchir l'affichage des bonus
+      const content = await showBonuses(interaction, player, theme);
+      await interaction.editReply(content);
+
+      // Message de confirmation éphémère
+      await interaction.followUp({
+        content: `⚡ **Accélérateur de Cooldown activé !**\n\n✅ Cooldown supprimé !\n🔢 Charges restantes: **${result.remainingCharges}**`,
+        flags: 64
+      });
+      return;
+    }
+
     // Vérifier si déjà activé (pour les autres bonus)
     if (bonus.activated_at !== null) {
       return interaction.editReply({
@@ -369,6 +441,99 @@ async function handleActivateBonus(interaction, player, theme, state) {
 }
 
 /**
+ * ⏸️ Handler: Désactiver un bonus actif
+ * Permet au joueur de désactiver manuellement un bonus à charges pour économiser ses charges
+ * Applicable uniquement à: Vision Divine (reveal), Bouclier Anti-Piège (protection), Jackpot x2 (multiplier)
+ */
+async function handleDeactivateBonus(interaction, player, theme, state) {
+  const [, bonusId] = interaction.customId.split(':');
+  const guildId = interaction.guildId;
+
+  try {
+    // Récupérer le bonus à désactiver
+    const activeBonusRecord = await db.query(
+      `SELECT pab.*, sb.name, sb.description, sb.icon, sb.duration_type, sb.effect_type
+       FROM player_active_bonuses pab
+       JOIN super_bonuses sb ON pab.bonus_id = sb.id
+       WHERE pab.id = $1 AND pab.user_id = $2 AND pab.guild_id = $3`,
+      [bonusId, interaction.user.id, guildId]
+    );
+
+    if (activeBonusRecord.length === 0) {
+      return interaction.editReply({
+        content: '❌ Ce bonus n\'existe pas ou ne t\'appartient pas.',
+        components: []
+      });
+    }
+
+    const bonus = activeBonusRecord[0];
+
+    // Vérifier que le bonus est bien activé
+    if (bonus.activated_at === null) {
+      return interaction.editReply({
+        content: `❌ Le bonus **${bonus.name}** n'est pas encore activé !`,
+        components: []
+      });
+    }
+
+    // Vérifier que c'est un bonus désactivable (reveal, protection, multiplier)
+    const DEACTIVATABLE_EFFECT_TYPES = ['reveal', 'protection', 'multiplier'];
+    if (!DEACTIVATABLE_EFFECT_TYPES.includes(bonus.effect_type)) {
+      return interaction.editReply({
+        content: `❌ Le bonus **${bonus.name}** ne peut pas être désactivé manuellement.`,
+        components: []
+      });
+    }
+
+    // Vérifier qu'il reste des charges
+    if (bonus.remaining_charges <= 0) {
+      return interaction.editReply({
+        content: `❌ Le bonus **${bonus.name}** n'a plus de charges restantes !`,
+        components: []
+      });
+    }
+
+    // Désactiver le bonus (remettre activated_at à NULL pour permettre réactivation)
+    await db.query(
+      `UPDATE player_active_bonuses
+       SET activated_at = NULL, expires_at = NULL
+       WHERE id = $1`,
+      [bonusId]
+    );
+
+    console.log(`⏸️ [BONUS DEACTIVATION] ${interaction.user.tag} a désactivé le bonus "${bonus.name}" (ID: ${bonusId}) - ${bonus.remaining_charges} charge(s) conservée(s)`);
+
+    // Préparer message de confirmation
+    const icon = bonus.icon || '⏸️';
+
+    await interaction.editReply({
+      content:
+        `⏸️ **Bonus Désactivé !**\n\n` +
+        `${icon} **${bonus.name}**\n\n` +
+        `🔢 **${bonus.remaining_charges} charge(s)** conservée(s)\n\n` +
+        `💡 *Tu peux le réactiver plus tard depuis cette page !*`,
+      components: []
+    });
+
+    // Rafraîchir la vue des bonus après 2 secondes
+    setTimeout(async () => {
+      try {
+        await handleBonuses(interaction, player, theme, state);
+      } catch (error) {
+        // Ignorer les erreurs (interaction peut être expirée)
+      }
+    }, 2000);
+
+  } catch (error) {
+    console.error('🔴 Erreur handleDeactivateBonus:', error);
+    return interaction.editReply({
+      content: `❌ Erreur lors de la désactivation du bonus: ${error.message}`,
+      components: []
+    });
+  }
+}
+
+/**
  * 📜 Handler: Historique
  */
 async function handleHistory(interaction, player, theme, state) {
@@ -409,6 +574,10 @@ async function handleRefresh(interaction, player, theme, progress, state) {
     await handleAchievements(interaction, player, theme, progress, state);
   } else if (currentView === 'badges') {
     await handleBadges(interaction, player, theme, state);
+  } else if (currentView === 'daily_rewards') {
+    await handleDailyRewards(interaction, player, theme, progress, state);
+  } else if (currentView === 'mysterybox') {
+    await handleMysteryBoxInventory(interaction, player, theme, state);
   } else {
     // Défaut: overview
     await handleOverview(interaction, player, theme, progress, state);
@@ -416,114 +585,174 @@ async function handleRefresh(interaction, player, theme, progress, state) {
 }
 
 /**
- * 📤 Handler: Partager le profil (Version 2.0 - Rich Embed + Loomix Promo)
+ * 🎴 Handler: FLEX - Partager une carte de profil moderne et impressionnante
+ * Remplace l'ancien système "Partager" avec une image générée visuellement attrayante
  */
 async function handleShare(interaction, player, theme, progress) {
   const guildId = interaction.guildId;
+  const imageGenerator = require('../utils/imageGenerator');
 
-  // Récupérer les données nécessaires
-  const [badges, leaderboard, inventory, recentActivity] = await Promise.all([
-    calculateBadges(player.id, guildId, theme.id),
-    db.getLeaderboard(guildId, theme.id, 100),
-    getInventoryGrouped(player.id, guildId, theme.id),
-    getActivityTimeline(player.id, guildId, theme.id, 3) // 3 dernières activités
-  ]);
+  // Message de chargement
+  await interaction.editReply({
+    content: '🎴 **Génération de ta carte FLEX en cours...**\n✨ Préparation des effets visuels...',
+    components: [],
+    embeds: []
+  });
 
-  // Calculer les stats
-  const percentage = Math.round((progress.collected_count / theme.required_items) * 100);
-  const progressBar = createProgressBar(progress.collected_count, theme.required_items);
-  const badgeDisplay = badges.length > 0 ? badges.join(' ') : '🔰';
-  const userRank = leaderboard.findIndex(p => p.discord_id === interaction.user.id) + 1;
-  const rankDisplay = userRank > 0 ? `#${userRank}/${leaderboard.length}` : 'Non classé';
-  // Utiliser la couleur préférée si définie, sinon la couleur dynamique
-  const color = player.preferred_color || getDynamicColor(progress.collected_count, theme.required_items);
+  try {
+    // Récupérer toutes les données nécessaires en parallèle
+    const [badges, leaderboard, inventory, favorites, equippedFrame, themeConfig] = await Promise.all([
+      calculateBadges(player.id, guildId, theme.id),
+      db.getLeaderboard(guildId, theme.id, 100),
+      getInventoryGrouped(player.id, guildId, theme.id),
+      db.getPlayerFavorites(guildId, player.id),
+      db.getEquippedFrame(interaction.user.id, guildId),
+      db.getThemeConfig(guildId, theme.id)
+    ]);
 
-  // Calculer les stats par rareté
-  const rarityStats = Object.entries(inventory)
-    .map(([rarity, items]) => {
-      const collected = items.filter(item => item.collected).length;
-      const total = items.length;
-      const rarityPercentage = total > 0 ? Math.round((collected / total) * 100) : 0;
-      const emoji = getRarityEmoji(rarity);
-      return `${emoji} **${rarity}:** ${collected}/${total} (${rarityPercentage}%)`;
-    })
-    .join('\n');
+    // Calculer le rang
+    const userRank = leaderboard.findIndex(p => p.discord_id === interaction.user.id) + 1;
 
-  // Créer l'embed riche
-  const embed = new EmbedBuilder()
-    .setTitle(`${badgeDisplay} Profil de ${player.username}`)
-    .setColor(color)
-    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setDescription(
-      `🎨 **Thème:** ${theme.name}\n` +
-      `📊 **Progression:** ${progress.collected_count}/${theme.required_items} items\n` +
-      `${progressBar} **${percentage}%**\n\n` +
-      `${progress.is_completed ? '✅ **COLLECTION COMPLÈTE !** 🎉' : '🔄 En cours de collection'}`
-    )
-    .addFields(
-      {
-        name: '💎 Collection par Rareté',
-        value: rarityStats || 'Aucun collectible',
-        inline: false
-      },
-      {
-        name: '🏆 Classement Serveur',
-        value: rankDisplay,
-        inline: true
-      },
-      {
-        name: '📅 Joue depuis',
-        value: formatRelativeTime(player.created_at),
-        inline: true
+    // Calculer les stats par rareté
+    let legendaryCount = 0;
+    Object.entries(inventory).forEach(([rarity, items]) => {
+      if (rarity === 'Légendaire') {
+        legendaryCount = items.filter(item => item.collected).length;
       }
-    );
+    });
 
-  // Ajouter l'historique récent si disponible
-  if (recentActivity.length > 0) {
-    const activityText = recentActivity.map(activity => {
-      const emoji = getRarityEmoji(activity.rarity);
-      const source = getSourceEmoji(activity.source);
-      const time = formatRelativeTime(activity.event_date);
+    // Préparer les favoris avec leurs images - FILTRER ceux sans image ET du thème actif uniquement
+    let favoritesWithImages = favorites
+      .filter(fav => fav.image_url && fav.theme_id === theme.id) // Exclure les favoris sans image ou d'un autre thème
+      .map(fav => ({
+        position: fav.position,
+        name: fav.name,
+        rarity: fav.rarity,
+        imageUrl: fav.image_url,
+        level: fav.level || 1,
+        mintNumber: fav.mint_number,
+        themeId: fav.theme_id  // Pour récupérer la frame du thème
+      }));
 
-      if (activity.event_type === 'lost') {
-        return `❌ **${activity.name}** *(Perdu ${time})*`;
-      } else {
-        return `${emoji} **${activity.name}** ${source} *(${time})*`;
+    // Compléter avec les meilleurs collectibles si moins de 3 favoris avec image
+    if (favoritesWithImages.length < 3) {
+      // Récupérer les meilleurs collectibles (priorité: niveau > rareté légendaire > date)
+      // UNIQUEMENT ceux avec une image et qui ne sont pas déjà dans les favoris
+      const existingNames = favoritesWithImages.map(f => f.name);
+      const bestCollectibles = await db.queryAll(`
+        SELECT c.level, c.mint_number, col.name, col.rarity, col.image_url
+        FROM collections c
+        JOIN collectibles col ON c.collectible_id = col.id
+        WHERE c.guild_id = $1 AND c.player_id = $2 AND col.theme_id = $3
+          AND c.lost_at IS NULL
+          AND col.image_url IS NOT NULL
+        ORDER BY
+          c.level DESC,
+          CASE col.rarity
+            WHEN 'Légendaire' THEN 1
+            WHEN 'Épique' THEN 2
+            WHEN 'Rare' THEN 3
+            ELSE 4
+          END,
+          c.collected_at DESC
+        LIMIT 10
+      `, [guildId, player.id, theme.id]);
+
+      // Compléter les positions manquantes
+      const usedPositions = favoritesWithImages.map(f => f.position);
+      let nextPosition = 1;
+
+      for (const item of bestCollectibles) {
+        if (favoritesWithImages.length >= 3) break;
+        if (existingNames.includes(item.name)) continue; // Éviter les doublons
+
+        // Trouver la prochaine position disponible
+        while (usedPositions.includes(nextPosition)) nextPosition++;
+
+        favoritesWithImages.push({
+          position: nextPosition,
+          name: item.name,
+          rarity: item.rarity,
+          imageUrl: item.image_url,
+          level: item.level || 1,
+          mintNumber: item.mint_number,
+          themeId: theme.id  // Pour récupérer la frame du thème
+        });
+        usedPositions.push(nextPosition);
+        existingNames.push(item.name);
       }
-    }).join('\n');
 
-    embed.addFields({
-      name: '📜 Activité Récente',
-      value: activityText,
-      inline: false
+      // Trier par position finale
+      favoritesWithImages.sort((a, b) => a.position - b.position);
+    }
+
+    // Déterminer la couleur du thème (même logique que profileView.js)
+    const themeColor = player.preferred_color || getDynamicColor(progress.collected_count, theme.required_items);
+
+    // Générer la carte FLEX
+    const flexCardBuffer = await imageGenerator.generateFlexCard({
+      guildId: guildId,  // Pour récupérer les frames des collectibles
+      username: player.username,
+      avatarUrl: interaction.user.displayAvatarURL({ extension: 'png', size: 256 }),
+      frameUrl: equippedFrame?.frame_url || null,
+      favorites: favoritesWithImages,
+      stats: {
+        rank: userRank || '?',
+        totalPlayers: leaderboard.length,
+        collected: progress.collected_count,
+        total: theme.required_items,
+        percentage: Math.round((progress.collected_count / theme.required_items) * 100),
+        legendaryCount: legendaryCount
+      },
+      themeName: theme.name,
+      themeColor: themeColor,
+      badges: badges,
+      isCompleted: progress.is_completed
+    });
+
+    // Créer l'attachment
+    const attachment = new AttachmentBuilder(flexCardBuffer, { name: 'flex_card.png' });
+
+    // Créer un embed minimaliste pour accompagner l'image
+    const embed = new EmbedBuilder()
+      .setColor(themeColor)
+      .setImage('attachment://flex_card.png')
+      .setFooter({ text: `✨ ${player.username} flex son profil ! • Utilise /profile pour créer ta carte` });
+
+    // Envoyer dans le channel (public)
+    await interaction.followUp({
+      embeds: [embed],
+      files: [attachment],
+      flags: 0 // Public
+    });
+
+    // Confirmer à l'utilisateur
+    await interaction.editReply({
+      content: '🎴 **FLEX envoyé !** Ta carte a été partagée dans le channel 🔥',
+      components: [],
+      embeds: []
+    });
+
+    // Remettre le profil après 2 secondes
+    setTimeout(async () => {
+      try {
+        const state = getProfileState(interaction.user.id);
+        await handleRefresh(interaction, player, theme, progress, state);
+      } catch (error) {
+        // Ignorer les erreurs (interaction peut être expirée)
+      }
+    }, 2000);
+
+  } catch (error) {
+    console.error('🔴 Erreur génération Flex Card:', error);
+
+    // Fallback: envoyer un message d'erreur
+    await interaction.editReply({
+      content: `❌ Erreur lors de la génération de ta carte FLEX.\n\`${error.message}\`\n\nRéessaie dans quelques instants !`,
+      components: [],
+      embeds: []
     });
   }
-
-  // Footer avec call-to-action Loomix
-  embed.setFooter(await getLoomixFooter(guildId, '🎮 Utilise /profile pour voir ton propre profil !'));
-  embed.setTimestamp();
-
-  // Envoyer dans le channel (non-éphémère) - Sans bouton
-  await interaction.followUp({
-    embeds: [embed],
-    flags: 0 // Public
-  });
-
-  // Confirmer à l'utilisateur
-  await interaction.editReply({
-    content: '✅ Profil partagé dans le channel !',
-    components: []
-  });
-
-  // Remettre le profil après 2 secondes
-  setTimeout(async () => {
-    try {
-      const state = getProfileState(interaction.user.id);
-      await handleRefresh(interaction, player, theme, progress, state);
-    } catch (error) {
-      // Ignorer les erreurs (interaction peut être expirée)
-    }
-  }, 2000);
 }
 
 /**
@@ -701,6 +930,130 @@ async function handleBadgesPagination(interaction, player, theme, state, action)
 }
 
 /**
+ * 📦 Handler: Ouvrir une Mystery Box par rareté
+ * DÉLÉGATION: Utilise mysteryBoxHandler.handleRarityBoxOpen() pour le flow complet
+ *
+ * Fonctionnalités:
+ * - Animation d'ouverture séquencée (2 phases)
+ * - Collectibles OU Super Bonus (configurable via mystery_box_config)
+ * - Système d'upgrade vers rareté supérieure
+ * - Jackpot x2, Aimant à Légendaires, badges, progression roles
+ * - Collection complete check
+ * - Logging complet dans give_logs
+ */
+async function handleMysteryBoxOpen(interaction, player, theme, state) {
+  const customId = interaction.customId;
+  const rarity = customId.split(':')[1]; // common, rare, epic, legendary
+
+  console.log(`📦 [PROFILE] Délégation vers mysteryBoxHandler.handleRarityBoxOpen(${rarity})`);
+
+  // Déléguer au mysteryBoxHandler pour le flow complet
+  await mysteryBoxHandler.handleRarityBoxOpen(interaction, player, theme, rarity);
+}
+
+/**
+ * 🎁 Handler: Daily Rewards
+ */
+async function handleDailyRewards(interaction, player, theme, progress, state) {
+  state.currentView = 'daily_rewards';
+  saveProfileState(interaction.user.id, state);
+
+  const content = await dailyClaimHandler.showDailyRewards(interaction, player, theme, progress);
+  await interaction.editReply(content);
+}
+
+/**
+ * 📦 Handler: Mystery Box Inventory (placeholder)
+ */
+async function handleMysteryBoxInventory(interaction, player, theme, state) {
+  state.currentView = 'mysterybox';
+  saveProfileState(interaction.user.id, state);
+
+  const guildId = interaction.guildId;
+
+  // Récupérer les clés mystery box (globales, pas liées au thème)
+  const mbCredits = await db.getMysteryBoxCredits(guildId, player.id);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📦 Mes MysteryBox`)
+    .setColor('#5865F2')
+    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
+    .setDescription(`Tes clés permettent d'ouvrir des Mystery Box et obtenir des collectibles :`)
+    .addFields(
+      {
+        name: '🔑 Commune',
+        value: `**${mbCredits?.common || 0}** clé(s)`,
+        inline: true
+      },
+      {
+        name: '🔑💎 Rare',
+        value: `**${mbCredits?.rare || 0}** clé(s)`,
+        inline: true
+      },
+      {
+        name: '🔑✨ Épique',
+        value: `**${mbCredits?.epic || 0}** clé(s)`,
+        inline: true
+      },
+      {
+        name: '🗝️👑 Légendaire',
+        value: `**${mbCredits?.legendary || 0}** clé(s)`,
+        inline: true
+      }
+    )
+    .setFooter(await getLoomixFooter(guildId))
+    .setTimestamp();
+
+  // Boutons pour ouvrir les box (disabled si pas de crédits)
+  const openRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('mb_open:common')
+        .setLabel(`Commune (${mbCredits?.common || 0})`)
+        .setEmoji('📦')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!mbCredits?.common || mbCredits.common < 1),
+      new ButtonBuilder()
+        .setCustomId('mb_open:rare')
+        .setLabel(`Rare (${mbCredits?.rare || 0})`)
+        .setEmoji('💎')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!mbCredits?.rare || mbCredits.rare < 1),
+      new ButtonBuilder()
+        .setCustomId('mb_open:epic')
+        .setLabel(`Épique (${mbCredits?.epic || 0})`)
+        .setEmoji('✨')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!mbCredits?.epic || mbCredits.epic < 1),
+      new ButtonBuilder()
+        .setCustomId('mb_open:legendary')
+        .setLabel(`Légendaire (${mbCredits?.legendary || 0})`)
+        .setEmoji('👑')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(!mbCredits?.legendary || mbCredits.legendary < 1)
+    );
+
+  const navRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('profile_overview')
+        .setLabel('Retour')
+        .setEmoji('◀️')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('profile_refresh')
+        .setLabel('Actualiser')
+        .setEmoji('🔄')
+        .setStyle(ButtonStyle.Success)
+    );
+
+  await interaction.editReply({
+    embeds: [embed],
+    components: [openRow, navRow]
+  });
+}
+
+/**
  * 🏅 Handler: Leaderboard badges
  */
 async function handleBadgesLeaderboard(interaction, player, theme, state) {
@@ -817,12 +1170,111 @@ async function handleJokerCollectibleSelect(interaction) {
   }
 
   // Succès ! Afficher le collectible gagné avec l'UI légendaire
-  const { collectible } = result;
+  const { collectible, player } = result;
   const successEmbed = superBonusHandler.createJokerSuccessEmbed(interaction.user.username, collectible);
 
   // Créer l'attachment pour le GIF de succès
   const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
   const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+
+  // 🔄 MISE À JOUR PROGRESSION - Correction bug: la progression n'était pas mise à jour
+  try {
+    const progress = await db.incrementProgress(guildId, player.id, collectible.theme_id);
+    console.log(`🃏 [JOKER] Progression mise à jour: ${progress.collected_count} collectibles`);
+
+    // Récupérer le nombre total de collectibles requis pour ce thème
+    const themeStats = await db.queryOne(`
+      SELECT COUNT(*) as total_items
+      FROM collectibles
+      WHERE guild_id = $1 AND theme_id = $2
+    `, [guildId, collectible.theme_id]);
+
+    const requiredItems = parseInt(themeStats?.total_items || 0);
+    console.log(`🃏 [JOKER] Vérification complétion: ${progress.collected_count}/${requiredItems}`);
+
+    // Vérifier si collection complète
+    if (progress.collected_count >= requiredItems && !progress.is_completed) {
+      console.log(`🎉 [JOKER] Collection COMPLÈTE pour ${interaction.user.tag} !`);
+
+      // Marquer comme complété
+      await db.completeCollection(guildId, player.id, collectible.theme_id);
+
+      // Récupérer le thème pour le rôle final
+      const theme = await db.queryOne('SELECT * FROM themes WHERE id = $1 AND guild_id = $2', [collectible.theme_id, guildId]);
+
+      if (theme) {
+        // Attribuer le rôle final
+        let finalRoleId = theme.final_role_discord_id;
+
+        // Lazy creation du rôle si nécessaire
+        if (!finalRoleId && theme.final_role_name) {
+          try {
+            console.log(`🎨 [JOKER] Création du rôle de complétion "${theme.final_role_name}"`);
+            let roleColor = '#FFD700';
+            if (theme.final_role_color) {
+              roleColor = theme.final_role_color.startsWith('#')
+                ? parseInt(theme.final_role_color.replace('#', ''), 16)
+                : theme.final_role_color;
+            }
+
+            const newRole = await interaction.guild.roles.create({
+              name: theme.final_role_name,
+              color: roleColor,
+              hoist: true,
+              mentionable: true,
+              reason: `Lazy creation - Rôle de complétion pour le thème "${theme.name}"`
+            });
+
+            finalRoleId = newRole.id;
+            await db.query('UPDATE themes SET final_role_discord_id = $1 WHERE id = $2 AND guild_id = $3',
+              [finalRoleId, theme.id, guildId]);
+            console.log(`✅ [JOKER] Rôle créé: ${newRole.name} (${newRole.id})`);
+          } catch (roleError) {
+            console.error('❌ [JOKER] Erreur création rôle:', roleError);
+          }
+        }
+
+        // Attribuer le rôle
+        if (finalRoleId) {
+          try {
+            const finalRole = await interaction.guild.roles.fetch(finalRoleId);
+            if (finalRole) {
+              const member = await interaction.guild.members.fetch(interaction.user.id);
+              await member.roles.add(finalRole);
+              console.log(`✅ [JOKER] Rôle "${finalRole.name}" attribué à ${interaction.user.tag}`);
+            }
+          } catch (roleError) {
+            console.error('❌ [JOKER] Erreur attribution rôle:', roleError);
+          }
+        }
+
+        // Envoyer notification de collection complète en DM
+        try {
+          const themeMessages = await db.getThemeMessages(guildId, collectible.theme_id);
+          let completeMessage = themeMessages?.collection_complete_message ||
+            '🏆 Félicitations ! Tu as complété ta collection et obtenu le rôle {role} !';
+          completeMessage = completeMessage.replace(/\{role\}/g, theme.final_role_name || 'Collectionneur');
+
+          const completeEmbed = new EmbedBuilder()
+            .setTitle('👑 COLLECTION COMPLÈTE !')
+            .setDescription(completeMessage)
+            .setColor(theme.final_role_color || '#FFD700')
+            .setThumbnail(interaction.user.displayAvatarURL())
+            .setFooter(await getLoomixFooter(guildId))
+            .setTimestamp();
+
+          await interaction.user.send({
+            embeds: [completeEmbed],
+            content: `🎉 Bravo ! Tu as reçu le rôle **${theme.final_role_name}** !`
+          });
+        } catch (dmError) {
+          console.log('⚠️ [JOKER] Impossible d\'envoyer DM de complétion (MPs fermés)');
+        }
+      }
+    }
+  } catch (progressError) {
+    console.error('❌ [JOKER] Erreur mise à jour progression:', progressError);
+  }
 
   // Nettoyer le state
   delete state.pendingJokerBonusId;
@@ -921,6 +1373,89 @@ async function handleJokerInteraction(interaction) {
   }
 
   console.warn(`⚠️ [JOKER] CustomId non géré: ${customId}`);
+}
+
+// ========== HANDLERS FAVORIS & FRAMES ==========
+
+/**
+ * ⭐ Handler: Vue Favoris
+ */
+async function handleFavorites(interaction, player, theme, state) {
+  state.currentView = 'favorites';
+  state.selectedFavoritePosition = null;
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showFavorites(interaction, player, theme, null);
+  await interaction.editReply(content);
+}
+
+/**
+ * ⭐ Handler: Sélection position favori
+ */
+async function handleFavoritePosition(interaction, player, theme, state) {
+  const position = parseInt(interaction.customId.split(':')[1]);
+
+  state.selectedFavoritePosition = position;
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showFavorites(interaction, player, theme, position);
+  await interaction.editReply(content);
+}
+
+/**
+ * ⭐ Handler: Sélection collectible favori (SelectMenu)
+ */
+async function handleFavoriteSelect(interaction, player, theme, state) {
+  const position = parseInt(interaction.customId.split(':')[1]);
+  const collectibleId = parseInt(interaction.values[0]);
+
+  // Définir le favori
+  await db.setPlayerFavorite(interaction.guildId, player.id, collectibleId, position);
+
+  // Reset la position sélectionnée
+  state.selectedFavoritePosition = null;
+  saveProfileState(interaction.user.id, state);
+
+  // Recharger la vue favoris
+  const content = await showFavorites(interaction, player, theme, null);
+  await interaction.editReply(content);
+}
+
+/**
+ * 🖼️ Handler: Vue Frames
+ */
+async function handleFrames(interaction, player, theme, state) {
+  state.currentView = 'frames';
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showFrames(interaction, player, theme);
+  await interaction.editReply(content);
+}
+
+/**
+ * 🖼️ Handler: Équiper une frame
+ */
+async function handleFrameEquip(interaction, player, theme, state) {
+  const frameId = parseInt(interaction.customId.split(':')[1]);
+
+  // Équiper la frame
+  await db.equipFrame(interaction.user.id, frameId, interaction.guildId);
+
+  // Recharger la vue frames
+  const content = await showFrames(interaction, player, theme);
+  await interaction.editReply(content);
+}
+
+/**
+ * 🖼️ Handler: Retirer la frame équipée
+ */
+async function handleFrameUnequip(interaction, player, theme, state) {
+  // Retirer la frame
+  await db.unequipFrame(interaction.user.id, interaction.guildId);
+
+  // Recharger la vue frames
+  const content = await showFrames(interaction, player, theme);
+  await interaction.editReply(content);
 }
 
 module.exports = {

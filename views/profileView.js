@@ -1,5 +1,6 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, AttachmentBuilder } = require('discord.js');
 const db = require('../utils/database-pg');
+const imageGenerator = require('../utils/imageGenerator');
 const {
   getRarityEmoji,
   getRarityColor,
@@ -18,14 +19,65 @@ const {
 } = require('../utils/profileQueries');
 const { getLoomixFooter, getLoomixFooterWithCustomText, LOOMIX_BRANDING } = require('../utils/footerHelper');
 
+// Seuils XP pour les niveaux
+const XP_THRESHOLDS = { 2: 100, 3: 300, 4: 700 };
+const MAX_LEVEL = 4;
+
+// Mapping niveau → type de frame
+const LEVEL_TO_FRAME_RARITY = {
+  1: null,      // Pas de frame
+  2: 'rare',
+  3: 'epic',
+  4: 'legendary'
+};
+
+/**
+ * 🌟 Générer les étoiles de niveau
+ * @param {number} level - Niveau actuel (1-4)
+ * @returns {string} Étoiles
+ */
+function getLevelStars(level) {
+  const stars = ['⭐', '⭐', '⭐', '⭐'];
+  const filledStars = Math.min(Math.max(level, 1), 4);
+  return stars.slice(0, filledStars).join('') + '☆'.repeat(4 - filledStars);
+}
+
+/**
+ * 📊 Créer une barre de progression XP
+ * @param {number} currentXp - XP actuel
+ * @param {number} level - Niveau actuel
+ * @returns {string} Barre de progression XP
+ */
+function createXpProgressBar(currentXp, level) {
+  if (level >= MAX_LEVEL) {
+    return '`[████████████████████]` **MAX**';
+  }
+
+  const prevThreshold = level === 1 ? 0 : XP_THRESHOLDS[level] || 0;
+  const nextThreshold = XP_THRESHOLDS[level + 1] || XP_THRESHOLDS[MAX_LEVEL];
+  const xpInLevel = currentXp - prevThreshold;
+  const xpNeeded = nextThreshold - prevThreshold;
+  const progress = Math.min(xpInLevel / xpNeeded, 1);
+
+  const barLength = 20;
+  const filled = Math.round(progress * barLength);
+  const empty = barLength - filled;
+
+  return `\`[${'█'.repeat(filled)}${'░'.repeat(empty)}]\` **${currentXp}/${nextThreshold}** XP`;
+}
+
 /**
  * 🌟 VIEW 1: OVERVIEW - Vue principale du profil
  */
 async function showOverview(interaction, player, theme, progress) {
   const guildId = interaction.guildId;
+  const discordId = interaction.user.id;
 
   // Récupérer le branding
   const branding = await db.getGuildBranding(guildId);
+
+  // Récupérer la frame équipée du joueur
+  const equippedFrame = await db.getEquippedFrame(discordId, guildId);
 
   // Utiliser la couleur préférée du joueur, sinon la couleur dynamique
   const color = player.preferred_color || getDynamicColor(progress.collected_count, theme.required_items);
@@ -40,14 +92,51 @@ async function showOverview(interaction, player, theme, progress) {
 
   // Récupérer le rang du joueur
   const leaderboard = await db.getLeaderboard(guildId, theme.id, 100);
-  const userRank = leaderboard.findIndex(p => p.discord_id === interaction.user.id) + 1;
+  const userRank = leaderboard.findIndex(p => p.discord_id === discordId) + 1;
   const rankDisplay = userRank > 0 ? `#${userRank}` : 'Non classé';
+
+  // Vérifier si le joueur a un cooldown actif
+  const activeCooldowns = await db.getActiveCooldowns(guildId, player.id);
+  let statusValue = progress.is_completed ? '✅ **COLLECTION COMPLÈTE**' : '🔄 En cours';
+
+  if (activeCooldowns.length > 0) {
+    const cooldown = activeCooldowns[0];
+    // Utiliser minutes_left calculé côté PostgreSQL pour éviter les problèmes de timezone
+    const minutesLeft = Math.max(1, Math.ceil(cooldown.minutes_left));
+    statusValue = `⏰ **COOLDOWN ACTIF**\n${minutesLeft} min restantes`;
+  }
+
+  // Construire la description avec frame si équipée
+  let description = `📊 **Progression**: ${progress.collected_count}/${theme.required_items} collectibles\n${progressBar} **${percentage}%**`;
+  if (equippedFrame) {
+    description += `\n\n🖼️ **Frame:** ${equippedFrame.name}`;
+    if (equippedFrame.bonus_type && equippedFrame.bonus_value) {
+      description += ` (+${equippedFrame.bonus_value}% ${equippedFrame.bonus_type})`;
+    }
+  }
+
+  // Générer l'image de profil avec frame superposée si équipée
+  const files = [];
+  let thumbnailUrl = interaction.user.displayAvatarURL({ dynamic: true, size: 256 });
+
+  if (equippedFrame?.frame_url) {
+    try {
+      const avatarUrl = interaction.user.displayAvatarURL({ extension: 'png', size: 256 });
+      const profileBuffer = await imageGenerator.generateProfileWithFrame(avatarUrl, equippedFrame.frame_url);
+      const attachment = new AttachmentBuilder(profileBuffer, { name: 'profile_framed.png' });
+      files.push(attachment);
+      thumbnailUrl = 'attachment://profile_framed.png';
+    } catch (error) {
+      console.warn('⚠️ Erreur génération image profil avec frame:', error.message);
+      // Fallback: utiliser l'avatar normal
+    }
+  }
 
   const embed = new EmbedBuilder()
     .setTitle(`${badgeDisplay} Profil de ${player.username}`)
     .setColor(color)
-    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setDescription(`📊 **Progression**: ${progress.collected_count}/${theme.required_items} collectibles\n${progressBar} **${percentage}%**`)
+    .setThumbnail(thumbnailUrl)
+    .setDescription(description)
     .addFields(
       {
         name: '🎯 Thème Actif',
@@ -66,7 +155,7 @@ async function showOverview(interaction, player, theme, progress) {
       },
       {
         name: '✨ Statut',
-        value: progress.is_completed ? '✅ **COLLECTION COMPLÈTE**' : '🔄 En cours',
+        value: statusValue,
         inline: true
       }
     )
@@ -120,13 +209,43 @@ async function showOverview(interaction, player, theme, progress) {
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('profile_share')
-        .setLabel('Partager')
-        .setEmoji('📤')
+        .setLabel('FLEX')
+        .setEmoji('🎴')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('profile_favorites')
+        .setLabel('Favoris')
+        .setEmoji('⭐')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('profile_frames')
+        .setLabel('Frames')
+        .setEmoji('🖼️')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('profile_color_settings')
-        .setLabel('Couleur de l\'embed')
+        .setLabel('Couleur')
         .setEmoji('🎨')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+  // Row pour les récompenses (Daily + Clés + Crafting)
+  const rewardsRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('profile_daily_rewards')
+        .setLabel('Récompense quotidienne')
+        .setEmoji('🎁')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('profile_mysterybox')
+        .setLabel('Mes MysteryBox')
+        .setEmoji('📦')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('craft_panel')
+        .setLabel('Craft')
+        .setEmoji('🔨')
         .setStyle(ButtonStyle.Secondary)
     );
 
@@ -142,7 +261,8 @@ async function showOverview(interaction, player, theme, progress) {
 
   return {
     embeds: [embed],
-    components: [navigationRow, actionRow, loomixRow]
+    components: [navigationRow, actionRow, rewardsRow, loomixRow],
+    files: files
   };
 }
 
@@ -211,10 +331,47 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
     inline: false
   });
 
-  // Liste des items de la page - Créer un embed par collectible pour afficher les images
+  // Liste des items de la page - Créer un embed par collectible avec images générées
   const embeds = [embed]; // Embed principal avec le résumé
+  const files = []; // Attachments pour les images générées
 
   if (pageItems.length > 0) {
+    // Générer les images en parallèle pour les items collectés
+    const imagePromises = pageItems.map(async (item, index) => {
+      if (item.collected && item.image_url) {
+        try {
+          const level = item.level || 1;
+          const frameRarity = LEVEL_TO_FRAME_RARITY[level] || null;
+
+          // Récupérer l'URL de la frame si niveau >= 2
+          let frameUrl = null;
+          if (frameRarity && item.theme_id) {
+            frameUrl = await db.getCollectibleFrameUrl(guildId, item.theme_id, frameRarity);
+          }
+
+          // Générer l'image avec frame, niveau et mint
+          const imageBuffer = await imageGenerator.generateCollectibleWithFrame(
+            item.image_url,
+            frameUrl,
+            frameRarity,
+            {
+              level: level,
+              mintNumber: item.mint_number,
+              useCache: true
+            }
+          );
+
+          return { index, buffer: imageBuffer, success: true };
+        } catch (error) {
+          console.warn(`⚠️ Erreur génération image inventaire pour ${item.name}:`, error.message);
+          return { index, success: false };
+        }
+      }
+      return { index, success: false };
+    });
+
+    const generatedImages = await Promise.all(imagePromises);
+
     pageItems.forEach((item, index) => {
       const emoji = getRarityEmoji(item.rarity);
       const rarityColor = getRarityColor(item.rarity);
@@ -226,11 +383,37 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
       if (item.collected) {
         const source = getSourceEmoji(item.source);
         const time = formatRelativeTime(item.collected_at);
+        const level = item.level || 1;
+        const xp = item.xp || 0;
+        const mintNumber = item.mint_number;
+
+        // Infos de niveau et XP
+        const levelStars = getLevelStars(level);
+        const xpBar = createXpProgressBar(xp, level);
+
+        // Construire la description avec toutes les infos
+        let description = `${source} **Obtenu** ${time}\n`;
+        description += `\n${levelStars} **Niveau ${level}**\n`;
+        description += `${xpBar}\n`;
+        if (mintNumber && mintNumber <= 100) {
+          description += `🏷️ **Mint #${mintNumber}**`;
+        }
 
         itemEmbed
           .setAuthor({ name: `${statusIcon} ${emoji} ${item.name}` })
-          .setDescription(`${source} **Obtenu** ${time}`)
-          .setThumbnail(item.image_url || null);
+          .setDescription(description);
+
+        // Utiliser l'image générée si disponible
+        const generatedImage = generatedImages.find(img => img.index === index && img.success);
+        if (generatedImage) {
+          const fileName = `collectible_${item.id}_${index}.png`;
+          const attachment = new AttachmentBuilder(generatedImage.buffer, { name: fileName });
+          files.push(attachment);
+          itemEmbed.setThumbnail(`attachment://${fileName}`);
+        } else {
+          // Fallback: image originale
+          itemEmbed.setThumbnail(item.image_url || null);
+        }
       } else {
         itemEmbed
           .setAuthor({ name: `${statusIcon} ${emoji} ${item.name}` })
@@ -354,7 +537,8 @@ async function showInventory(interaction, player, theme, progress, selectedRarit
 
   return {
     embeds: embeds, // Plusieurs embeds: 1 pour le résumé + 1 par collectible (max 3)
-    components: [rarityMenu, navigationRow, paginationRow]
+    components: [rarityMenu, navigationRow, paginationRow],
+    files: files // Images générées avec frames
   };
 }
 
@@ -608,9 +792,9 @@ async function showAchievements(interaction, player, theme, progress) {
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('profile_share')
-        .setLabel('Partager')
-        .setEmoji('📤')
-        .setStyle(ButtonStyle.Secondary)
+        .setLabel('FLEX')
+        .setEmoji('🎴')
+        .setStyle(ButtonStyle.Danger)
     );
 
   return {
@@ -762,6 +946,41 @@ async function showBonuses(interaction, player, theme) {
   // Boutons d'activation pour les bonus manuels (max 5 boutons par row)
   const components = [navigationRow];
 
+  // === NOUVEAU: Boutons de désactivation pour les bonus actifs à charges ===
+  // Filtrer les bonus qui peuvent être désactivés:
+  // - Doivent être activés (activated_at != null)
+  // - Doivent être de type 'charges'
+  // - Doivent avoir des charges restantes
+  // - UNIQUEMENT: Vision Divine (reveal), Bouclier Anti-Piège (protection), Jackpot x2 (multiplier)
+  // - EXCLURE: Accélérateur de Cooldown (cooldown), MysteryBox Joker (joker - usage manuel unique)
+  const DEACTIVATABLE_EFFECT_TYPES = ['reveal', 'protection', 'multiplier'];
+  const deactivatableBonuses = automaticBonuses.filter(b =>
+    b.duration_type === 'charges' &&
+    b.remaining_charges > 0 &&
+    DEACTIVATABLE_EFFECT_TYPES.includes(b.effect_type)
+  );
+
+  if (deactivatableBonuses.length > 0) {
+    // Créer des rows de 5 boutons max pour la désactivation
+    for (let i = 0; i < deactivatableBonuses.length; i += 5) {
+      const bonusChunk = deactivatableBonuses.slice(i, i + 5);
+      const deactivationRow = new ActionRowBuilder();
+
+      bonusChunk.forEach(bonus => {
+        deactivationRow.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`deactivate_bonus:${bonus.id}`)
+            .setLabel(`Désactiver ${bonus.name}`)
+            .setEmoji('⏸️')
+            .setStyle(ButtonStyle.Danger)
+        );
+      });
+
+      components.push(deactivationRow);
+    }
+  }
+
+  // Boutons d'activation pour les bonus manuels
   if (manualBonuses.length > 0) {
     // Créer des rows de 5 boutons max
     for (let i = 0; i < manualBonuses.length; i += 5) {
@@ -982,11 +1201,341 @@ async function showBadges(interaction, player, theme, guildId, selectedCategory 
   };
 }
 
+/**
+ * ⭐ VIEW 7: FAVORITES - Gestion des 3 collectibles favoris
+ */
+async function showFavorites(interaction, player, theme, selectedPosition = null) {
+  const guildId = interaction.guildId;
+
+  // Récupérer les favoris actuels et tous les collectibles du joueur
+  const [favorites, collectibles] = await Promise.all([
+    db.getPlayerFavorites(guildId, player.id),
+    db.getPlayerCollectiblesForFavorites(guildId, player.id, theme.id)
+  ]);
+
+  // Helper pour les étoiles de niveau
+  const getLevelStars = (level) => '★'.repeat(level) + '☆'.repeat(4 - level);
+
+  // Créer l'embed
+  const embed = new EmbedBuilder()
+    .setTitle('⭐ Mes Favoris')
+    .setColor('#FFD700')
+    .setDescription(
+      'Sélectionne tes **3 collectibles favoris** à mettre en avant sur ton profil !\n\n' +
+      'Ces collectibles seront affichés en priorité quand tu partages ton profil.'
+    );
+
+  // Afficher les 3 slots de favoris
+  for (let pos = 1; pos <= 3; pos++) {
+    const fav = favorites.find(f => f.position === pos);
+    if (fav) {
+      const emoji = getRarityEmoji(fav.rarity);
+      embed.addFields({
+        name: `${pos === 1 ? '🥇' : pos === 2 ? '🥈' : '🥉'} Position ${pos}`,
+        value: `${emoji} **${fav.name}** (${fav.rarity})\n` +
+          `${getLevelStars(fav.level || 1)} Niveau ${fav.level || 1}` +
+          (fav.mint_number && fav.mint_number <= 100 ? ` • Mint #${fav.mint_number}` : ''),
+        inline: true
+      });
+    } else {
+      embed.addFields({
+        name: `${pos === 1 ? '🥇' : pos === 2 ? '🥈' : '🥉'} Position ${pos}`,
+        value: '*Aucun favori*\nClique pour choisir',
+        inline: true
+      });
+    }
+  }
+
+  embed.setFooter(await getLoomixFooter(guildId));
+
+  // Créer les boutons de position
+  const positionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_favorite_pos:1')
+      .setLabel('Position 1')
+      .setEmoji('🥇')
+      .setStyle(selectedPosition === 1 ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('profile_favorite_pos:2')
+      .setLabel('Position 2')
+      .setEmoji('🥈')
+      .setStyle(selectedPosition === 2 ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('profile_favorite_pos:3')
+      .setLabel('Position 3')
+      .setEmoji('🥉')
+      .setStyle(selectedPosition === 3 ? ButtonStyle.Success : ButtonStyle.Secondary)
+  );
+
+  // Si une position est sélectionnée, afficher le menu de sélection des collectibles
+  const rows = [positionRow];
+
+  if (selectedPosition && collectibles.length > 0) {
+    // Filtrer les collectibles déjà en favori (sauf si c'est pour remplacer la même position)
+    const favoriteIds = favorites
+      .filter(f => f.position !== selectedPosition)
+      .map(f => f.collectible_id);
+    const availableCollectibles = collectibles.filter(c => !favoriteIds.includes(c.collectible_id));
+
+    if (availableCollectibles.length > 0) {
+      const options = availableCollectibles.slice(0, 25).map(c => {
+        const mintDisplay = c.mint_number === 1 ? ' 🥇' : (c.mint_number ? ` #${c.mint_number}` : '');
+        return {
+          label: `${c.name} (${c.rarity})${mintDisplay}`,
+          description: `Niveau ${c.level || 1} ${getLevelStars(c.level || 1)}`,
+          value: `${c.collectible_id}`,
+          emoji: getRarityEmoji(c.rarity)
+        };
+      });
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId(`profile_favorite_select:${selectedPosition}`)
+        .setPlaceholder(`Choisir un collectible pour la position ${selectedPosition}`)
+        .addOptions(options);
+
+      rows.push(new ActionRowBuilder().addComponents(selectMenu));
+    }
+  }
+
+  // Bouton retour
+  const backRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_overview')
+      .setLabel('Retour')
+      .setEmoji('⬅️')
+      .setStyle(ButtonStyle.Secondary)
+  );
+  rows.push(backRow);
+
+  return { embeds: [embed], components: rows };
+}
+
+/**
+ * 🖼️ VIEW 8: FRAMES - Gestion des frames de profil
+ */
+async function showFrames(interaction, player, theme) {
+  const guildId = interaction.guildId;
+  const discordId = interaction.user.id;
+
+  // Récupérer les frames débloquées et la frame équipée
+  const [unlockedFrames, equippedFrame, themeFrames] = await Promise.all([
+    db.getUnlockedFrames(discordId),
+    db.getEquippedFrame(discordId, guildId),
+    db.getThemeProfileFrames(guildId, theme.id)
+  ]);
+
+  // Récupérer les stats du joueur pour afficher la progression
+  const playerStats = await db.queryOne(`
+    SELECT
+      COUNT(*) FILTER (WHERE c.level >= 2) as level2_count,
+      COUNT(*) FILTER (WHERE c.level >= 3) as level3_count,
+      COUNT(*) FILTER (WHERE c.level >= 4) as level4_count,
+      COUNT(*) FILTER (WHERE col.rarity = 'legendary' AND c.level >= 2) as legendary_level2_count,
+      COUNT(*) FILTER (WHERE col.rarity = 'legendary' AND c.level >= 3) as legendary_level3_count,
+      COUNT(*) FILTER (WHERE col.rarity = 'legendary' AND c.level >= 4) as legendary_level4_count
+    FROM collections c
+    JOIN collectibles col ON c.collectible_id = col.id
+    WHERE c.guild_id = $1 AND c.player_id = $2 AND col.theme_id = $3 AND c.lost_at IS NULL
+  `, [guildId, player.id, theme.id]);
+
+  const embed = new EmbedBuilder()
+    .setTitle('🖼️ Mes Frames de Profil')
+    .setColor('#9B59B6')
+    .setDescription(
+      'Les frames de profil sont des décorations déblocables en atteignant certains objectifs.\n' +
+      '**Les frames débloquées sont utilisables sur tous les serveurs !**\n\n' +
+      '⚠️ *La Frame 2 ne peut être débloquée que si la Frame 1 est déjà obtenue.*'
+    );
+
+  // Frame actuellement équipée
+  if (equippedFrame) {
+    embed.addFields({
+      name: '✨ Frame Équipée',
+      value: `**${equippedFrame.name}**\n${equippedFrame.description || ''}`,
+      inline: false
+    });
+  } else {
+    embed.addFields({
+      name: '✨ Frame Équipée',
+      value: '*Aucune frame équipée*',
+      inline: false
+    });
+  }
+
+  // Frames du thème actuel avec progression détaillée
+  if (themeFrames.length > 0) {
+    // Trier par frame_number
+    const sortedFrames = [...themeFrames].sort((a, b) => a.frame_number - b.frame_number);
+
+    // Créer une map des frames débloquées du thème
+    const unlockedThemeFrameNumbers = new Set();
+    for (const frame of sortedFrames) {
+      if (unlockedFrames.some(f => f.frame_id === frame.id)) {
+        unlockedThemeFrameNumbers.add(frame.frame_number);
+      }
+    }
+
+    for (const frame of sortedFrames) {
+      const isUnlocked = unlockedThemeFrameNumbers.has(frame.frame_number);
+      const isEquipped = equippedFrame?.id === frame.id;
+      const condition = frame.unlock_condition || {};
+
+      // Vérifier si la frame précédente est débloquée (pour frame > 1)
+      const previousFrameUnlocked = frame.frame_number === 1 || unlockedThemeFrameNumbers.has(frame.frame_number - 1);
+
+      // Calculer la progression
+      let currentProgress = 0;
+      let requiredAmount = condition.count || 0;
+      let progressText = '';
+
+      if (condition.type === 'collectibles_level') {
+        const minLevel = condition.min_level || 2;
+        if (minLevel === 2) currentProgress = parseInt(playerStats?.level2_count || 0);
+        else if (minLevel === 3) currentProgress = parseInt(playerStats?.level3_count || 0);
+        else if (minLevel === 4) currentProgress = parseInt(playerStats?.level4_count || 0);
+
+        progressText = `Avoir **${requiredAmount}** collectibles au niveau **${minLevel}+**`;
+      } else if (condition.type === 'legendary_level') {
+        const minLevel = condition.min_level || 2;
+        if (minLevel === 2) currentProgress = parseInt(playerStats?.legendary_level2_count || 0);
+        else if (minLevel === 3) currentProgress = parseInt(playerStats?.legendary_level3_count || 0);
+        else if (minLevel === 4) currentProgress = parseInt(playerStats?.legendary_level4_count || 0);
+
+        progressText = `Avoir **${requiredAmount}** légendaire(s) au niveau **${minLevel}+**`;
+      }
+
+      // Déterminer le statut avec icône
+      let statusIcon, statusText;
+      if (isEquipped) {
+        statusIcon = '✅';
+        statusText = 'Équipée';
+      } else if (isUnlocked) {
+        statusIcon = '🔓';
+        statusText = 'Débloquée';
+      } else if (!previousFrameUnlocked) {
+        statusIcon = '⛔';
+        statusText = 'Requiert Frame ' + (frame.frame_number - 1);
+      } else {
+        statusIcon = '🔒';
+        statusText = 'Verrouillée';
+      }
+
+      // Construire le texte du champ
+      let fieldValue = `${statusIcon} **${statusText}**\n`;
+
+      // Condition de déblocage
+      fieldValue += `📋 **Comment débloquer:** ${progressText || 'Condition inconnue'}\n`;
+
+      // Afficher la progression si pas débloquée et frame précédente OK
+      if (!isUnlocked && previousFrameUnlocked && requiredAmount > 0) {
+        const progressBar = createProgressBar(currentProgress, requiredAmount);
+        fieldValue += `📊 **Progression:** ${currentProgress}/${requiredAmount} ${progressBar}\n`;
+      } else if (!isUnlocked && !previousFrameUnlocked) {
+        fieldValue += `⚠️ *Débloque d'abord la Frame ${frame.frame_number - 1}*\n`;
+      }
+
+      // Bonus de la frame
+      if (frame.bonus_type) {
+        fieldValue += `🎁 **Bonus:** +${frame.bonus_value}% ${frame.bonus_type}`;
+      }
+
+      embed.addFields({
+        name: `🖼️ Frame ${frame.frame_number}: ${frame.name}`,
+        value: fieldValue,
+        inline: false
+      });
+    }
+  } else {
+    embed.addFields({
+      name: `📦 Frames du Thème "${theme.name}"`,
+      value: '*Aucune frame configurée pour ce thème*',
+      inline: false
+    });
+  }
+
+  // Toutes les frames débloquées (multi-serveur)
+  if (unlockedFrames.length > 0) {
+    const otherFrames = unlockedFrames.filter(f =>
+      !themeFrames.some(tf => tf.id === f.frame_id)
+    );
+
+    if (otherFrames.length > 0) {
+      const otherFramesText = otherFrames.slice(0, 5).map(f =>
+        `• **${f.name}** (obtenue sur autre serveur)`
+      ).join('\n');
+
+      embed.addFields({
+        name: '🌐 Autres Frames Débloquées',
+        value: otherFramesText,
+        inline: false
+      });
+    }
+  }
+
+  embed.addFields({
+    name: '📊 Total',
+    value: `${unlockedFrames.length} frame(s) débloquée(s)`,
+    inline: true
+  });
+
+  embed.setFooter(await getLoomixFooter(guildId));
+
+  // Boutons pour équiper/déséquiper
+  const actionRow = new ActionRowBuilder();
+
+  // Ajouter les frames débloquées du thème comme boutons d'équipement
+  const unlockedThemeFrames = themeFrames.filter(f =>
+    unlockedFrames.some(uf => uf.frame_id === f.id)
+  );
+
+  for (const frame of unlockedThemeFrames.slice(0, 3)) {
+    const isEquipped = equippedFrame?.id === frame.id;
+    actionRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`profile_frame_equip:${frame.id}`)
+        .setLabel(frame.name)
+        .setEmoji(isEquipped ? '✅' : '🖼️')
+        .setStyle(isEquipped ? ButtonStyle.Success : ButtonStyle.Primary)
+        .setDisabled(isEquipped)
+    );
+  }
+
+  // Bouton pour retirer la frame
+  if (equippedFrame) {
+    actionRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId('profile_frame_unequip')
+        .setLabel('Retirer')
+        .setEmoji('❌')
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+
+  // Bouton retour
+  const backRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_overview')
+      .setLabel('Retour')
+      .setEmoji('⬅️')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  const rows = [];
+  if (actionRow.components.length > 0) {
+    rows.push(actionRow);
+  }
+  rows.push(backRow);
+
+  return { embeds: [embed], components: rows };
+}
+
 module.exports = {
   showOverview,
   showInventory,
   showHistory,
   showAchievements,
   showBonuses,
-  showBadges
+  showBadges,
+  showFavorites,
+  showFrames
 };

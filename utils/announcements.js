@@ -8,8 +8,9 @@ const path = require('path');
 class AnnouncementSystem {
   /**
    * Envoyer une annonce si elle est activée
+   * @param {object} options - Options supplémentaires (imageBuffer, imageName)
    */
-  async sendAnnouncement(client, guildId, type, data) {
+  async sendAnnouncement(client, guildId, type, data, options = {}) {
     try {
       // Récupérer le canal d'annonces
       const announcementChannel = await db.getAnnouncementChannel(guildId);
@@ -41,8 +42,18 @@ class AnnouncementSystem {
         return;
       }
 
+      // Préparer les fichiers attachés (image générée avec frame/étoiles)
+      const files = [];
+      if (options.imageBuffer) {
+        const imageName = options.imageName || 'collectible.png';
+        const attachment = new AttachmentBuilder(options.imageBuffer, { name: imageName });
+        files.push(attachment);
+        // Utiliser l'image attachée dans l'embed
+        embed.setImage(`attachment://${imageName}`);
+      }
+
       // Envoyer l'annonce
-      await channel.send({ embeds: [embed] });
+      await channel.send({ embeds: [embed], files });
       console.log(`📢 Annonce envoyée: ${type} (Serveur: ${guildId})`);
 
     } catch (error) {
@@ -110,11 +121,18 @@ class AnnouncementSystem {
    * Méthodes pratiques pour chaque type d'annonce
    */
 
-  async announceLegendaryCollectible(client, guildId, userName, collectibleName, collectibleImage) {
+  /**
+   * Annoncer un collectible légendaire obtenu
+   * @param {Buffer} imageBuffer - Image générée avec frame/étoiles/mint (optionnel)
+   */
+  async announceLegendaryCollectible(client, guildId, userName, collectibleName, collectibleImage, imageBuffer = null) {
     return this.sendAnnouncement(client, guildId, 'legendary_collectible', {
       userName,
       collectibleName,
       collectibleImage
+    }, {
+      imageBuffer,
+      imageName: 'legendary_collectible.png'
     });
   }
 
@@ -270,6 +288,61 @@ class AnnouncementSystem {
 
   // Méthode obsolète - supprimée car type trap_malus_points n'existe plus
   // async announceTrapMalusPointsTriggered - SUPPRIMÉ
+
+  /**
+   * NOUVEAUX TYPES D'ANNONCES - Évolution des Collectibles
+   */
+
+  /**
+   * Annoncer un level up de collectible (fusion doublon)
+   * @param {Buffer} imageBuffer - Image générée avec frame/étoiles/mint (optionnel)
+   */
+  async announceCollectibleLevelUp(client, guildId, userName, collectibleName, oldLevel, newLevel, currentXP, requiredXP, imageBuffer = null) {
+    return this.sendAnnouncement(client, guildId, 'collectible_level_up', {
+      userName,
+      collectibleName,
+      oldLevel,
+      newLevel,
+      currentXP,
+      requiredXP
+    }, {
+      imageBuffer,
+      imageName: 'level_up.png'
+    });
+  }
+
+  /**
+   * Annoncer qu'un collectible a atteint le niveau maximum
+   * @param {Buffer} imageBuffer - Image générée avec frame/étoiles/mint (optionnel)
+   */
+  async announceCollectibleMaxLevel(client, guildId, userName, collectibleName, maxLevel, mintNumber, imageBuffer = null) {
+    return this.sendAnnouncement(client, guildId, 'collectible_max_level', {
+      userName,
+      collectibleName,
+      maxLevel,
+      mintNumber
+    }, {
+      imageBuffer,
+      imageName: 'max_level.png'
+    });
+  }
+
+  /**
+   * Annoncer qu'un collectible perdu a été restauré avec sa progression
+   * @param {Buffer} imageBuffer - Image générée avec frame/étoiles/mint (optionnel)
+   */
+  async announceCollectibleRestored(client, guildId, userName, collectibleName, level, xp, mintNumber, imageBuffer = null) {
+    return this.sendAnnouncement(client, guildId, 'collectible_restored', {
+      userName,
+      collectibleName,
+      level,
+      xp,
+      mintNumber
+    }, {
+      imageBuffer,
+      imageName: 'restored.png'
+    });
+  }
 
   /**
    * Annoncer un super bonus légendaire obtenu

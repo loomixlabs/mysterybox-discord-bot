@@ -9,11 +9,17 @@ LABEL maintainer="Votre Nom"
 LABEL description="Bot Discord Give Gamifié - Version Multi-serveur"
 
 # Installer les dépendances système nécessaires
+# Inclut les polices pour Sharp/SVG (génération d'images avec texte)
 RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    postgresql-client
+    postgresql-client \
+    fontconfig \
+    ttf-dejavu \
+    ttf-liberation \
+    font-noto \
+    font-noto-emoji
 
 # Créer le répertoire de l'application
 WORKDIR /app

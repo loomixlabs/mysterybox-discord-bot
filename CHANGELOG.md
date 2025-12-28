@@ -7,7 +7,389 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+<!-- Prochaines modifications ici -->
+
+## [2.1.0] - 2025-12-28
+
 ### ✨ Added
+
+- **[Collectible Evolution System]**: Système complet d'évolution des collectibles
+  - **Niveaux**: 4 niveaux (★ à ★★★★) avec progression par XP
+  - **XP System**: +100 XP par doublon, thresholds configurables (100, 300, 700)
+  - **Mint Numbers**: Numérotation unique des premiers possesseurs (#1, #2, etc.)
+  - **Frames de collectibles**: 3 frames par thème (rare, epic, legendary)
+  - **Frames de profil**: 2 frames débloquables par thème (Silver à 3 collectibles, Gold à 6)
+  - **Favoris**: 3 emplacements de collectibles favoris sur le profil
+  - **FLEX Card améliorée**: Affichage des 3 favoris avec frames, niveaux et mints
+  - **Option B pour pièges**: Restauration des collectibles perdus avec niveau/XP/mint conservés
+  - Fichiers modifiés:
+    - `utils/database-pg.js`: addCollectibleWithLevels(), getCollectionEntry(), addCollectibleXp() + restauration Option B
+    - `handlers/mysteryBoxHandler.js`: Affichage fusion, level up, restauration + génération images avec frames
+    - `utils/imageGenerator.js`: Sharp composite pour frames, génération FLEX card
+    - `database/migrations/add-collectible-evolution.sql`: Tables pour niveaux, favoris, frames
+
+- **[Collectible Evolution Announcements]**: Annonces configurables pour l'évolution des collectibles
+  - **3 nouveaux types d'annonces**:
+    - `collectible_level_up`: Annonce quand un collectible monte de niveau (fusion)
+    - `collectible_max_level`: Annonce quand un collectible atteint le niveau max (niveau 4)
+    - `collectible_restored`: Annonce quand un collectible perdu est restauré avec sa progression
+  - **Toggles par thème**: Activables/désactivables dans Admin Panel → Annonces → Collectibles
+  - **Templates personnalisables**: Variables {userName}, {collectibleName}, {oldLevel}, {newLevel}, etc.
+  - **Fallback automatique**: Templates par défaut créés automatiquement pour nouveaux serveurs/thèmes
+  - **Total annonces**: Passé de 18 à 21 types d'annonces (8 pour Collectibles)
+  - Fichiers créés:
+    - `database/migrations/add-collectible-evolution-announcements.sql`: Colonnes toggles
+    - `scripts/run-collectible-evolution-announcements-migration.js`: Migration automatique
+  - Fichiers modifiés:
+    - `utils/announcementDefaults.js`: 3 nouveaux templates + toggles par défaut (lignes 189-246)
+    - `utils/announcements.js`: Méthodes announceCollectibleLevelUp/MaxLevel/Restored (lignes 274-318)
+    - `handlers/mysteryBoxHandler.js`: Appels annonces après fusion/level up (lignes 1034-1075)
+    - `handlers/adminPanelHandler.js`: Interface toggles (lignes 3911-4142, 4542)
+
+### 🐛 Fixed
+
+- **[Collectible Restoration SQL Bug]**: Correction de l'erreur SQL lors de la restauration d'un collectible perdu
+  - **Problème**: Erreur "n'a pas pu déterminer le type de données du paramètre $2" lors du regain d'un collectible avec évolution
+  - **Cause racine**: La requête UPDATE utilisait $1 et $4 avec 4 paramètres, mais $2 et $3 n'étaient pas utilisés
+  - **Solution**: Simplification de la requête pour utiliser uniquement $1 et $2 avec [lostEntry.id, source]
+  - Fichier modifié: `utils/database-pg.js` (lignes 4828-4836)
+
+- **[Docker Font Rendering]**: Correction de l'affichage des étoiles et textes Unicode dans les images générées
+  - **Problème**: Les caractères Unicode (★, textes) s'affichaient en carrés (□□□) dans les images Docker
+  - **Cause racine**: Container Alpine Docker sans polices pour les caractères Unicode
+  - **Solution**: Ajout des packages fontconfig, ttf-dejavu, ttf-liberation, font-noto, font-noto-emoji au Dockerfile
+  - **Mise à jour imageGenerator.js**: Font-family "DejaVu Sans" pour compatibilité cross-platform
+  - Fichiers modifiés: `Dockerfile` (lignes 11-22), `utils/imageGenerator.js` (lignes 268-272, 299-303)
+
+- **[Super Bonus Timer Bug]**: Correction du bug de timer négatif sur les bonus temporaires
+  - **Problème**: Quand un joueur recevait un second "Aimant à Légendaires" (ou autre bonus temporaire manuel) alors que le premier n'était pas encore activé, le timer affichait des valeurs négatives astronomiques
+  - **Cause racine**: `new Date(null).getTime()` retourne 0 (epoch 1970), ce qui causait un calcul de temps restant depuis 1970
+  - **Solution**: Vérification si `expires_at` est NULL avant de calculer l'extension de durée
+  - **Comportement corrigé**: Si le bonus n'était pas encore activé, il est maintenant auto-activé lors du cumul avec la durée complète
+  - Fichier modifié: `handlers/mysteryBoxHandler.js` (lignes 1479-1501)
+
+### ✨ Added
+
+- **[Mission Thread Permissions]**: Permissions temporaires pour les threads de mission dans les channels protégés
+  - **Problème résolu**: Les joueurs ne pouvaient pas compléter les missions dans les channels où ils n'ont pas la permission d'écrire (Discord hérite les permissions du parent)
+  - **Solution**: Ajout automatique d'une permission `SendMessages` temporaire sur le channel parent pendant la durée de la mission
+  - **Nettoyage automatique**: Permission supprimée à la fin de la mission (succès, échec, timeout, rejet)
+  - **Récupération au démarrage**: Nettoyage des permissions orphelines au démarrage du bot (crash recovery)
+  - **Stockage**: Tracking dans la colonne `game_state` (JSONB) de `mission_progress`
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxHandler.js`: Vérification permissions + ajout temporaire avant création thread (lignes 1157-1179)
+    - `handlers/missionHandler.js`: Fonctions `cleanupTempPermissionByThread()` et `cleanupOrphanedPermissions()` (lignes 24-132)
+    - `utils/database-pg.js`: Paramètre `gameState` optionnel dans `createMissionProgress()` (lignes 1485-1495)
+    - `events/ready.js`: Appel `cleanupOrphanedPermissions()` au démarrage (ligne 97)
+
+- **[Crafting System]**: Système complet de craft de clés Mystery Box
+  - **UPGRADE**: X clés de rareté N → 1 clé de rareté N+1
+  - **RECYCLE**: 1 clé de rareté N → (coût - 1) clés de rareté N-1
+  - **Critique**: Chance d'obtenir une clé bonus lors du craft
+  - **Paiement dual**: Clés OU Loomix (configurable par rareté)
+  - **Animation 4 phases**: Progression visuelle du craft
+  - **Stats tracking**: Compteurs par joueur (upgrades, critiques, recyclages)
+  - **11 badges**: 5 upgrades + 3 critiques + 3 recyclages (CRAFT_NOVICE à CRAFT_LEGEND)
+  - **Panel Admin**: Configuration coûts clés/Loomix, chance critique, images, toggle on/off
+  - Fichiers créés:
+    - `database/migrations/add-crafting-system.sql`: Tables crafting_config, crafting_stats
+    - `handlers/craftingHandler.js`: Logique joueur (upgrade, recycle, stats, animation)
+    - `handlers/craftingConfigHandler.js`: Panel admin configuration
+    - `scripts/seed-crafting-badges.js`: Seeding 11 badges crafting
+    - `scripts/run-crafting-migration.js`: Exécution migration
+  - Fichiers modifiés:
+    - `events/interactionCreate.js`: Routing craft_*/recycle_*
+    - `handlers/adminPanelHandler.js`: Bouton Crafting + routing
+    - `handlers/modalHandler.js`: Routing modals craft_config_*
+    - `handlers/badgeHandler.js`: Hook onCrafting()
+    - `views/profileView.js`: Bouton 🔨 Craft
+
+- **[Mystery Box Opening Flow]**: Flow d'ouverture complet utilisant TOUTES les configurations
+  - **Constante `RARITY_DEFAULTS`**: Définition des valeurs par défaut par rareté (emoji, couleur, textes)
+  - **Textes personnalisables**: text_title, text_description, text_opening, text_success, text_empty
+  - **Images dynamiques**: image_closed, image_opening, image_opened, image_empty
+  - **Fallback intelligent**: `config.value || RARITY_DEFAULTS[rarity].value`
+  - **Box vide améliorée**: Affiche text_empty et image_empty si configurés
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxHandler.js`: Ajout `RARITY_DEFAULTS`, MAJ `showRarityBoxAnimation()`, `revealRarityCollectible()`, `revealRaritySuperBonus()`, `handleRarityBoxOpen()`
+
+- **[Mystery Box Theme Seeding]**: Defaults personnalisés par rareté à la création de thème
+  - **Textes uniques par rareté**: Chaque rareté a ses propres textes (title, description, opening, success, empty)
+  - **Insertion complète**: INSERT inclut toutes les colonnes text_* dans `seedDefaultMysteryBoxes()`
+  - Fichiers modifiés:
+    - `utils/database-pg.js`: MAJ `seedDefaultMysteryBoxes()` (ligne 3321+)
+
+- **[Mystery Box Admin image_empty]**: Support complet de l'image de box vide
+  - **Upload par thread**: 4 étapes (closed, opening, opened, empty)
+  - **Modal image**: Bouton + handler pour image_empty par rareté
+  - **Modal textes**: 5 champs (title, description, opening, success, empty)
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxConfigHandler.js`: MAJ `showImagesUpload()`, `showRarityTextsModal()`, `showRarityImageModal()`, handler `mb_config_rarity_img_empty`
+
+- **[Mystery Box Super Bonus Rarity Constraint]**: Contrainte de rareté pour les super bonus
+  - **Box par défaut**: Donne uniquement des super bonus de la **même rareté** (box commune → super bonus commun)
+  - **Box custom**: Donne des super bonus de **même rareté ou supérieur** (box rare → rare, epic ou legendary)
+  - **Jamais de rareté inférieure**: Une box épique ne donnera jamais de super bonus commun
+  - **UI mise à jour**: Sélection super bonus filtrée par raretés éligibles
+    - Affichage du type de box (🔒 Par défaut / 🎨 Custom)
+    - Message explicatif sur les contraintes de rareté
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxHandler.js`: `selectSuperBonus()` (ligne 104), `hasAvailableSuperBonuses()` (ligne 2434), `rollRarityContent()` (ligne 2399)
+    - `handlers/mysteryBoxConfigHandler.js`: `showSuperBonusSelector()` (ligne 1340) - filtrage par rareté
+
+- **[Mystery Box Config Admin v2]**: Refonte architecture - Apparence par rareté + Contenu par box
+  - **Séparation des niveaux de configuration**:
+    - **Niveau Rareté (partagé)**: nom, emoji, couleur, images, textes, animation, pity system, rewards_count
+    - **Niveau Box (individuel)**: probabilités (collectible/super bonus), collectibles spécifiques, super bonus spécifiques
+  - **Nouvelle interface Apparence rareté** (`showRarityAppearanceEditor()`):
+    - 🎨 Sélecteur de couleur par palette
+    - 🖼️ Configuration images (fermée, ouverture, ouverte, vide) via thread
+    - 📝 Textes personnalisables (titre, description, ouverture, succès, vide)
+    - ⏱️ Animation configurable (type et durée)
+    - 🎁 Nombre de récompenses par ouverture (1-5 items)
+    - 🎰 Système Pity (activation et compteur max)
+  - **Redistribution automatique des probabilités**: Si collectible=0% ou super_bonus=0%, redistribution vers le type disponible
+  - **Warnings intelligents**: Affichage d'un warning orange si un type a une probabilité > 0% mais aucun contenu
+  - **Création automatique à la création de thème**: 4 boxes par défaut (une par rareté)
+  - **Modifications appliquées à toutes les boxes** de la même rareté via `WHERE guild_id = $1 AND rarity = $2`
+  - **Éditeur de box simplifié**: Focus uniquement sur le contenu (probabilités, collectibles, super bonus)
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxConfigHandler.js`: Refonte complète (~2500 lignes)
+    - `handlers/mysteryBoxHandler.js`: Nettoyage prob_mission/prob_trap + redistribution
+    - `utils/database-pg.js`: Ajout `seedDefaultMysteryBoxes()` (lignes 3315-3358)
+    - `scripts/add-mystery-box-rewards-count.js`: Migration ajout colonne rewards_count
+
+### 🗑️ Removed
+
+- **[Mystery Box Config]**: Suppression colonnes inutilisées `prob_mission` et `prob_trap`
+  - Ces colonnes ne servaient plus car les Mystery Box ne donnent que collectibles et super bonus
+  - Ajout contrainte `mystery_box_config_prob_100_check`: `prob_collectible + prob_super_bonus = 100`
+  - Vue `v_mystery_box_config_full` supprimée (dépendait des colonnes)
+  - Script migration: `scripts/drop-mystery-box-mission-trap-columns-v2.js`
+
+### 🔄 Changed
+
+- **[Mystery Box Config Admin]**: Interface complète de configuration dans l'admin panel (v1 - base)
+  - **Panel principal**: Vue d'ensemble avec stats par rareté et chances d'upgrade
+  - **Gestion par rareté**: Liste des boxes, création, édition, suppression
+  - **Éditeur de box**: Nom, emoji, couleur, probabilités, images
+  - **Système d'upgrade step-by-step**: Common→Rare→Epic→Legendary (configurable)
+  - **Sélection aléatoire**: Parmi les boxes activées de la même rareté
+  - **Aperçu probabilités**: Calcul des chances composées
+  - Fichiers créés/modifiés:
+    - `handlers/mysteryBoxConfigHandler.js`: Nouveau handler (~1200 lignes)
+    - `handlers/adminPanelHandler.js`: Intégration du nouveau handler
+    - `events/interactionCreate.js`: Routing des modals
+    - `scripts/migrate-mystery-box-config.js`: Migration DB (colonnes is_default, is_enabled, rarity_upgrade_rare)
+    - `handlers/mysteryBoxHandler.js`: Adaptation handleRarityBoxOpen pour upgrade step-by-step et sélection aléatoire
+
+- **[Mystery Box par Rareté]**: Système complet avec animation et super bonus
+  - **Animation d'ouverture grandiose**: Séquence en 2 phases (suspense → révélation)
+  - **Contenu configurable**: Collectibles (90%) + Super Bonus (10%) - sans missions ni pièges
+  - **Système d'upgrade step-by-step**: Common peut upgrade vers Rare, Rare vers Epic, Epic vers Legendary
+  - **Intégration complète**: Jackpot x2, Aimant à Légendaires, badges, progression roles
+  - **Logging précis**: Sources `mystery_box_common`, `mystery_box_rare`, etc. dans `collections` et `give_logs`
+  - **Config personnalisable**: Table `mystery_box_config` (36+ colonnes) pour images, textes, probabilités
+  - Fichiers modifiés:
+    - `handlers/mysteryBoxHandler.js`: Ajout de 6 nouvelles méthodes (~650 lignes)
+      - `handleRarityBoxOpen()` - Point d'entrée avec upgrade step-by-step et sélection aléatoire
+      - `showRarityBoxAnimation()` - Animation séquencée
+      - `rollRarityContent()` - Roll collectible ou super bonus
+      - `rollRarityCollectible()` - Sélection collectible de la rareté finale
+      - `revealRarityCollectible()` - Révélation avec Jackpot x2, badges, progression
+      - `revealRaritySuperBonus()` - Attribution super bonus
+    - `handlers/profileHandler.js`: Délégation vers mysteryBoxHandler (1 ligne → 5 lignes)
+
+- **[Daily Rewards - Rattrapage]**: Avertissement si claim gratuit disponible
+  - Ajout d'un champ "⚠️ Conseil" dans la vue rattrapage quand le joueur peut encore claim gratuitement
+  - Ajout d'un bouton "Réclamer (gratuit)" pour guider l'utilisateur vers le claim avant de payer
+  - Fichiers modifiés: `handlers/dailyClaimHandler.js` (lignes 1090-1097, 1190-1256)
+
+- **[Theme Creation]**: Seeding automatique des récompenses quotidiennes
+  - Nouveau thème = preset "classic" appliqué automatiquement
+  - Fonction `seedDefaultDailyRewards()` ajoutée à `utils/database-pg.js`
+  - Plus besoin de configurer manuellement les rewards pour un nouveau thème
+  - Fichiers modifiés: `utils/database-pg.js` (lignes 286-293, 3176-3266)
+
+### 🔄 Changed
+
+- **[Profile]**: Renommage du bouton "Mes Clés" → "Mes MysteryBox"
+  - Bouton dans `/profile` renommé avec emoji 📦
+  - Titre de la vue mystery box renommé "📦 Mes MysteryBox"
+  - Fichiers modifiés: `views/profileView.js`, `handlers/profileHandler.js`
+
+- **[Daily Claim]**: Suppression des boutons "Ouvrir la Clé" inline
+  - Boutons "Ouvrir la Clé" retirés de la confirmation de claim
+  - Boutons "Ouvrir Clés" retirés de la confirmation de rattrapage
+  - Toute l'ouverture de mystery box passe par "Mes MysteryBox" dans /profile
+  - Fichiers modifiés: `handlers/dailyClaimHandler.js` (lignes 1311-1334, 1430-1453)
+
+### 🐛 Fixed
+
+- **[Super Bonus Joker]**: Correction critique - progression et rôle final non attribués
+  - **Bug**: Quand un joueur utilisait le Joker pour obtenir son dernier collectible, la collection n'était pas marquée comme complète et le rôle final n'était pas attribué
+  - **Cause**: `consumeJokerBonus()` ajoutait le collectible mais n'appelait pas `incrementProgress()` ni la logique de complétion
+  - **Fix**:
+    - `superBonusHandler.js`: Ajout de `theme_id` dans la requête SELECT et `player` dans le retour (lignes 1345, 1440)
+    - `profileHandler.js`: Ajout de la logique complète après succès du Joker (lignes 1070-1167):
+      - Appel à `db.incrementProgress()` pour mettre à jour `player_progress`
+      - Vérification si collection complète (`collected_count >= required_items`)
+      - Appel à `db.completeCollection()` pour marquer comme terminé
+      - Attribution du rôle final (avec lazy creation si nécessaire)
+      - Envoi de la notification DM de complétion
+
+- **[Daily Rewards Admin Panel]**: Corrections multiples du panel admin
+  - **Calendrier**: Augmenté de 7 à 10 jours par page pour meilleure lisibilité
+  - **InteractionAlreadyReplied**: Suppression du `deferUpdate()` avant `showModal()` dans sélection type
+  - **Édition par lot**: Raccourcissement du label modal (49→18 chars) pour respecter limite Discord
+  - **Config rattrapage**: Utilise maintenant `daily_catchup_config` au lieu de `theme_config`
+  - **Pagination modifier jour**: Ajout du routing `daily_admin_edit_day_page:` manquant
+  - **Doublons affichage**: Fix pour éviter emoji/rareté en double quand `display_name` existe déjà
+  - **Nettoyage DB**: Suppression des colonnes catchup redondantes de `theme_config`
+
+### ✨ Added
+
+- **[Daily Rewards Admin Panel v2.4.0]**: Interface admin complète pour gérer les récompenses quotidiennes
+  - **Nouveaux types de récompenses** (`daily_rewards_config`):
+    - `super_bonus`: Super bonus spécifique (par ID)
+    - `super_bonus_random`: Super bonus aléatoire du thème
+    - `collectible`: Collectible spécifique (par ID)
+    - `random_collectible`: Collectible aléatoire du thème
+  - **Handler Admin** (`handlers/dailyRewardsAdminHandler.js`):
+    - Menu principal avec vue d'ensemble
+    - Calendrier paginé (10 jours par page)
+    - Édition jour par jour avec sélection type + modal
+    - 3 présets dynamiques: Classique, Généreux, Hardcore
+    - Édition par lot avec multiplicateur
+    - Configuration rattrapage via `daily_catchup_config`
+  - **Algorithme présets adaptatif**:
+    - Calcul dynamique basé sur `theme.duration_days`
+    - Milestones tous les 7 jours + jour final
+    - Récompenses progressives selon la phase
+  - **Intégration Admin Panel** (`handlers/adminPanelHandler.js`):
+    - Bouton "Récompenses Quotidiennes" dans Paramétrage
+    - Routage `daily_admin_*` → dailyRewardsAdminHandler
+  - **Refactoring** (`handlers/dailyClaimHandler.js`):
+    - Nouvelle fonction `processRewardForPlayer()` centralisée
+    - Support de tous les 6 types de récompenses
+    - Fallback vers Loomix si aucun item disponible
+
+- **[Loomix Currency System v2.3.0]**: Nouveau système de monnaie virtuelle + Rattrapage jours manqués
+  - **Monnaie Loomix** 💎:
+    - Non liée au thème (persiste entre les thèmes)
+    - Balance, gains, dépenses trackées par joueur
+    - Historique complet des transactions
+    - Leaderboard des joueurs les plus riches
+  - **Tables créées** (`database/migrations/add-loomix-currency-system.sql`):
+    - `player_currency`: Solde par joueur (balance, total_earned, total_spent)
+    - `currency_transactions`: Historique complet des transactions
+    - `daily_catchup_config`: Configuration prix rattrapage par thème
+    - `daily_catchup_history`: Historique des jours rattrapés
+    - `guild_currency_config`: Config monnaie par serveur (nom, emoji, bonus)
+  - **Fonctions DB** (`utils/database-pg.js`):
+    - `getPlayerCurrency()`: Récupérer/créer solde d'un joueur
+    - `addCurrency()`: Ajouter des Loomix (gain)
+    - `spendCurrency()`: Dépenser des Loomix (achat)
+    - `getCurrencyHistory()`: Historique transactions
+    - `getGuildCurrencyConfig()`: Config monnaie du serveur
+    - `updateGuildCurrencyConfig()`: Modifier config monnaie
+    - `getCatchupConfig()`: Config rattrapage par thème
+    - `updateCatchupConfig()`: Modifier config rattrapage
+    - `calculateCatchupPrice()`: Calculer prix (incrémental ou exponentiel)
+    - `getMissedDays()`: Récupérer jours manqués d'un joueur
+    - `purchaseCatchupDay()`: Acheter un jour manqué
+    - `getCatchupHistory()`: Historique rattrapages
+    - `getLoomixLeaderboard()`: Classement par Loomix
+  - **Vue Daily Rewards refaite** (`handlers/dailyClaimHandler.js`):
+    - Affichage solde Loomix en temps réel
+    - Compteur jours manqués avec bouton rattrapage
+    - Bouton "Récompenses" pour voir la liste des 30 jours
+    - Bouton "Calendrier" avec statut de chaque jour
+    - Bouton "Rattraper" avec prix progressifs
+  - **Système de Rattrapage**:
+    - Liste des jours manqués avec prix individuels
+    - Tarification configurable: increment (+X/jour) ou multiplier (×Y/jour)
+    - Prix max configurable
+    - Achat instantané avec récompense immédiate
+  - **CustomIds ajoutés**:
+    - `daily_rewards_list`: Vue liste des 30 récompenses
+    - `daily_catchup`: Vue rattrapage jours manqués
+    - `daily_catchup_buy:{day}`: Acheter un jour spécifique
+  - **Scripts**:
+    - `scripts/run-loomix-migration.js`: Migration complète
+    - `scripts/test-loomix-functions.js`: Tests E2E
+
+### 🐛 Fixed
+
+- **[Daily Rewards Progress Bar]**: Correction affichage 1/30 au lieu de 0/30 quand aucun claim effectué
+  - Fichier: `utils/database-pg.js` fonction `getDailyClaimInfoByTheme()` (ligne 3244)
+  - Cause: Formule `(streak.total % theme.duration_days) + 1` retournait 1 même si streak.total = 0
+  - Solution: Formule corrigée en `streak.total % theme.duration_days` (retourne 0 correctement)
+  - Ajout de nouveaux champs: `nextClaimDay`, `themeDaysRemaining`, `themeDaysPassed`
+
+- **[Mystery Box Credits]**: Nouveau système de Mystery Box par rareté avec stockage en inventaire
+  - **Tables créées**:
+    - `player_mystery_box_credits`: Crédits par rareté (common, rare, epic, legendary) par joueur
+    - `mystery_box_credit_logs`: Historique complet de toutes les opérations (earn, spend, admin)
+    - `daily_claim_logs`: Historique des claims quotidiens avec récompenses
+    - `mystery_box_config`: Configuration personnalisable des Mystery Box par rareté et serveur
+  - **Colonnes ajoutées à players**:
+    - `last_daily_claim`: Date du dernier claim quotidien
+    - `total_daily_claims`: Nombre total de claims effectués
+    - `current_claim_streak`: Streak actuel de claims consécutifs
+    - `best_claim_streak`: Meilleur streak de claims consécutifs
+  - **Fonctions DB** (`utils/database-pg.js`):
+    - `getMysteryBoxCredits()`: Obtenir les crédits par rareté d'un joueur
+    - `addMysteryBoxCredits()`: Ajouter des crédits avec logging complet
+    - `spendMysteryBoxCredit()`: Utiliser un crédit et logger le résultat
+    - `getMysteryBoxConfig()`: Config personnalisable par rareté
+    - `getMysteryBoxCreditHistory()`: Historique des opérations
+    - `getDailyClaimInfo()`: Infos sur le daily claim (streak, jour actuel, canClaim)
+    - `recordDailyClaim()`: Enregistrer un claim avec calcul de streak
+    - `getDailyClaimHistory()`: Historique des claims
+  - **Configuration par défaut** pour chaque rareté:
+    - Common: 70% collectible, 10% super bonus, 15% mission, 5% piège
+    - Rare: 65% collectible, 20% super bonus, 10% mission, 5% piège (+ upgrade 20% epic, 5% legendary)
+    - Epic: 60% collectible, 30% super bonus, 8% mission, 2% piège (+ upgrade 25% legendary)
+    - Legendary: 55% collectible, 40% super bonus, 5% mission, 0% piège
+  - **Vue SQL**: `v_player_mystery_box_totals` pour stats agrégées
+  - **Migration**: `database/migrations/add-mystery-box-credits-system.sql`
+  - **Scripts**:
+    - `scripts/run-mystery-box-credits-migration.js`: Exécution migration + config par défaut
+    - `scripts/test-mystery-box-credits.js`: Tests E2E complets
+
+- **[Daily Rewards Calendar v2.2.1]**: Système calendrier quotidien THEME-AWARE
+  - **Toutes les données liées au THÈME** (chaque thème a son propre calendrier et ses propres configs)
+  - **Tables créées/modifiées**:
+    - `daily_rewards_config`: Calendrier configurable par jour (1 à duration_days du thème)
+    - `mystery_box_pity_counter`: Compteur pity system par joueur/thème/rareté
+    - Extension `mystery_box_config`: 17 colonnes de personnalisation (images, textes, contenu spécifique)
+    - Extension `give_campaigns`: `give_type`, `mystery_box_rarity`, `mystery_box_quantity`
+    - Extension `give_logs`: `mystery_box_rarity`, `mystery_box_credits_given`
+  - **Colonnes ajoutées**:
+    - `theme_id` dans: `daily_rewards_config`, `mystery_box_config`, `player_mystery_box_credits`, `mystery_box_credit_logs`, `daily_claim_logs`
+    - `claim_streak_by_theme` JSONB dans `players` (streak PER-THEME, distinct du login streak global pour badges)
+  - **Fonctions DB theme-aware** (`utils/database-pg.js`):
+    - `getDailyRewardForDay(guildId, themeId, dayNumber)`: Récompense du jour
+    - `getDailyRewardsCalendar(guildId, themeId)`: Calendrier complet
+    - `getClaimStreakByTheme(guildId, playerId, themeId)`: Streak per-theme
+    - `getDailyClaimInfoByTheme(guildId, playerId, themeId)`: Infos complètes daily claim
+    - `recordDailyClaimByTheme(guildId, playerId, themeId, reward)`: Enregistrer claim per-theme
+    - `updateDailyReward(guildId, themeId, dayNumber, rewardData)`: Modifier calendrier
+    - Mise à jour des fonctions existantes avec paramètre `themeId` optionnel
+  - **Calendrier par défaut**:
+    - Durée = `theme.duration_days` (pas hardcodé 30!)
+    - Jours impairs: Points (50 + jour × 10)
+    - Jours pairs: Mystery Box (commune → rare selon progression)
+    - Jours multiples de 7: Milestones (rare → epic → 2x epic)
+    - Dernier jour: Coffre Légendaire (mega milestone)
+  - **Vues SQL**: `v_daily_rewards_calendar`, `v_mystery_box_config_full`
+  - **Fonctions PL/pgSQL**: `insert_default_daily_rewards()`, `insert_default_mystery_box_config()`
+  - **Migration**: `database/migrations/add-daily-rewards-calendar.sql`
+  - **Scripts**:
+    - `scripts/run-daily-rewards-calendar-migration.js`: Migration complète
+    - `scripts/seed-missing-calendars.js`: Seed calendriers manquants
+    - `scripts/test-daily-rewards-theme-aware.js`: Tests E2E
 
 - **[Tutoriel]**: Nouvelle commande `/tutoriel` - Guide interactif complet du jeu MysteryBox
   - 8 sections navigables par boutons: Accueil, MysteryBox, Collectibles, Pièges, Missions, Super Bonus, Profile, FAQ

@@ -184,6 +184,35 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     footer_text: '🃏 MysteryBox Joker • Bonus Légendaire',
     image_url: null,
     thumbnail_url: null
+  },
+
+  // Évolution des Collectibles (Système de niveaux)
+  {
+    type: 'collectible_level_up',
+    title: '⬆️ NIVEAU SUPÉRIEUR !',
+    description: '**{userName}** a fusionné un doublon et fait monter de niveau son collectible !\n\n✨ **{collectibleName}**\n📈 Niveau **{oldLevel}** → **{newLevel}**\n🎯 XP: {currentXP}/{requiredXP}\n\n*Continue à collectionner pour atteindre le niveau max !*',
+    color: '#9b59b6',
+    footer_text: 'Système d\'évolution des collectibles',
+    image_url: null,
+    thumbnail_url: null
+  },
+  {
+    type: 'collectible_max_level',
+    title: '🌟 NIVEAU MAXIMUM ATTEINT !',
+    description: '**{userName}** a atteint le **NIVEAU MAXIMUM** sur un collectible !\n\n👑 **{collectibleName}**\n⭐ Niveau **{maxLevel}** - MAÎTRISE COMPLÈTE !\n🏆 Mint #{mintNumber}\n\n*Un accomplissement remarquable !* 🎉',
+    color: '#f1c40f',
+    footer_text: 'Maîtrise complète !',
+    image_url: null,
+    thumbnail_url: null
+  },
+  {
+    type: 'collectible_restored',
+    title: '🔄 COLLECTIBLE RESTAURÉ !',
+    description: '**{userName}** a récupéré un collectible perdu avec sa progression intacte !\n\n🔮 **{collectibleName}**\n📈 Niveau restauré: **{level}**\n✨ XP conservé: **{xp}**\n🏆 Mint original: #{mintNumber}\n\n*Tes efforts n\'ont pas été perdus !*',
+    color: '#2ecc71',
+    footer_text: 'Progression restaurée',
+    image_url: null,
+    thumbnail_url: null
   }
 ];
 
@@ -209,7 +238,11 @@ const DEFAULT_ANNOUNCEMENT_TOGGLES = {
   theme_expired: true,
   theme_expiring_soon: true,
   legendary_super_bonus: true,
-  super_bonus_joker_used: true
+  super_bonus_joker_used: true,
+  // Évolution des collectibles
+  collectible_level_up: true,
+  collectible_max_level: true,
+  collectible_restored: true
 };
 
 /**

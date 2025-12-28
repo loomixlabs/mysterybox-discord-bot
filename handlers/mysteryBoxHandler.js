@@ -8,6 +8,7 @@ const badgeHandler = require('./badgeHandler');
 const progressionRoleHandler = require('./progressionRoleHandler');
 const { SUPER_ADMINS } = require('../utils/permissions');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
+const imageGenerator = require('../utils/imageGenerator');
 
 /**
  * Handler pour le système de boîte mystère
@@ -736,7 +737,22 @@ class MysteryBoxHandler {
       });
     }
 
-    // 💰 JACKPOT X2 - Vérifier si le joueur a le bonus actif AVANT le check doublon
+    // Constantes UI
+    const rarityEmojis = {
+      legendary: '🌟',
+      epic: '💎',
+      rare: '💙',
+      common: '⚪'
+    };
+
+    const rarityColors = {
+      legendary: '#FFD700',
+      epic: '#9B59B6',
+      rare: '#3498DB',
+      common: '#95A5A6'
+    };
+
+    // 💰 JACKPOT X2 - Vérifier si le joueur a le bonus actif
     const jackpotBonus = await superBonusHandler.hasMultiplierBonus(
       interaction.guildId,
       interaction.user.id,
@@ -757,198 +773,335 @@ class MysteryBoxHandler {
         [interaction.guildId, collectible.theme_id]
       );
 
-      // Filtrer pour obtenir un collectible DIFFÉRENT du principal (doublons acceptés)
+      // Filtrer pour obtenir un collectible DIFFÉRENT du principal
       const availableCollectibles = allCollectibles.filter(c => c.id !== collectibleId);
 
       if (availableCollectibles.length > 0) {
-        // Tirer un collectible au hasard (uniforme, pas de rareté pondérée)
         bonusCollectible = availableCollectibles[Math.floor(Math.random() * availableCollectibles.length)];
-
         console.log(`💰 [JACKPOT X2] Collectible bonus tiré: ${bonusCollectible.name} (${bonusCollectible.rarity})`);
-      } else {
-        console.log(`💰 [JACKPOT X2] Impossible de tirer un collectible différent (un seul collectible existe dans le thème)`);
       }
     }
 
-    // Vérifier si le bonus est un doublon
-    let bonusIsDuplicate = false;
+    // ========== NOUVEAU SYSTÈME DE NIVEAUX ==========
+    // Utiliser addCollectibleWithLevels qui gère automatiquement:
+    // - Premier obtenu: level 1, mint #X
+    // - Doublon: +XP, level up si seuil atteint, récompense Loomix
+
+    const mainResult = await db.addCollectibleWithLevels(
+      interaction.guildId,
+      player.id,
+      collectibleId,
+      'mystery_box'
+    );
+
+    console.log(`📊 [COLLECTIBLE] Résultat principal:`, JSON.stringify(mainResult));
+
+    // Traiter le collectible bonus (Jackpot x2)
+    let bonusResult = null;
     if (bonusCollectible) {
-      bonusIsDuplicate = await db.hasCollectible(interaction.guildId, player.id, bonusCollectible.id);
-      if (bonusIsDuplicate) {
-        console.log(`⚠️ [JACKPOT X2] Bonus collectible est un doublon: ${bonusCollectible.name}`);
-      }
-    }
+      bonusResult = await db.addCollectibleWithLevels(
+        interaction.guildId,
+        player.id,
+        bonusCollectible.id,
+        'mystery_box'
+      );
 
-    // Vérifier si le joueur a déjà le collectible PRINCIPAL
-    const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, collectibleId);
-
-    // Variables pour progression
-    let progress = null;
-
-    if (alreadyHas) {
-      console.log(`⚠️ [DOUBLON] Le joueur a déjà ${collectible.name}, mais Jackpot x2 ${bonusCollectible ? 'actif' : 'inactif'}`);
-
-      // Si Jackpot x2 actif, ajouter quand même le collectible bonus et consommer la charge
-      if (bonusCollectible) {
-        await db.addCollectible(interaction.guildId, player.id, bonusCollectible.id, 'mystery_box');
-        progress = await db.incrementProgress(interaction.guildId, player.id, bonusCollectible.theme_id);
-
-        // Consommer une charge du bonus
-        await superBonusHandler.consumeBonusCharge(
-          interaction.guildId,
-          interaction.user.id,
-          jackpotBonus.id
-        );
-
-        console.log(`💰 [JACKPOT X2] Charge consommée - Restant: ${jackpotBonus.remaining_charges - 1}`);
-        console.log(`💰 [JACKPOT X2] Progression bonus: ${progress.collected_count}/${bonusCollectible.required_items}`);
-      }
-
-      // Message doublon avec mention du bonus si applicable
-      const rarityEmojis = {
-        legendary: '🌟',
-        epic: '💎',
-        rare: '💙',
-        common: '⚪'
-      };
-
-      const rarityColors = {
-        legendary: '#FFD700',
-        epic: '#9B59B6',
-        rare: '#3498DB',
-        common: '#95A5A6'
-      };
-
-      // Message personnalisé avec fallback (priority: themeMessages > hardcoded)
-      let duplicateMessage = themeMessages?.duplicate_collectible ||
-        `Tu as déjà **{name}** dans ta collection !`;
-      // Remplacer les variables
-      let description = duplicateMessage.replace(/\{name\}/g, collectible.name);
-
-      if (bonusCollectible) {
-        description += `\n\n💰 **Mais grâce au Jackpot x2, tu as reçu un collectible bonus !**`;
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle(bonusCollectible ? '🎉 Félicitations !' : '⚠️ Doublon !')
-        .setDescription(description)
-        .setColor(bonusCollectible ? rarityColors[bonusCollectible.rarity] : branding.secondary_color)
-        .setThumbnail(collectible.image_url)
-        .setFooter(await getLoomixFooter(interaction.guildId));
-
-      if (bonusCollectible) {
-        embed.addFields({
-          name: `💰 ${rarityEmojis[bonusCollectible.rarity]} ${bonusCollectible.name} *(BONUS${bonusIsDuplicate ? ' - ⚠️ DOUBLON' : ''})*`,
-          value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n┗━ Progression: **${progress?.collected_count || '?'}/${bonusCollectible.required_items}**\n┗━ Charges restantes: **${jackpotBonus.remaining_charges - 1}**`,
-          inline: false
-        });
-        embed.setImage(bonusCollectible.image_url);
-      }
-
-      return interaction.followUp({ embeds: [embed], flags: 64 });
-    }
-
-    // Pas de doublon: ajouter le collectible principal
-    await db.addCollectible(interaction.guildId, player.id, collectibleId, 'mystery_box');
-    progress = await db.incrementProgress(interaction.guildId, player.id, collectible.theme_id);
-
-    // Si Jackpot x2 actif, ajouter aussi le collectible bonus
-    if (bonusCollectible) {
-      await db.addCollectible(interaction.guildId, player.id, bonusCollectible.id, 'mystery_box');
-
-      // Consommer une charge du bonus
+      // Consommer une charge du bonus Jackpot
       await superBonusHandler.consumeBonusCharge(
         interaction.guildId,
         interaction.user.id,
         jackpotBonus.id
       );
-
       console.log(`💰 [JACKPOT X2] Charge consommée - Restant: ${jackpotBonus.remaining_charges - 1}`);
     }
 
-    // Message de révélation avec fallback (priority: reveal_message > themeMessages > hardcoded)
-    let successMessage = collectible.reveal_message ||
-      themeMessages?.collectible_obtained ||
-      `Félicitations ! Tu as trouvé **{name}** ! ({count}/{total})`;
-    // Remplacer les variables
-    let description = successMessage
-      .replace(/\{name\}/g, collectible.name)
-      .replace(/\{count\}/g, progress?.collected_count || '?')
-      .replace(/\{total\}/g, collectible.required_items || '?');
+    // Récupérer progression globale
+    const progress = await db.getPlayerProgress(interaction.guildId, player.id, collectible.theme_id);
 
-    if (bonusCollectible) {
-      description += `\n\n💰 **JACKPOT X2 ACTIVÉ !**\n` +
-        `Tu as également reçu **${bonusCollectible.name}** (${bonusCollectible.rarity}) en bonus !`;
+    // ========== GÉNÉRATION D'IMAGE AVEC FRAME ET MINT ==========
+    let attachments = [];
+    let generatedImageBuffer = null; // Stocker pour les annonces
 
-      if (bonusIsDuplicate) {
-        description += ` ⚠️ **DOUBLON**`;
+    // Mapping niveau → type de frame
+    // Niveau 1 = pas de frame, Niveau 2 = rare, Niveau 3 = epic, Niveau 4 = legendary
+    const levelToFrameRarity = {
+      1: null,      // Pas de frame
+      2: 'rare',
+      3: 'epic',
+      4: 'legendary'
+    };
+
+    const currentLevel = mainResult.newLevel || 1;
+    const frameRarityForLevel = levelToFrameRarity[currentLevel] || null;
+
+    // Générer image pour TOUS les cas (nouveau, fusion, restauré)
+    try {
+      if (mainResult.leveledUp) {
+        // Pour level up, générer l'image de transition
+        const oldFrameRarity = levelToFrameRarity[mainResult.oldLevel] || null;
+        const newFrameRarity = levelToFrameRarity[mainResult.newLevel] || null;
+
+        const [oldFrameUrl, newFrameUrl] = await Promise.all([
+          oldFrameRarity ? db.getCollectibleFrameUrl(interaction.guildId, collectible.theme_id, oldFrameRarity) : null,
+          newFrameRarity ? db.getCollectibleFrameUrl(interaction.guildId, collectible.theme_id, newFrameRarity) : null
+        ]);
+
+        generatedImageBuffer = await imageGenerator.generateLevelUpImage(
+          collectible.image_url,
+          {
+            oldFrameUrl,
+            newFrameUrl,
+            oldRarity: oldFrameRarity,
+            newRarity: newFrameRarity,
+            oldLevel: mainResult.oldLevel,
+            newLevel: mainResult.newLevel
+          }
+        );
+      } else {
+        // Pour nouveau collectible, fusion simple ou restauré : générer image avec frame/mint
+        const frameUrl = frameRarityForLevel
+          ? await db.getCollectibleFrameUrl(interaction.guildId, collectible.theme_id, frameRarityForLevel)
+          : null;
+
+        generatedImageBuffer = await imageGenerator.generateCollectibleWithFrame(
+          collectible.image_url,
+          frameUrl,
+          frameRarityForLevel,  // null pour niveau 1, sinon la rareté
+          {
+            level: currentLevel,
+            mintNumber: mainResult.mintNumber,
+            useCache: true
+          }
+        );
+      }
+
+      if (generatedImageBuffer) {
+        const attachmentName = mainResult.isNew ? 'new_collectible.png' :
+                               mainResult.leveledUp ? 'level_up.png' :
+                               mainResult.restored ? 'collectible_restored.png' : 'collectible_fusion.png';
+        const attachment = new AttachmentBuilder(generatedImageBuffer, { name: attachmentName });
+        attachments.push(attachment);
+      }
+    } catch (imgError) {
+      console.error('⚠️ [IMAGE] Erreur génération image:', imgError.message);
+      // Continuer sans image générée
+    }
+
+    // ========== CONSTRUCTION DU MESSAGE ==========
+
+    // Helper pour générer les étoiles de niveau
+    const getLevelStars = (level) => '★'.repeat(level) + '☆'.repeat(4 - level);
+
+    let title, description;
+    const embeds = [];
+
+    if (mainResult.isNew) {
+      // ===== NOUVEAU COLLECTIBLE =====
+      title = jackpotBonus ? '💰 JACKPOT X2 ACTIVÉ !' : '🎉 Nouveau Collectible !';
+
+      let successMessage = collectible.reveal_message ||
+        themeMessages?.collectible_obtained ||
+        `Félicitations ! Tu as trouvé **{name}** !`;
+
+      description = successMessage
+        .replace(/\{name\}/g, collectible.name)
+        .replace(/\{count\}/g, progress?.collected_count || '?')
+        .replace(/\{total\}/g, collectible.required_items || '?');
+
+      // Ajouter info mint si numéro bas
+      if (mainResult.mintNumber && mainResult.mintNumber <= 10) {
+        description += `\n\n🏆 **Mint #${mainResult.mintNumber}** - Tu fais partie des premiers !`;
+      }
+
+    } else if (mainResult.restored) {
+      // ===== COLLECTIBLE RESTAURÉ (Option B) =====
+      title = '🔮 Collectible Retrouvé !';
+      description = `Tu as récupéré **${collectible.name}** que tu avais perdu !\n\n` +
+        `${getLevelStars(mainResult.newLevel)} Niveau **${mainResult.newLevel}** conservé\n` +
+        `🏆 Mint **#${mainResult.mintNumber}** original`;
+
+      if (mainResult.currentXp > 0) {
+        description += `\n📊 XP: **${mainResult.currentXp}**`;
+      }
+
+    } else {
+      // ===== FUSION (doublon → XP) =====
+      if (mainResult.leveledUp) {
+        // Level Up !
+        title = '✨ LEVEL UP !';
+        description = `**${collectible.name}** passe au niveau **${mainResult.newLevel}** !\n\n` +
+          `${getLevelStars(mainResult.oldLevel)} → ${getLevelStars(mainResult.newLevel)}`;
+
+        // Récompense Loomix
+        if (mainResult.loomixReward > 0) {
+          description += `\n\n💰 **+${mainResult.loomixReward} Loomix** reçus !`;
+        }
+      } else {
+        // Fusion sans level up
+        title = '🔄 Fusion !';
+        const xpGained = mainResult.xpGained || 100;
+        const currentXp = mainResult.currentXp || 0;
+        const nextThreshold = mainResult.xpToNextLevel || 100;
+
+        description = `**${collectible.name}** gagne **+${xpGained} XP** !\n\n` +
+          `${getLevelStars(mainResult.newLevel)} Niveau ${mainResult.newLevel}\n` +
+          `📊 Progression: **${currentXp}/${nextThreshold}** XP`;
       }
     }
 
-    // Créer un embed moderne
-    const rarityEmojis = {
-      legendary: '🌟',
-      epic: '💎',
-      rare: '💙',
-      common: '⚪'
-    };
+    // Ajouter info Jackpot x2
+    if (bonusCollectible && bonusResult) {
+      const bonusInfo = bonusResult.isNew
+        ? `✨ Nouveau: **${bonusCollectible.name}** (${bonusCollectible.rarity})`
+        : `🔄 Fusion: **${bonusCollectible.name}** +${bonusResult.xpGained || 100} XP`;
 
-    const rarityColors = {
-      legendary: '#FFD700', // Or
-      epic: '#9B59B6',      // Violet
-      rare: '#3498DB',      // Bleu
-      common: '#95A5A6'     // Gris
-    };
+      description += `\n\n💰 **BONUS JACKPOT X2:**\n${bonusInfo}`;
 
+      if (bonusResult.leveledUp) {
+        description += ` → **LEVEL UP ${bonusResult.newLevel}!**`;
+        if (bonusResult.loomixReward > 0) {
+          description += ` (+${bonusResult.loomixReward} Loomix)`;
+        }
+      }
+    }
+
+    // Créer l'embed principal
     const embed = new EmbedBuilder()
-      .setTitle(`${bonusCollectible ? '💰 JACKPOT X2 ACTIVÉ !' : '🎉 Collectible Obtenu !'}`)
+      .setTitle(title)
       .setDescription(description)
       .setColor(collectible.role_color || rarityColors[collectible.rarity] || branding.secondary_color);
 
-    // Thumbnail uniquement si URL valide (non vide)
-    if (collectible.image_url && collectible.image_url.trim()) {
-      embed.setThumbnail(collectible.image_url);
+    // Image (attachment ou URL)
+    if (attachments.length > 0) {
+      embed.setImage(`attachment://${attachments[0].name}`);
+    } else if (collectible.image_url && collectible.image_url.trim()) {
+      embed.setImage(collectible.image_url);
     }
 
-    // Collectible principal
+    // Champ collectible principal
     embed.addFields({
       name: `${rarityEmojis[collectible.rarity]} ${collectible.name}`,
-      value: `┗━ Rareté: **${collectible.rarity.toUpperCase()}**\n┗━ Progression: **${progress.collected_count}/${collectible.required_items}**`,
+      value: `┗━ Rareté: **${collectible.rarity.toUpperCase()}**\n` +
+        `┗━ Niveau: **${getLevelStars(mainResult.newLevel)}**\n` +
+        `┗━ Progression: **${progress?.collected_count || '?'}/${collectible.required_items || '?'}**` +
+        (mainResult.mintNumber && mainResult.mintNumber <= 100 ? `\n┗━ Mint: **#${mainResult.mintNumber}**` : ''),
       inline: false
     });
 
-    // Collectible bonus si Jackpot x2 activé
-    if (bonusCollectible) {
+    // Champ bonus Jackpot x2
+    if (bonusCollectible && bonusResult) {
       embed.addFields({
-        name: `💰 ${rarityEmojis[bonusCollectible.rarity]} ${bonusCollectible.name} *(BONUS${bonusIsDuplicate ? ' - ⚠️ DOUBLON' : ''})*`,
-        value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n┗━ Charges restantes: **${jackpotBonus.remaining_charges - 1}**`,
+        name: `💰 ${rarityEmojis[bonusCollectible.rarity]} ${bonusCollectible.name} *(BONUS)*`,
+        value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n` +
+          `┗━ Niveau: **${getLevelStars(bonusResult.newLevel)}**\n` +
+          `┗━ Charges restantes: **${jackpotBonus.remaining_charges - 1}**`,
         inline: false
       });
-
-      // Image du collectible bonus uniquement si URL valide
-      if (bonusCollectible.image_url && bonusCollectible.image_url.trim()) {
-        embed.setImage(bonusCollectible.image_url);
-      }
     }
 
-    embed.setFooter(getLoomixFooterWithCustomText(`${bonusCollectible ? '2 collectibles obtenus !' : `Rareté: ${collectible.rarity}`}`))
-      .setTimestamp();
+    embed.setFooter(getLoomixFooterWithCustomText(
+      mainResult.restored ? `Collectible récupéré ! Mint #${mainResult.mintNumber}` :
+      mainResult.leveledUp ? `Level Up ! ${getLevelStars(mainResult.newLevel)}` :
+      jackpotBonus ? '2 collectibles obtenus !' :
+      `Rareté: ${collectible.rarity}`
+    )).setTimestamp();
 
-    await interaction.followUp({ embeds: [embed], flags: 64 });
+    embeds.push(embed);
 
-    // Annonce si collectible légendaire
-    if (collectible.rarity === 'legendary') {
+    // ========== VÉRIFIER FRAMES DE PROFIL DÉBLOQUÉES ==========
+    let unlockedFrames = [];
+    try {
+      unlockedFrames = await db.checkAndUnlockFrames(
+        interaction.guildId,
+        player.id,
+        interaction.user.id, // discord_id pour multi-serveur
+        collectible.theme_id
+      );
+
+      if (unlockedFrames.length > 0) {
+        const frameEmbed = new EmbedBuilder()
+          .setTitle('🖼️ Frame Débloquée !')
+          .setDescription(
+            unlockedFrames.map(f =>
+              `✨ **${f.name}** - ${f.description || 'Nouvelle frame de profil !'}`
+            ).join('\n')
+          )
+          .setColor('#FFD700')
+          .setFooter({ text: 'Utilise /profile → Frames pour l\'équiper !' });
+
+        embeds.push(frameEmbed);
+      }
+    } catch (frameError) {
+      console.error('⚠️ [FRAMES] Erreur check frames:', frameError.message);
+    }
+
+    // Envoyer le message
+    await interaction.followUp({
+      embeds: embeds,
+      files: attachments,
+      flags: 64
+    });
+
+    // ========== ANNONCES ET TRACKING ==========
+
+    // Annonce si collectible légendaire (nouveau uniquement)
+    if (mainResult.isNew && collectible.rarity === 'legendary') {
       await announcements.announceLegendaryCollectible(
         interaction.client,
         interaction.guildId,
         interaction.user.username,
         collectible.name,
-        collectible.image_url
+        collectible.image_url,
+        generatedImageBuffer  // Image générée avec frame/mint
       );
     }
 
+    // Annonces pour le système d'évolution des collectibles
+    // Utiliser generatedImageBuffer (image avec frame/étoiles/mint) pour les annonces
+    if (mainResult.restored) {
+      // Collectible restauré avec progression intacte
+      await announcements.announceCollectibleRestored(
+        interaction.client,
+        interaction.guildId,
+        interaction.user.username,
+        collectible.name,
+        mainResult.newLevel,
+        mainResult.currentXp || 0,
+        mainResult.mintNumber,
+        generatedImageBuffer  // Image générée avec frame/étoiles/mint
+      );
+    } else if (mainResult.leveledUp) {
+      // Level up du collectible
+      const MAX_LEVEL = 4;
+      if (mainResult.newLevel >= MAX_LEVEL) {
+        // Niveau maximum atteint !
+        await announcements.announceCollectibleMaxLevel(
+          interaction.client,
+          interaction.guildId,
+          interaction.user.username,
+          collectible.name,
+          mainResult.newLevel,
+          mainResult.mintNumber,
+          generatedImageBuffer  // Image générée avec frame/étoiles/mint
+        );
+      } else {
+        // Level up normal
+        await announcements.announceCollectibleLevelUp(
+          interaction.client,
+          interaction.guildId,
+          interaction.user.username,
+          collectible.name,
+          mainResult.oldLevel,
+          mainResult.newLevel,
+          mainResult.currentXp || 0,
+          mainResult.xpToNextLevel || 100,
+          generatedImageBuffer  // Image générée avec frame/étoiles/mint
+        );
+      }
+    }
+
     // Vérifier si collection complète
-    if (progress.collected_count >= collectible.required_items && !progress.is_completed) {
+    if (progress && progress.collected_count >= collectible.required_items && !progress.is_completed) {
       await this.handleCollectionComplete(interaction, player, collectible);
     }
 
@@ -967,11 +1120,10 @@ class MysteryBoxHandler {
         interaction.user.id,
         interaction.guildId,
         collectible.theme_id,
-        progress.collected_count
+        progress?.collected_count || 0
       );
       if (newProgressionRole) {
         console.log(`🏅 [PROGRESSION] Nouveau rôle attribué: ${newProgressionRole.name}`);
-        // Envoyer une notification au joueur
         await interaction.followUp({
           content: `🎉 **Félicitations !** Tu as atteint **${newProgressionRole.percentage}%** de la collection et obtenu le rôle **${newProgressionRole.name}** !`,
           flags: 64
