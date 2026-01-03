@@ -31,13 +31,20 @@ async function getActivityTimeline(playerId, guildId, themeId, limit = 20) {
   try {
     // Récupérer TOUS les événements : gains ET pertes comme événements distincts
     // Utiliser UNION ALL pour créer une ligne par événement
+    // Inclut level, xp, mint_number pour le système d'évolution
     const timeline = await db.queryAll(`
       -- Événements de collecte
       SELECT
+        col.id as collectible_id,
         col.name,
         col.rarity,
+        col.image_url,
+        col.theme_id,
         c.source,
         c.collected_at as event_date,
+        c.level,
+        c.xp,
+        c.mint_number,
         'collected' as event_type
       FROM collections c
       JOIN collectibles col ON c.collectible_id = col.id
@@ -49,10 +56,16 @@ async function getActivityTimeline(playerId, guildId, themeId, limit = 20) {
 
       -- Événements de perte
       SELECT
+        col.id as collectible_id,
         col.name,
         col.rarity,
+        col.image_url,
+        col.theme_id,
         c.source,
         c.lost_at as event_date,
+        c.level,
+        c.xp,
+        c.mint_number,
         'lost' as event_type
       FROM collections c
       JOIN collectibles col ON c.collectible_id = col.id
@@ -226,18 +239,23 @@ async function getDetailedStats(playerId, guildId, themeId) {
 async function getInventoryGrouped(playerId, guildId, themeId) {
   try {
     // Récupérer TOUS les collectibles du thème avec indicateur si le joueur les a
+    // Inclut level, xp, mint_number pour le système d'évolution
     const inventory = await db.queryAll(`
       SELECT
         col.id,
         col.name,
         col.rarity,
         col.image_url,
+        col.theme_id,
         c.collected_at,
         c.source,
+        c.level,
+        c.xp,
+        c.mint_number,
         CASE WHEN c.id IS NOT NULL THEN TRUE ELSE FALSE END as collected
       FROM collectibles col
       LEFT JOIN LATERAL (
-        SELECT id, collected_at, source
+        SELECT id, collected_at, source, level, xp, mint_number
         FROM collections
         WHERE collectible_id = col.id
           AND player_id = $1

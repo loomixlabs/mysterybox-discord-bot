@@ -8,6 +8,10 @@ const trapAdminHandler = require('./trapAdminHandler');
 const probabilityHandler = require('./probabilityHandler');
 const superBonusHandler = require('./superBonusHandler');
 const progressionRoleAdminHandler = require('./progressionRoleAdminHandler');
+const dailyRewardsAdminHandler = require('./dailyRewardsAdminHandler');
+const mysteryBoxConfigHandler = require('./mysteryBoxConfigHandler');
+const craftingConfigHandler = require('./craftingConfigHandler');
+const framesConfigHandler = require('./framesConfigHandler');
 const { canAccessAdminPanel } = require('../utils/permissions');
 const GuildConfig = require('../utils/guildConfig');
 const { LOOMIX_BRANDING } = require('../utils/footerHelper');
@@ -250,6 +254,14 @@ class AdminPanelHandler {
     else if (customId === 'admin_traps' || customId.startsWith('trap_') || customId.startsWith('select_trap')) {
       return trapAdminHandler.handleInteraction(interaction);
     }
+    // Gestion des Mystery Boxes par rareté (délégation vers mysteryBoxConfigHandler)
+    else if (customId.startsWith('mb_config_')) {
+      return mysteryBoxConfigHandler.handleInteraction(interaction);
+    }
+    // 🔨 Gestion du Crafting Config (délégation vers craftingConfigHandler)
+    else if (customId.startsWith('craft_config_')) {
+      return craftingConfigHandler.handleCraftingConfigInteraction(interaction);
+    }
     else if (customId === 'admin_settings') {
       await this.showSettingsMenu(interaction);
     } else if (customId === 'admin_stats') {
@@ -318,6 +330,20 @@ class AdminPanelHandler {
       await this.showAnnouncementsTrapsMenu(interaction);
     }
 
+    // Gestion des récompenses quotidiennes (délégation vers dailyRewardsAdminHandler)
+    else if (customId === 'admin_daily_rewards' || customId.startsWith('daily_admin_')) {
+      return dailyRewardsAdminHandler.handleDailyRewardsAdmin(interaction);
+    }
+
+    // Gestion du système d'équité (délégation vers fairnessConfigHandler)
+    else if (customId === 'admin_fairness' || customId.startsWith('fairness_')) {
+      const fairnessConfigHandler = require('./fairnessConfigHandler');
+      if (customId === 'admin_fairness') {
+        return fairnessConfigHandler.showMainMenu(interaction);
+      }
+      return fairnessConfigHandler.handleInteraction(interaction);
+    }
+
     // Gestion des probabilités (délégation vers probabilityHandler)
     else if (customId === 'admin_probabilities' || customId.startsWith('probability_')) {
       return probabilityHandler.handleInteraction(interaction);
@@ -331,6 +357,15 @@ class AdminPanelHandler {
       customId.startsWith('modal_edit_progression_role:')
     ) {
       return progressionRoleAdminHandler.handleInteraction(interaction);
+    }
+
+    // Gestion des frames (délégation vers framesConfigHandler)
+    else if (
+      customId === 'admin_frames' ||
+      customId.startsWith('frames_') ||
+      customId.startsWith('modal_frame_')
+    ) {
+      return framesConfigHandler.handleInteraction(interaction);
     }
 
     // Gestion des campagnes (délégation vers campaignAdminHandler)
@@ -455,8 +490,14 @@ class AdminPanelHandler {
           flags: 64 // Ephemeral
         });
 
-        // Créer le collector pour l'upload d'image
-        const filter = (m) => m.author.id === interaction.user.id && m.attachments.size > 0;
+        // Créer le collector pour l'upload d'image (attachment OU URL)
+        const filter = (m) => {
+          if (m.author.id !== interaction.user.id) return false;
+          if (m.attachments.size > 0) return true;
+          const urlPattern = /https?:\/\/[^\s]+/i;
+          if (urlPattern.test(m.content)) return true;
+          return false;
+        };
         const collector = thread.createMessageCollector({
           filter,
           time: 120000, // 2 minutes
@@ -464,15 +505,31 @@ class AdminPanelHandler {
         });
 
         collector.on('collect', async (message) => {
-          const attachment = message.attachments.first();
-          const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+          let imageUrl;
 
-          if (!validImageTypes.includes(attachment.contentType)) {
-            await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
-            return;
+          // Cas 1: Attachment (fichier uploadé)
+          if (message.attachments.size > 0) {
+            const attachment = message.attachments.first();
+            const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+
+            if (!validImageTypes.includes(attachment.contentType)) {
+              await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
+              return;
+            }
+
+            imageUrl = attachment.url;
           }
-
-          const imageUrl = attachment.url;
+          // Cas 2: URL collée
+          else {
+            const urlPattern = /https?:\/\/[^\s]+/i;
+            const match = message.content.match(urlPattern);
+            if (match) {
+              imageUrl = match[0].replace(/[<>)}\]]+$/, '');
+            } else {
+              await thread.send('❌ URL invalide. Colle une URL commençant par http:// ou https://');
+              return;
+            }
+          }
 
           // Sauvegarder l'image dans le cache
           const existingCache = this.imageUploadCache.get(interaction.user.id) || {};
@@ -583,8 +640,24 @@ class AdminPanelHandler {
         interaction.customId = `theme_manage_collectibles_${theme.id}`;
         await this.showManageCollectiblesMenu(interaction);
       }
+    } else if (customId.startsWith('collectible_delete_confirm_')) {
+      // Confirmation de suppression (nouveau flow)
+      await this.showDeleteCollectibleConfirmation(interaction);
     } else if (customId.startsWith('collectible_delete_')) {
       await this.handleDeleteCollectible(interaction);
+    } else if (customId.startsWith('collectible_edit_image_')) {
+      // Édition de l'image via thread
+      await this.handleEditCollectibleImage(interaction);
+    } else if (customId.startsWith('collectible_edit_')) {
+      // Édition des infos du collectible (modal)
+      await this.showEditCollectibleModal(interaction);
+    } else if (customId.startsWith('collectibles_page_')) {
+      // Pagination des collectibles
+      const page = parseInt(customId.split('_').pop());
+      await this.showCollectiblesMenu(interaction, page);
+    } else if (customId === 'collectibles_refresh') {
+      // Rafraîchir la liste (page 0)
+      await this.showCollectiblesMenu(interaction, 0);
     } else if (customId.startsWith('collectible_refresh_')) {
       // Rafraîchir les détails du collectible
       const collectibleId = customId.split('_')[2];
@@ -607,6 +680,10 @@ class AdminPanelHandler {
     // Bouton annuler depuis le thread
     else if (customId === 'thread_cancel_collectible') {
       await this.handleThreadCancelCollectible(interaction);
+    }
+    // Bouton annuler édition image depuis le thread
+    else if (customId.startsWith('thread_cancel_edit_image_')) {
+      await this.handleThreadCancelEditImage(interaction);
     }
 
     // Gestion des canaux
@@ -694,6 +771,8 @@ class AdminPanelHandler {
     // Gestion des missions
     else if (customId === 'mission_add') {
       await this.showMissionTypeSelector(interaction);
+    } else if (customId === 'mission_revealed_gif_config') {
+      await this.handleImageUpload(interaction, 'Mission Revealed GIF');
     } else if (customId.startsWith('mission_delete_confirm_')) {
       await this.handleDeleteMission(interaction);
     } else if (customId === 'mission_modify') {
@@ -779,6 +858,21 @@ class AdminPanelHandler {
       return progressionRoleAdminHandler.handleInteraction(interaction);
     }
 
+    // Mystery Box Config - Déléguer à mysteryBoxConfigHandler (qui fera son propre defer)
+    if (customId.startsWith('mb_config_')) {
+      return mysteryBoxConfigHandler.handleInteraction(interaction);
+    }
+
+    // 🔨 Crafting Config - Déléguer à craftingConfigHandler
+    if (customId.startsWith('craft_config_')) {
+      return craftingConfigHandler.handleCraftingConfigInteraction(interaction);
+    }
+
+    // 🖼️ Frames Config - Déléguer à framesConfigHandler (qui fera son propre defer)
+    if (customId.startsWith('frames_condition_select_')) {
+      return framesConfigHandler.handleInteraction(interaction);
+    }
+
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT (sauf pour les délégations ci-dessus)
     await interaction.deferUpdate();
 
@@ -795,8 +889,12 @@ class AdminPanelHandler {
       await this.handleThemeSelection(interaction);
     } else if (customId === 'select_theme_delete') {
       await this.handleThemeDeleteConfirmation(interaction);
-    } else if (customId === 'select_collectible') {
+    } else if (customId === 'select_collectible' || customId.startsWith('select_collectible_page_')) {
       await this.handleCollectibleSelection(interaction);
+    }
+    // Changement de rareté d'un collectible depuis la vue détail
+    else if (customId.startsWith('collectible_rarity_select_')) {
+      await this.handleCollectibleRarityChange(interaction);
     }
     // Sélections pour l'édition de rareté des super bonuses (AVANT select_rarity_ pour éviter conflit)
     else if (customId === 'select_bonus_for_rarity_edit') {
@@ -998,6 +1096,15 @@ class AdminPanelHandler {
         new ButtonBuilder()
           .setCustomId('admin_progression_roles')
           .setLabel('🏅 Rôles de Progression')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(!activeTheme)
+      );
+
+      // Bouton Frames (nécessite un thème actif)
+      row1Buttons.push(
+        new ButtonBuilder()
+          .setCustomId('admin_frames')
+          .setLabel('🖼️ Frames')
           .setStyle(ButtonStyle.Primary)
           .setDisabled(!activeTheme)
       );
@@ -1966,21 +2073,49 @@ class AdminPanelHandler {
   }
 
   /**
-   * Afficher le menu de gestion des collectibles
+   * Afficher le menu de gestion des collectibles avec pagination
+   * @param {number} page - Numéro de page (0-indexed)
    */
-  async showCollectiblesMenu(interaction) {
+  async showCollectiblesMenu(interaction, page = 0) {
     const theme = await db.getActiveTheme(interaction.guildId);
-    const collectibles = await db.getCollectiblesByTheme(interaction.guildId, theme.id);
+    const allCollectibles = await db.getCollectiblesByTheme(interaction.guildId, theme.id);
+
+    const ITEMS_PER_PAGE = 20; // Max 25 pour Discord, on garde 20 pour lisibilité
+    const totalPages = Math.ceil(allCollectibles.length / ITEMS_PER_PAGE) || 1;
+
+    // S'assurer que la page est valide
+    page = Math.max(0, Math.min(page, totalPages - 1));
+
+    // Collectibles pour cette page
+    const startIdx = page * ITEMS_PER_PAGE;
+    const collectibles = allCollectibles.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+
+    // Compter par rareté
+    const rarityCounts = {
+      legendary: allCollectibles.filter(c => c.rarity === 'legendary').length,
+      epic: allCollectibles.filter(c => c.rarity === 'epic').length,
+      rare: allCollectibles.filter(c => c.rarity === 'rare').length,
+      common: allCollectibles.filter(c => c.rarity === 'common').length
+    };
 
     const embed = new EmbedBuilder()
       .setTitle('🎁 Gestion des Collectibles')
-      .setDescription(`**Thème:** ${theme.name}\n**Total:** ${collectibles.length}/${theme.required_items}`)
-      .setColor('#2ecc71');
+      .setDescription(
+        `**Thème:** ${theme.name}\n` +
+        `**Total:** ${allCollectibles.length} collectible(s)\n\n` +
+        `⭐ Légendaires: ${rarityCounts.legendary} | 💎 Épiques: ${rarityCounts.epic}\n` +
+        `🔷 Rares: ${rarityCounts.rare} | ⚪ Communs: ${rarityCounts.common}`
+      )
+      .setColor('#2ecc71')
+      .setFooter({ text: `Page ${page + 1}/${totalPages} • Sélectionnez un collectible pour le gérer` });
 
     if (collectibles.length > 0) {
-      const list = collectibles.map(c => `• **${c.name}** (${c.rarity})`).join('\n');
+      const list = collectibles.map(c => {
+        const emoji = c.rarity === 'legendary' ? '⭐' : c.rarity === 'epic' ? '💎' : c.rarity === 'rare' ? '🔷' : '⚪';
+        return `${emoji} **${c.name}**`;
+      }).join('\n');
       embed.addFields({
-        name: 'Liste des collectibles',
+        name: `Collectibles (${startIdx + 1}-${startIdx + collectibles.length})`,
         value: list.length > 1024 ? list.substring(0, 1021) + '...' : list
       });
     } else {
@@ -1992,17 +2127,17 @@ class AdminPanelHandler {
 
     const components = [];
 
-    // Select menu pour choisir un collectible à supprimer
+    // Select menu pour choisir un collectible (limité à la page courante)
     if (collectibles.length > 0) {
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId('select_collectible')
-          .setPlaceholder('🗑️ Choisir un collectible à supprimer')
+          .setCustomId(`select_collectible_page_${page}`)
+          .setPlaceholder('🔧 Sélectionner un collectible à gérer')
           .addOptions(
             collectibles.map(c => ({
-              label: c.name,
+              label: c.name.substring(0, 100), // Discord limite à 100 chars
               value: c.id.toString(),
-              description: `${c.rarity} - ID: ${c.collectible_id}`,
+              description: `${c.rarity} - ${c.collectible_id}`.substring(0, 100),
               emoji: c.rarity === 'legendary' ? '⭐' : c.rarity === 'epic' ? '💎' : c.rarity === 'rare' ? '🔷' : '⚪'
             }))
           )
@@ -2010,11 +2145,33 @@ class AdminPanelHandler {
       components.push(selectRow);
     }
 
+    // Boutons de pagination
+    const paginationRow = new ActionRowBuilder();
+
+    paginationRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`collectibles_page_${page - 1}`)
+        .setLabel('◀️ Précédent')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === 0),
+      new ButtonBuilder()
+        .setCustomId(`collectibles_page_${page + 1}`)
+        .setLabel('Suivant ▶️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page >= totalPages - 1)
+    );
+    components.push(paginationRow);
+
+    // Boutons d'action
     const buttonRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('collectible_add')
-        .setLabel('➕ Ajouter un collectible')
+        .setLabel('➕ Ajouter')
         .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('collectibles_refresh')
+        .setLabel('🔄 Actualiser')
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('admin_settings')
         .setLabel('🔙 Retour')
@@ -2029,7 +2186,7 @@ class AdminPanelHandler {
   }
 
   /**
-   * Gérer la sélection d'un collectible (pour suppression)
+   * Gérer la sélection d'un collectible (afficher détails avec options éditer/supprimer)
    */
   async handleCollectibleSelection(interaction) {
     // Note: deferUpdate() est déjà fait dans handleSelectMenu()
@@ -2046,12 +2203,91 @@ class AdminPanelHandler {
         });
       }
 
-      // Bouton de confirmation
-      const confirmRow = new ActionRowBuilder().addComponents(
+      // Emojis de rareté
+      const rarityEmojis = {
+        legendary: '⭐',
+        epic: '💎',
+        rare: '🔷',
+        common: '⚪'
+      };
+
+      const rarityColors = {
+        legendary: '#FFD700',
+        epic: '#9b59b6',
+        rare: '#3498db',
+        common: '#95a5a6'
+      };
+
+      // Créer l'embed avec les détails du collectible
+      const embed = new EmbedBuilder()
+        .setTitle(`${rarityEmojis[collectible.rarity] || '❓'} ${collectible.name}`)
+        .setDescription(
+          `**ID Interne:** \`${collectible.collectible_id}\`\n` +
+          `**Rareté:** ${collectible.rarity.charAt(0).toUpperCase() + collectible.rarity.slice(1)}\n` +
+          `**Thème ID:** ${collectible.theme_id}\n\n` +
+          `**Message de révélation:**\n${collectible.reveal_message || '*Aucun message défini*'}`
+        )
+        .setColor(rarityColors[collectible.rarity] || '#2ecc71');
+
+      // Ajouter l'image si elle existe
+      if (collectible.image_url && collectible.image_url.trim()) {
+        embed.setThumbnail(collectible.image_url);
+      }
+
+      // Sélecteur de rareté
+      const raritySelectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`collectible_rarity_select_${collectibleId}`)
+          .setPlaceholder('🎯 Changer la rareté')
+          .addOptions([
+            {
+              label: 'Commun',
+              description: 'Rareté de base',
+              value: 'common',
+              emoji: '⚪',
+              default: collectible.rarity === 'common'
+            },
+            {
+              label: 'Rare',
+              description: 'Plus difficile à obtenir',
+              value: 'rare',
+              emoji: '🔷',
+              default: collectible.rarity === 'rare'
+            },
+            {
+              label: 'Épique',
+              description: 'Très recherché',
+              value: 'epic',
+              emoji: '💎',
+              default: collectible.rarity === 'epic'
+            },
+            {
+              label: 'Légendaire',
+              description: 'Extrêmement rare',
+              value: 'legendary',
+              emoji: '⭐',
+              default: collectible.rarity === 'legendary'
+            }
+          ])
+      );
+
+      // Boutons d'action
+      const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`collectible_delete_${collectibleId}`)
-          .setLabel('🗑️ Confirmer la suppression')
-          .setStyle(ButtonStyle.Danger),
+          .setCustomId(`collectible_edit_${collectibleId}`)
+          .setLabel('✏️ Modifier Textes')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`collectible_edit_image_${collectibleId}`)
+          .setLabel('🖼️ Changer Image')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`collectible_delete_confirm_${collectibleId}`)
+          .setLabel('🗑️ Supprimer')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('admin_collectibles')
           .setLabel('◀️ Retour aux Collectibles')
@@ -2059,19 +2295,79 @@ class AdminPanelHandler {
       );
 
       return interaction.editReply({
-        embeds: [],
-        content: `⚠️ **Confirmer la suppression ?**\n\n` +
-          `**Nom:** ${collectible.name}\n` +
-          `**Rareté:** ${collectible.rarity}\n` +
-          `**ID:** ${collectible.collectible_id}\n\n` +
-          `⚠️ Cette action supprimera également toutes les collections de ce collectible chez les joueurs !`,
-        components: [confirmRow]
+        embeds: [embed],
+        content: null,
+        components: [raritySelectRow, row1, row2]
       });
 
     } catch (error) {
       console.error('❌ Erreur lors de la sélection du collectible:', error);
       return interaction.editReply({
         content: `❌ Une erreur est survenue: ${error.message}`
+      });
+    }
+  }
+
+  /**
+   * Gérer le changement de rareté d'un collectible via le sélecteur
+   * Note: deferUpdate() est déjà fait dans handleSelectMenu()
+   */
+  async handleCollectibleRarityChange(interaction) {
+    try {
+      const collectibleId = parseInt(interaction.customId.replace('collectible_rarity_select_', ''));
+      const newRarity = interaction.values[0];
+
+      const collectible = await db.getCollectibleById(interaction.guildId, collectibleId);
+
+      if (!collectible) {
+        return interaction.editReply({
+          content: '❌ Collectible introuvable.'
+        });
+      }
+
+      const oldRarity = collectible.rarity;
+
+      // Si la rareté n'a pas changé, juste rafraîchir sans update DB
+      if (oldRarity === newRarity) {
+        // Rafraîchir la vue
+        interaction.values = [collectibleId.toString()];
+        return this.handleCollectibleSelection(interaction);
+      }
+
+      // Mettre à jour la rareté en DB
+      await db.query(
+        `UPDATE collectibles SET rarity = $1 WHERE id = $2 AND guild_id = $3`,
+        [newRarity, collectibleId, interaction.guildId]
+      );
+
+      // Logger l'action
+      await audit.logCollectibleEdited(
+        interaction.guildId,
+        interaction.user.id,
+        collectible,
+        {
+          old_rarity: oldRarity,
+          new_rarity: newRarity
+        }
+      );
+
+      const rarityEmojis = {
+        legendary: '⭐',
+        epic: '💎',
+        rare: '🔷',
+        common: '⚪'
+      };
+
+      console.log(`✅ Rareté modifiée: "${collectible.name}" ${rarityEmojis[oldRarity]} ${oldRarity} → ${rarityEmojis[newRarity]} ${newRarity}`);
+
+      // Rafraîchir la vue avec les nouvelles données
+      interaction.values = [collectibleId.toString()];
+      return this.handleCollectibleSelection(interaction);
+
+    } catch (error) {
+      console.error('❌ Erreur handleCollectibleRarityChange:', error);
+      return interaction.editReply({
+        content: `❌ Erreur: ${error.message}`
       });
     }
   }
@@ -2154,6 +2450,397 @@ class AdminPanelHandler {
           flags: 64
         });
       }
+    }
+  }
+
+  /**
+   * Afficher la confirmation de suppression d'un collectible
+   */
+  async showDeleteCollectibleConfirmation(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const collectibleId = parseInt(interaction.customId.split('_').pop());
+      const collectible = await db.getCollectibleById(interaction.guildId, collectibleId);
+
+      if (!collectible) {
+        return interaction.editReply({
+          content: '❌ Collectible introuvable.',
+          embeds: [],
+          components: []
+        });
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('⚠️ Confirmer la suppression')
+        .setDescription(
+          `**Collectible:** ${collectible.name}\n` +
+          `**Rareté:** ${collectible.rarity}\n` +
+          `**ID:** \`${collectible.collectible_id}\`\n\n` +
+          `⚠️ **ATTENTION:** Cette action est irréversible et supprimera également toutes les collections de ce collectible chez les joueurs !`
+        )
+        .setColor('#e74c3c');
+
+      if (collectible.image_url && collectible.image_url.trim()) {
+        embed.setThumbnail(collectible.image_url);
+      }
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`collectible_delete_${collectibleId}`)
+          .setLabel('🗑️ Confirmer la suppression')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('admin_collectibles')
+          .setLabel('❌ Annuler')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({
+        embeds: [embed],
+        content: null,
+        components: [row]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur showDeleteCollectibleConfirmation:', error);
+      return interaction.editReply({
+        content: `❌ Erreur: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Afficher le modal d'édition d'un collectible
+   */
+  async showEditCollectibleModal(interaction) {
+    try {
+      const collectibleId = parseInt(interaction.customId.split('_').pop());
+      const collectible = await db.getCollectibleById(interaction.guildId, collectibleId);
+
+      if (!collectible) {
+        return interaction.reply({
+          content: '❌ Collectible introuvable.',
+          flags: 64
+        });
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_edit_collectible_${collectibleId}`)
+        .setTitle(`✏️ Modifier: ${collectible.name.substring(0, 30)}`);
+
+      const nameInput = new TextInputBuilder()
+        .setCustomId('collectible_name')
+        .setLabel('Nom du collectible')
+        .setStyle(TextInputStyle.Short)
+        .setValue(collectible.name || '')
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const messageInput = new TextInputBuilder()
+        .setCustomId('collectible_message')
+        .setLabel('Message de révélation (optionnel)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setValue(collectible.reveal_message || '')
+        .setRequired(false)
+        .setMaxLength(500);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(nameInput),
+        new ActionRowBuilder().addComponents(messageInput)
+      );
+
+      return interaction.showModal(modal);
+
+    } catch (error) {
+      console.error('❌ Erreur showEditCollectibleModal:', error);
+      return interaction.reply({
+        content: `❌ Erreur: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Gérer l'édition de l'image d'un collectible via thread
+   */
+  async handleEditCollectibleImage(interaction) {
+    try {
+      const collectibleId = parseInt(interaction.customId.split('_').pop());
+      const collectible = await db.getCollectibleById(interaction.guildId, collectibleId);
+
+      if (!collectible) {
+        return interaction.reply({
+          content: '❌ Collectible introuvable.',
+          flags: 64
+        });
+      }
+
+      // Stocker le collectibleId pour l'édition d'image + infos pour le bouton retour
+      this.imageUploadCache.set(interaction.user.id, {
+        context: 'edit_collectible_image',
+        collectibleId: collectibleId,
+        collectibleName: collectible.name,
+        themeId: collectible.theme_id,
+        adminPanelChannelId: interaction.channelId,
+        adminPanelMessageId: interaction.message?.id,
+        guildId: interaction.guildId
+      });
+
+      // Créer un thread pour l'upload d'image
+      const channel = interaction.channel;
+
+      if (!channel || !channel.threads) {
+        return interaction.reply({
+          content: '❌ Impossible de créer un thread dans ce canal.',
+          flags: 64
+        });
+      }
+
+      const thread = await channel.threads.create({
+        name: `🖼️ Modifier Image - ${collectible.name.substring(0, 50)}`,
+        autoArchiveDuration: 60,
+        type: 11, // GUILD_PRIVATE_THREAD
+        reason: `Modification image collectible ${collectibleId}`
+      });
+
+      await thread.members.add(interaction.user.id);
+
+      // Message d'instructions dans le thread
+      const instructionsEmbed = new EmbedBuilder()
+        .setTitle('🖼️ Modifier l\'image du collectible')
+        .setDescription(
+          `**Collectible:** ${collectible.name}\n` +
+          `**Rareté:** ${collectible.rarity}\n\n` +
+          `📤 **Glisse-dépose ta nouvelle image ici**\n` +
+          `📎 **Ou colle une URL d'image** (https://...)\n\n` +
+          `Formats acceptés: PNG, JPG, GIF, WEBP\n` +
+          `L'image sera automatiquement mise à jour.`
+        )
+        .setColor('#3498db');
+
+      if (collectible.image_url && collectible.image_url.trim()) {
+        instructionsEmbed.setThumbnail(collectible.image_url);
+        instructionsEmbed.addFields({
+          name: 'Image actuelle',
+          value: 'Visible en miniature ci-contre →'
+        });
+      }
+
+      const cancelRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`thread_cancel_edit_image_${collectibleId}`)
+          .setLabel('❌ Annuler')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await thread.send({
+        embeds: [instructionsEmbed],
+        components: [cancelRow]
+      });
+
+      // Collecter les messages (images ou URLs)
+      const filter = (m) => {
+        if (m.author.id !== interaction.user.id) return false;
+        if (m.attachments.size > 0) return true;
+        const urlPattern = /https?:\/\/[^\s]+/i;
+        if (urlPattern.test(m.content)) return true;
+        return false;
+      };
+      const collector = thread.createMessageCollector({ filter, time: 120000, max: 1 });
+
+      collector.on('collect', async (message) => {
+        let imageUrl;
+
+        // Cas 1: Attachment (fichier uploadé)
+        if (message.attachments.size > 0) {
+          const attachment = message.attachments.first();
+
+          if (!attachment.contentType || !attachment.contentType.startsWith('image/')) {
+            await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
+            return;
+          }
+
+          imageUrl = attachment.url;
+        }
+        // Cas 2: URL collée
+        else {
+          const urlPattern = /https?:\/\/[^\s]+/i;
+          const match = message.content.match(urlPattern);
+          if (match) {
+            imageUrl = match[0].replace(/[<>)}\]]+$/, '');
+          } else {
+            await thread.send('❌ URL invalide. Colle une URL commençant par http:// ou https://');
+            return;
+          }
+        }
+
+        // Mettre à jour l'image dans la base de données
+        await db.query(
+          'UPDATE collectibles SET image_url = $1 WHERE id = $2 AND guild_id = $3',
+          [imageUrl, collectibleId, interaction.guildId]
+        );
+
+        console.log(`✅ Image du collectible "${collectible.name}" mise à jour: ${imageUrl}`);
+
+        // Récupérer les infos du cache AVANT de le supprimer
+        const cachedData = this.imageUploadCache.get(interaction.user.id);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Image mise à jour !')
+          .setDescription(`L'image du collectible **${collectible.name}** a été modifiée avec succès.`)
+          .setThumbnail(imageUrl)
+          .setColor('#2ecc71');
+
+        // Construire le bouton de retour si on a les infos du message admin panel
+        const components = [];
+        if (cachedData?.adminPanelChannelId && cachedData?.adminPanelMessageId && cachedData?.guildId) {
+          const messageLink = `https://discord.com/channels/${cachedData.guildId}/${cachedData.adminPanelChannelId}/${cachedData.adminPanelMessageId}`;
+
+          const returnRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setLabel('📋 Retourner aux collectibles')
+              .setStyle(ButtonStyle.Link)
+              .setURL(messageLink)
+          );
+          components.push(returnRow);
+          successEmbed.setDescription(`L'image du collectible **${collectible.name}** a été modifiée avec succès.\n\n🔒 Ce thread sera archivé dans 10 secondes...`);
+        } else {
+          // Fallback si pas d'infos
+          const parentChannel = thread.parent;
+          const parentMention = parentChannel ? `<#${parentChannel.id}>` : 'le canal principal';
+          successEmbed.setDescription(
+            `L'image du collectible **${collectible.name}** a été modifiée avec succès.\n\n` +
+            `👉 **Retourne dans ${parentMention}** et utilise \`/admin-panel\` pour gérer tes collectibles.\n\n` +
+            `🔒 Ce thread sera archivé dans 10 secondes...`
+          );
+        }
+
+        await thread.send({ embeds: [successEmbed], components });
+
+        // Nettoyer le cache
+        this.imageUploadCache.delete(interaction.user.id);
+
+        // Archiver le thread après 10 secondes
+        setTimeout(async () => {
+          try {
+            await thread.setArchived(true);
+          } catch (e) {
+            console.log('Thread déjà archivé ou erreur:', e.message);
+          }
+        }, 10000);
+      });
+
+      collector.on('end', async (collected, reason) => {
+        if (reason === 'time' && collected.size === 0) {
+          await thread.send('⏱️ **Temps écoulé.** Aucune image reçue.\n\n🔒 Ce thread sera archivé dans 5 secondes...');
+          this.imageUploadCache.delete(interaction.user.id);
+          setTimeout(async () => {
+            try {
+              await thread.setArchived(true);
+            } catch (e) {
+              console.log('Erreur archivage thread:', e.message);
+            }
+          }, 5000);
+        }
+      });
+
+      // Répondre à l'interaction originale
+      return interaction.reply({
+        content: `🖼️ **Thread ouvert !**\n\nRejoins le thread pour modifier l'image : ${thread}\n\n💡 Tu as 2 minutes pour uploader une image.`,
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleEditCollectibleImage:', error);
+      return interaction.reply({
+        content: `❌ Erreur: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Gérer la soumission du modal d'édition de collectible
+   */
+  async handleEditCollectibleModalSubmit(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const collectibleId = parseInt(interaction.customId.split('_').pop());
+      const collectible = await db.getCollectibleById(interaction.guildId, collectibleId);
+
+      if (!collectible) {
+        return interaction.followUp({
+          content: '❌ Collectible introuvable.',
+          flags: 64
+        });
+      }
+
+      // Récupérer les valeurs du modal (sans la rareté - gérée par le sélecteur)
+      const newName = interaction.fields.getTextInputValue('collectible_name');
+      const newMessage = interaction.fields.getTextInputValue('collectible_message') || null;
+
+      // Mettre à jour le collectible (sans la rareté)
+      await db.query(
+        `UPDATE collectibles
+         SET name = $1, reveal_message = $2
+         WHERE id = $3 AND guild_id = $4`,
+        [newName, newMessage, collectibleId, interaction.guildId]
+      );
+
+      // Logger l'action
+      await audit.logCollectibleEdited(
+        interaction.guildId,
+        interaction.user.id,
+        collectible,
+        {
+          old_name: collectible.name,
+          new_name: newName,
+          old_message: collectible.reveal_message,
+          new_message: newMessage
+        }
+      );
+
+      console.log(`✅ Collectible modifié: "${collectible.name}" → "${newName}"`);
+
+      // Rafraîchir l'embed avec les nouvelles données
+      interaction.values = [collectibleId.toString()];
+      return this.handleCollectibleSelection(interaction);
+
+    } catch (error) {
+      console.error('❌ Erreur handleEditCollectibleModalSubmit:', error);
+      return interaction.followUp({
+        content: `❌ Erreur: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Gérer l'annulation de l'édition d'image via thread
+   */
+  async handleThreadCancelEditImage(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const thread = interaction.channel;
+
+      // Archiver et supprimer le thread
+      if (thread?.isThread()) {
+        await thread.send('❌ Édition d\'image annulée.');
+        await thread.setArchived(true);
+        await thread.delete().catch(() => {});
+      } else {
+        await interaction.editReply({
+          content: '❌ Édition d\'image annulée.',
+          components: []
+        });
+      }
+    } catch (error) {
+      console.error('❌ Erreur handleThreadCancelEditImage:', error);
     }
   }
 
@@ -2366,9 +3053,13 @@ class AdminPanelHandler {
       });
     }
 
-    // Créer un message collector dans le thread
+    // Créer un message collector dans le thread (attachment OU URL)
     const filter = (m) => {
-      return m.author.id === interaction.user.id && m.attachments.size > 0;
+      if (m.author.id !== interaction.user.id) return false;
+      if (m.attachments.size > 0) return true;
+      const urlPattern = /https?:\/\/[^\s]+/i;
+      if (urlPattern.test(m.content)) return true;
+      return false;
     };
 
     const collector = thread.createMessageCollector({
@@ -2378,16 +3069,32 @@ class AdminPanelHandler {
     });
 
     collector.on('collect', async (message) => {
-      const attachment = message.attachments.first();
+      let imageUrl;
 
-      // Vérifier que c'est une image
-      const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
-      if (!validImageTypes.includes(attachment.contentType)) {
-        await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
-        return;
+      // Cas 1: Attachment (fichier uploadé)
+      if (message.attachments.size > 0) {
+        const attachment = message.attachments.first();
+
+        // Vérifier que c'est une image
+        const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+        if (!validImageTypes.includes(attachment.contentType)) {
+          await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
+          return;
+        }
+
+        imageUrl = attachment.url;
       }
-
-      const imageUrl = attachment.url;
+      // Cas 2: URL collée
+      else {
+        const urlPattern = /https?:\/\/[^\s]+/i;
+        const match = message.content.match(urlPattern);
+        if (match) {
+          imageUrl = match[0].replace(/[<>)}\]]+$/, '');
+        } else {
+          await thread.send('❌ URL invalide. Colle une URL commençant par http:// ou https://');
+          return;
+        }
+      }
 
       // Déterminer le type de contexte et mettre à jour la DB directement
       try {
@@ -2402,6 +3109,26 @@ class AdminPanelHandler {
           await thread.send({
             content: `✅ **Image de la boîte mystère mise à jour avec succès!**\n\n` +
               `📷 **URL:** ${imageUrl}\n\n` +
+              `🔒 Ce thread sera archivé dans 10 secondes...`
+          });
+        }
+        // Cas 1b: Mission Revealed GIF (annonce éphémère "Mission Débloquée")
+        else if (context === 'Mission Revealed GIF') {
+          const theme = await db.getActiveTheme(interaction.guildId);
+
+          // Insérer ou mettre à jour dans theme_messages
+          await db.query(`
+            INSERT INTO theme_messages (guild_id, theme_id, key, content)
+            VALUES ($1, $2, 'mission_revealed_gif', $3)
+            ON CONFLICT (guild_id, theme_id, key)
+            DO UPDATE SET content = $3
+          `, [interaction.guildId, theme.id, imageUrl]);
+
+          await thread.send({
+            content: `✅ **GIF/Image de l'annonce "Mission Débloquée" mis à jour avec succès!**\n\n` +
+              `📷 **URL:** ${imageUrl}\n` +
+              `🎯 **Thème:** ${theme.name}\n\n` +
+              `💡 Cette image s'affichera quand un joueur déclenche une mission secrète.\n\n` +
               `🔒 Ce thread sera archivé dans 10 secondes...`
           });
         }
@@ -2950,6 +3677,12 @@ class AdminPanelHandler {
     const theme = await db.getActiveTheme(interaction.guildId);
     const missions = await db.getMissionsByTheme(interaction.guildId, theme.id);
 
+    // Récupérer le GIF d'annonce de mission configuré
+    const missionRevealedGif = await db.queryOne(`
+      SELECT content FROM theme_messages
+      WHERE guild_id = $1 AND theme_id = $2 AND key = 'mission_revealed_gif'
+    `, [interaction.guildId, theme.id]);
+
     // Types de missions avec leurs emojis
     const missionTypes = {
       'keyword-message': { emoji: '🔤', label: 'Mot Deviné' },
@@ -2991,6 +3724,11 @@ class AdminPanelHandler {
       .setColor('#9B59B6')
       .setFooter({ text: `🎮 Types disponibles: Mot Deviné, Quiz, Vrai/Faux, Emoji Devinette...` });
 
+    // Ajouter le thumbnail si un GIF d'annonce est configuré
+    if (missionRevealedGif?.content) {
+      embed.setThumbnail(missionRevealedGif.content);
+    }
+
     // Afficher la liste des missions (max 10 pour éviter surcharge)
     if (missions.length > 0) {
       const displayMissions = missions.slice(0, 10);
@@ -3029,7 +3767,11 @@ class AdminPanelHandler {
       new ButtonBuilder()
         .setCustomId('mission_add')
         .setLabel('➕ Ajouter une mission')
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('mission_revealed_gif_config')
+        .setLabel('🖼️ GIF Annonce')
+        .setStyle(ButtonStyle.Secondary)
     );
 
     components.push(actionRow);
@@ -3252,12 +3994,17 @@ class AdminPanelHandler {
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('admin_theme_config')
-        .setLabel('🎁 Gérer la Mystery Box')
+        .setLabel('🎁 Mystery Box')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!theme), // Désactivé si pas de thème
+      new ButtonBuilder()
+        .setCustomId('mb_config_panel')
+        .setLabel('📦 MB par Rareté')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!theme), // Désactivé si pas de thème
       new ButtonBuilder()
         .setCustomId('admin_collectibles')
-        .setLabel('🎁 Gérer les Collectibles')
+        .setLabel('🎨 Collectibles')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!theme) // Désactivé si pas de thème
     );
@@ -3300,10 +4047,27 @@ class AdminPanelHandler {
 
     const row3 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
+        .setCustomId('admin_daily_rewards')
+        .setLabel('📅 Récompenses Quotidiennes')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!theme), // Désactivé si pas de thème
+      new ButtonBuilder()
         .setCustomId('admin_announcements')
         .setLabel('📢 Canal d\'Annonces')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!theme), // Désactivé si pas de thème
+      new ButtonBuilder()
+        .setCustomId('craft_config_panel')
+        .setLabel('🔨 Crafting')
+        .setStyle(ButtonStyle.Primary), // Pas de thème requis - c'est guild-level
+      new ButtonBuilder()
+        .setCustomId('admin_fairness')
+        .setLabel('⚖️ Équité')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!theme) // Désactivé si pas de thème
+    );
+
+    const row4 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('admin_back')
         .setLabel('🔙 Retour au Menu Principal')
@@ -3312,7 +4076,7 @@ class AdminPanelHandler {
 
     return interaction.update({
       embeds: [embed],
-      components: [row1, row2, row2b, row3]
+      components: [row1, row2, row2b, row3, row4]
     });
   }
 
@@ -3870,7 +4634,10 @@ class AdminPanelHandler {
         settings.collection_completed,
         settings.collection_traded,
         settings.collection_lost,
-        settings.legendary_super_bonus
+        settings.legendary_super_bonus,
+        settings.collectible_level_up,
+        settings.collectible_max_level,
+        settings.collectible_restored
       ].filter(Boolean).length;
 
       const missionsCount = [
@@ -3897,9 +4664,9 @@ class AdminPanelHandler {
       const totalActive = collectiblesCount + missionsCount + themesCount + trapsCount;
 
       description += `### 📊 Vue d'Ensemble\n\n`;
-      description += `**Total:** ${totalActive}/18 annonces actives\n\n`;
+      description += `**Total:** ${totalActive}/21 annonces actives\n\n`;
       description += `\`\`\`\n`;
-      description += `📦 Collectibles    ${collectiblesCount}/5\n`;
+      description += `📦 Collectibles    ${collectiblesCount}/8\n`;
       description += `⚔️  Missions        ${missionsCount}/6\n`;
       description += `🎨 Thèmes          ${themesCount}/2\n`;
       description += `🎭 Pièges          ${trapsCount}/5\n`;
@@ -4007,11 +4774,14 @@ class AdminPanelHandler {
       settings.collection_completed,
       settings.collection_traded,
       settings.collection_lost,
-      settings.legendary_super_bonus
+      settings.legendary_super_bonus,
+      settings.collectible_level_up,
+      settings.collectible_max_level,
+      settings.collectible_restored
     ].filter(Boolean).length;
 
     let description = '## 📦 Collectibles & Collections\n\n';
-    description += `**${activeCount}/5** annonces actives\n\n`;
+    description += `**${activeCount}/8** annonces actives\n\n`;
     description += '### Types d\'annonces\n\n';
     description += `${settings.legendary_collectible ? '✅' : '⬜'} **Collectible Légendaire**\n`;
     description += `> Annonce quand un joueur obtient un collectible légendaire\n\n`;
@@ -4022,36 +4792,43 @@ class AdminPanelHandler {
     description += `${settings.collection_lost ? '✅' : '⬜'} **Collection Perdue**\n`;
     description += `> Annonce quand un joueur perd une collection\n\n`;
     description += `${settings.legendary_super_bonus ? '✅' : '⬜'} **Super Bonus Obtenu**\n`;
-    description += `> Annonce quand un joueur obtient un super bonus légendaire\n`;
+    description += `> Annonce quand un joueur obtient un super bonus légendaire\n\n`;
+    description += '### Évolution des Collectibles\n\n';
+    description += `${settings.collectible_level_up ? '✅' : '⬜'} **Level Up**\n`;
+    description += `> Annonce quand un collectible monte de niveau (fusion)\n\n`;
+    description += `${settings.collectible_max_level ? '✅' : '⬜'} **Niveau Maximum**\n`;
+    description += `> Annonce quand un collectible atteint le niveau max\n\n`;
+    description += `${settings.collectible_restored ? '✅' : '⬜'} **Collectible Restauré**\n`;
+    description += `> Annonce quand un collectible perdu est récupéré\n`;
 
     const embed = new EmbedBuilder()
       .setDescription(description)
       .setColor('#3498DB')
-      .setFooter({ text: `${activeCount} sur 5 actives`, iconURL: interaction.guild.iconURL() })
+      .setFooter({ text: `${activeCount} sur 8 actives`, iconURL: interaction.guild.iconURL() })
       .setTimestamp();
 
     const components = [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('toggle_legendary_collectible')
-          .setLabel('Collectible Légendaire')
+          .setLabel('Légendaire')
           .setEmoji(settings.legendary_collectible ? '✅' : '⬜')
           .setStyle(settings.legendary_collectible ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('toggle_collection_completed')
-          .setLabel('Collection Complétée')
+          .setLabel('Complétée')
           .setEmoji(settings.collection_completed ? '✅' : '⬜')
-          .setStyle(settings.collection_completed ? ButtonStyle.Success : ButtonStyle.Secondary)
-      ),
-      new ActionRowBuilder().addComponents(
+          .setStyle(settings.collection_completed ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('toggle_collection_traded')
           .setLabel('Échange')
           .setEmoji(settings.collection_traded ? '✅' : '⬜')
-          .setStyle(settings.collection_traded ? ButtonStyle.Success : ButtonStyle.Secondary),
+          .setStyle(settings.collection_traded ? ButtonStyle.Success : ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('toggle_collection_lost')
-          .setLabel('Collection Perdue')
+          .setLabel('Perdue')
           .setEmoji(settings.collection_lost ? '✅' : '⬜')
           .setStyle(settings.collection_lost ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
@@ -4059,6 +4836,23 @@ class AdminPanelHandler {
           .setLabel('Super Bonus')
           .setEmoji(settings.legendary_super_bonus ? '✅' : '⬜')
           .setStyle(settings.legendary_super_bonus ? ButtonStyle.Success : ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('toggle_collectible_level_up')
+          .setLabel('Level Up')
+          .setEmoji(settings.collectible_level_up ? '✅' : '⬜')
+          .setStyle(settings.collectible_level_up ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('toggle_collectible_max_level')
+          .setLabel('Niveau Max')
+          .setEmoji(settings.collectible_max_level ? '✅' : '⬜')
+          .setStyle(settings.collectible_max_level ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('toggle_collectible_restored')
+          .setLabel('Restauré')
+          .setEmoji(settings.collectible_restored ? '✅' : '⬜')
+          .setStyle(settings.collectible_restored ? ButtonStyle.Success : ButtonStyle.Secondary)
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -4469,7 +5263,7 @@ class AdminPanelHandler {
         return this.showAnnouncementsThemesMenu(interaction);
       } else if (settingName.startsWith('trap_')) {
         return this.showAnnouncementsTrapsMenu(interaction);
-      } else if (settingName.includes('collection') || settingName === 'legendary_collectible' || settingName === 'legendary_super_bonus') {
+      } else if (settingName.includes('collection') || settingName === 'legendary_collectible' || settingName === 'legendary_super_bonus' || settingName.startsWith('collectible_')) {
         return this.showAnnouncementsCollectiblesMenu(interaction);
       } else {
         // Fallback au menu principal si type inconnu
@@ -6717,6 +7511,22 @@ class AdminPanelHandler {
       }
     }
 
+    // Ajouter l'image de la mission si elle existe (thumbnail)
+    if (mission.image_url) {
+      embed.setThumbnail(mission.image_url);
+      embed.addFields({
+        name: '🖼️ Image',
+        value: '✅ Configurée',
+        inline: true
+      });
+    } else {
+      embed.addFields({
+        name: '🖼️ Image',
+        value: '❌ Non configurée',
+        inline: true
+      });
+    }
+
     // Badge pour missions hardcodées
     if (isHardcodedMission) {
       embed.setFooter({
@@ -6812,12 +7622,16 @@ class AdminPanelHandler {
       );
     }
 
-    // Boutons communs à tous les types de missions (Éditer infos + Récompense)
+    // Boutons communs à tous les types de missions (Éditer infos + Récompense + Image)
     components.push(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`mission_edit_info_${missionId}`)
           .setLabel('✏️ Modifier Nom/Description')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`mission_image_upload_${missionId}`)
+          .setLabel('🖼️ Image')
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`mission_reward_config_${missionId}`)
@@ -6898,6 +7712,174 @@ class AdminPanelHandler {
         content: '❌ Une erreur est survenue lors de l\'affichage du modal.',
         flags: 64
       });
+    }
+  }
+
+  /**
+   * Handler pour uploader une image de mission via thread
+   */
+  async handleMissionImageUpload(interaction) {
+    try {
+      const guildId = interaction.guildId;
+      const missionId = parseInt(interaction.customId.split('_')[3]);
+
+      // Récupérer la mission
+      const mission = await db.getMissionById(guildId, missionId);
+
+      if (!mission) {
+        return interaction.reply({
+          content: '❌ Mission introuvable.',
+          flags: 64
+        });
+      }
+
+      const channel = interaction.channel;
+
+      // Créer un thread privé pour l'upload
+      const threadName = `📷 Image Mission - ${mission.name.substring(0, 50)}`;
+
+      const thread = await channel.threads.create({
+        name: threadName.substring(0, 100),
+        autoArchiveDuration: 60,
+        type: 12, // PRIVATE_THREAD
+        reason: `Upload image pour mission ${mission.name}`
+      });
+
+      // Ajouter l'utilisateur au thread
+      await thread.members.add(interaction.user.id);
+
+      // Defer l'interaction
+      await interaction.deferUpdate();
+
+      // Message dans le thread avec les instructions
+      let instructions = `🖼️ **UPLOAD IMAGE MISSION**\n\n`;
+      instructions += `📋 **Mission:** ${mission.name}\n`;
+      instructions += `📝 **Type:** ${mission.type}\n\n`;
+
+      if (mission.image_url) {
+        instructions += `📷 **Image actuelle:**\n${mission.image_url}\n\n`;
+      } else {
+        instructions += `📷 **Image actuelle:** Aucune\n\n`;
+      }
+
+      instructions += `🎯 **Instructions:**\n`;
+      instructions += `• Drag & drop ton image ici\n`;
+      instructions += `• Ou colle un screenshot (Ctrl+V)\n`;
+      instructions += `• Ou colle une **URL d'image** (https://...)\n`;
+      instructions += `• Formats acceptés: PNG, JPG, GIF, WEBP\n\n`;
+      instructions += `⏱️ Tu as **2 minutes**\n\n`;
+      instructions += `💡 Cette image sera affichée lors du lancement de la mission.`;
+
+      const cancelButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_image_cancel_${missionId}`)
+          .setLabel('❌ Annuler')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await thread.send({ content: instructions, components: [cancelButton] });
+
+      // MessageCollector pour l'image (attachment OU URL)
+      const filter = (m) => {
+        if (m.author.id !== interaction.user.id) return false;
+        // Accepter les attachments
+        if (m.attachments.size > 0) return true;
+        // Accepter toute URL HTTP/HTTPS (on validera après)
+        const urlPattern = /https?:\/\/[^\s]+/i;
+        if (urlPattern.test(m.content)) return true;
+        return false;
+      };
+
+      const collector = thread.createMessageCollector({
+        filter,
+        time: 120000, // 2 minutes
+        max: 1
+      });
+
+      collector.on('collect', async (message) => {
+        let imageUrl;
+
+        // Cas 1: Attachment (fichier uploadé)
+        if (message.attachments.size > 0) {
+          const attachment = message.attachments.first();
+
+          // Vérifier que c'est une image
+          const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+          if (!attachment.contentType || !validImageTypes.includes(attachment.contentType)) {
+            await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
+            return;
+          }
+
+          imageUrl = attachment.url;
+        }
+        // Cas 2: URL collée
+        else {
+          const urlPattern = /https?:\/\/[^\s]+/i;
+          const match = message.content.match(urlPattern);
+          if (match) {
+            imageUrl = match[0];
+            // Nettoyer l'URL (enlever caractères de fin indésirables)
+            imageUrl = imageUrl.replace(/[<>)}\]]+$/, '');
+          } else {
+            await thread.send('❌ URL invalide. Colle une URL commençant par http:// ou https://');
+            return;
+          }
+        }
+
+        // Mettre à jour l'image de la mission
+        await db.query(`
+          UPDATE missions
+          SET image_url = $1
+          WHERE id = $2 AND guild_id = $3
+        `, [imageUrl, missionId, guildId]);
+
+        console.log(`📷 [MISSION] Image configurée pour mission ${missionId}: ${imageUrl}`);
+
+        await thread.send({
+          content: `✅ **Image de mission mise à jour !**\n\n` +
+            `📋 **Mission:** ${mission.name}\n` +
+            `📷 **Nouvelle URL:** ${imageUrl}\n\n` +
+            `🔒 Ce thread sera archivé dans 10 secondes...`,
+          components: []
+        });
+
+        // Archiver le thread après 10 secondes
+        setTimeout(async () => {
+          try {
+            await thread.setArchived(true);
+          } catch (err) {
+            console.warn('⚠️ Impossible d\'archiver le thread:', err);
+          }
+        }, 10000);
+      });
+
+      collector.on('end', async (collected, reason) => {
+        if (reason === 'time' && collected.size === 0) {
+          await thread.send('⏱️ **Temps écoulé !** Aucune image configurée. Ce thread sera archivé.');
+          setTimeout(async () => {
+            try {
+              await thread.setArchived(true);
+            } catch (err) {
+              console.warn('⚠️ Impossible d\'archiver le thread:', err);
+            }
+          }, 5000);
+        }
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur handleMissionImageUpload:', error);
+
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({
+          content: '❌ Erreur lors de la création du thread d\'upload.',
+          flags: 64
+        });
+      } else {
+        await interaction.reply({
+          content: '❌ Erreur lors de la création du thread d\'upload.',
+          flags: 64
+        });
+      }
     }
   }
 

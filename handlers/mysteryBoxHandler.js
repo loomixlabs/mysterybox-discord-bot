@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, AttachmentBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, AttachmentBuilder, PermissionFlagsBits } = require('discord.js');
 const path = require('path');
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
@@ -9,6 +9,74 @@ const progressionRoleHandler = require('./progressionRoleHandler');
 const { SUPER_ADMINS } = require('../utils/permissions');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 const imageGenerator = require('../utils/imageGenerator');
+
+/**
+ * Base URL pour les images de mystery boxes par défaut
+ */
+const BASE_IMG_URL = 'http://72.60.185.62:8080/assets/mystery-boxes';
+
+/**
+ * 🎨 CONFIGURATION PAR DÉFAUT POUR CHAQUE RARETÉ DE MYSTERY BOX
+ * Ces valeurs sont utilisées comme fallback si la config DB est NULL
+ */
+const RARITY_DEFAULTS = {
+  common: {
+    emoji: '📦',
+    color: '#95A5A6',
+    label: 'Commune',
+    text_title: '📦 MYSTERY BOX COMMUNE',
+    text_description: 'Une box basique mais pleine de surprises...',
+    text_opening: 'Une Mystery Box **commune** s\'ouvre doucement...',
+    text_success: 'Tu as trouvé quelque chose dans cette box commune !',
+    text_empty: 'La box commune était vide...',
+    image_closed: `${BASE_IMG_URL}/common_closed.png`,
+    image_opening: `${BASE_IMG_URL}/common_opening.png`,
+    image_opened: `${BASE_IMG_URL}/common_opened.png`,
+    image_empty: `${BASE_IMG_URL}/common_empty.png`
+  },
+  rare: {
+    emoji: '💎',
+    color: '#3498DB',
+    label: 'Rare',
+    text_title: '💎 MYSTERY BOX RARE',
+    text_description: 'Une box scintillante aux reflets bleutés...',
+    text_opening: 'Une Mystery Box **rare** commence à briller...',
+    text_success: 'Excellent ! Tu as débloqué un objet rare !',
+    text_empty: 'La box rare n\'a rien révélé cette fois...',
+    image_closed: `${BASE_IMG_URL}/rare_closed.png`,
+    image_opening: `${BASE_IMG_URL}/rare_opening.png`,
+    image_opened: `${BASE_IMG_URL}/rare_opened.png`,
+    image_empty: `${BASE_IMG_URL}/rare_empty.png`
+  },
+  epic: {
+    emoji: '✨',
+    color: '#9B59B6',
+    label: 'Épique',
+    text_title: '✨ MYSTERY BOX ÉPIQUE',
+    text_description: 'Une box enveloppée d\'une aura mystique...',
+    text_opening: 'Une Mystery Box **épique** pulse d\'énergie violette...',
+    text_success: 'Incroyable ! Une récompense épique t\'attend !',
+    text_empty: 'L\'énergie mystique s\'est dissipée... box vide.',
+    image_closed: `${BASE_IMG_URL}/epic_closed.png`,
+    image_opening: `${BASE_IMG_URL}/epic_opening.png`,
+    image_opened: `${BASE_IMG_URL}/epic_opened.png`,
+    image_empty: `${BASE_IMG_URL}/epic_empty.png`
+  },
+  legendary: {
+    emoji: '👑',
+    color: '#FFD700',
+    label: 'Légendaire',
+    text_title: '👑 MYSTERY BOX LÉGENDAIRE',
+    text_description: 'Une box dorée rayonnante de puissance...',
+    text_opening: 'Une Mystery Box **légendaire** explose de lumière dorée...',
+    text_success: 'LÉGENDAIRE ! Un trésor d\'exception !',
+    text_empty: 'Même la légende peut parfois décevoir...',
+    image_closed: `${BASE_IMG_URL}/legendary_closed.png`,
+    image_opening: `${BASE_IMG_URL}/legendary_opening.png`,
+    image_opened: `${BASE_IMG_URL}/legendary_opened.png`,
+    image_empty: `${BASE_IMG_URL}/legendary_empty.png`
+  }
+};
 
 /**
  * Handler pour le système de boîte mystère
@@ -562,6 +630,50 @@ class MysteryBoxHandler {
     const theme = await db.getActiveTheme(interaction.guildId);
     const config = await db.getThemeConfig(interaction.guildId, theme.id);
 
+    // ⚖️ SYSTÈME D'ÉQUITÉ - Vérifier si le joueur doit attendre
+    const memberRoles = interaction.member.roles.cache.map(r => r.id);
+    const fairness = await db.checkFairnessForPlayer(
+      interaction.guildId,
+      player.id,
+      theme.id,
+      memberRoles
+    );
+
+    if (fairness.delay > 0) {
+      // Calculer le timestamp d'ouverture basé sur la création du message (apparition de la boîte)
+      const messageCreatedAt = Math.floor(interaction.message.createdTimestamp / 1000);
+      const canOpenAt = messageCreatedAt + fairness.delay;
+      const now = Math.floor(Date.now() / 1000);
+
+      console.log(`⚖️ [FAIRNESS DEBUG] Joueur ${interaction.user.tag}: progression=${fairness.progressionPercent}%, delay=${fairness.delay}s, messageCreated=${messageCreatedAt}, canOpenAt=${canOpenAt}, now=${now}, diff=${now - messageCreatedAt}s écoulées`);
+
+      if (now < canOpenAt) {
+        // Le joueur doit encore attendre
+        const remainingSeconds = canOpenAt - now;
+
+        // Message court avec compteur Discord
+        const waitMessage = `⚖️ ${interaction.user}, équité activée ! Tu pourras ouvrir <t:${canOpenAt}:R>`;
+
+        // Envoyer un message NON-éphémère pour pouvoir le supprimer après
+        const replyMsg = await interaction.followUp({
+          content: waitMessage
+        });
+
+        // Supprimer le message après le délai restant + 1 seconde
+        setTimeout(async () => {
+          try {
+            await replyMsg.delete();
+          } catch (err) {
+            // Message déjà supprimé ou erreur, ignorer
+          }
+        }, (remainingSeconds + 1) * 1000);
+
+        return;
+      }
+      // Si now >= canOpenAt, le joueur peut ouvrir
+      console.log(`⚖️ [FAIRNESS] Joueur ${interaction.user.tag} autorisé après délai (${fairness.progressionPercent}%, ${now - messageCreatedAt}s écoulées)`);
+    }
+
     // ⚠️ IMPORTANT: Roller le contenu AVANT de marquer comme gagnée
     // Cela permet de vérifier si le joueur a déjà une mission active AVANT de consommer la boîte
     const content = await this.rollMysteryContent(interaction.guildId, theme.id, config, type, itemId, interaction.user.id);
@@ -603,7 +715,8 @@ class MysteryBoxHandler {
       interaction.user.id,
       interaction.guildId,
       content,
-      interaction.message.id
+      interaction.message.id,
+      interaction.client // Pour tracking badge Vision Divine
     );
 
     if (visionDivineResult) {
@@ -703,12 +816,25 @@ class MysteryBoxHandler {
         console.error(`❌ [MYSTERY BOX] Type inconnu: "${content.type}"`);
     }
 
-    // 🏆 BADGE TRACKING - Mystery Box Opened
+    // 🏆 BADGE TRACKING - Mystery Box Opened (avec rareté du contenu si collectible)
     try {
+      // Pour les boxes classiques, on utilise la rareté du collectible si c'est un collectible
+      // Sinon, pas de tracking par rareté (les autres types n'ont pas de rareté de box)
+      if (content.type === 'collectible' && content.item?.rarity) {
+        await badgeHandler.onMysteryBoxOpenedWithRarity(interaction.guildId, player.id, content.item.rarity, interaction.client);
+        console.log(`🏆 [BADGES] Mystery Box badge tracking appelé pour player ${player.id} (rareté collectible: ${content.item.rarity})`);
+      }
+      // Appeler aussi le hook générique de mystery box
       await badgeHandler.onMysteryBoxOpened(interaction.guildId, player.id, interaction.client);
-      console.log(`🏆 [BADGES] Mystery Box badge tracking appelé pour player ${player.id}`);
     } catch (error) {
       console.error('🔴 [BADGES] Erreur tracking mystery box:', error);
+    }
+
+    // 🏆 BADGE TRACKING - Win Streak (mystery boxes sans piège)
+    try {
+      await badgeHandler.onWinStreak(interaction.guildId, player.id, null, interaction.client);
+    } catch (error) {
+      console.error('🔴 [BADGES] Erreur tracking win streak:', error);
     }
 
     // Le gagnant a déjà été enregistré au début de la fonction (ligne 244)
@@ -815,8 +941,8 @@ class MysteryBoxHandler {
       console.log(`💰 [JACKPOT X2] Charge consommée - Restant: ${jackpotBonus.remaining_charges - 1}`);
     }
 
-    // Récupérer progression globale
-    const progress = await db.getPlayerProgress(interaction.guildId, player.id, collectible.theme_id);
+    // Incrémenter et récupérer progression globale
+    const progress = await db.incrementProgress(interaction.guildId, player.id, collectible.theme_id);
 
     // ========== GÉNÉRATION D'IMAGE AVEC FRAME ET MINT ==========
     let attachments = [];
@@ -854,7 +980,8 @@ class MysteryBoxHandler {
             oldRarity: oldFrameRarity,
             newRarity: newFrameRarity,
             oldLevel: mainResult.oldLevel,
-            newLevel: mainResult.newLevel
+            newLevel: mainResult.newLevel,
+            mintNumber: mainResult.mintNumber
           }
         );
       } else {
@@ -1105,10 +1232,28 @@ class MysteryBoxHandler {
       await this.handleCollectionComplete(interaction, player, collectible);
     }
 
-    // 🏆 BADGE TRACKING - Collectible Found
+    // 🏆 BADGE TRACKING - Collectible Found (version améliorée avec mint et evolution)
     try {
-      await badgeHandler.onCollectibleFound(interaction.guildId, player.id, collectible.rarity, interaction.client);
-      console.log(`🏆 [BADGES] Collectible badge tracking appelé pour player ${player.id}`);
+      // Appeler le hook avec détails (rareté, mint number)
+      await badgeHandler.onCollectibleFoundWithDetails(
+        interaction.guildId,
+        player.id,
+        collectible.rarity,
+        mainResult.mintNumber,
+        interaction.client
+      );
+      console.log(`🏆 [BADGES] Collectible badge tracking appelé pour player ${player.id} (mint #${mainResult.mintNumber})`);
+
+      // Si level up, appeler aussi le hook d'évolution
+      if (mainResult.leveledUp && mainResult.newLevel >= 2) {
+        await badgeHandler.onCollectibleEvolution(
+          interaction.guildId,
+          player.id,
+          mainResult.newLevel,
+          interaction.client
+        );
+        console.log(`🏆 [BADGES] Evolution badge tracking appelé (niveau ${mainResult.newLevel})`);
+      }
     } catch (error) {
       console.error('🔴 [BADGES] Erreur tracking collectible:', error);
     }
@@ -1199,6 +1344,44 @@ class MysteryBoxHandler {
       });
     }
 
+    // Vérifier si le joueur a la permission d'écrire dans le canal parent
+    // Si non, ajouter une permission temporaire sur le CANAL PARENT (pas le thread)
+    // Car Discord hérite les permissions du parent pour les threads
+    let tempPermissionAdded = false;
+    const parentChannel = interaction.channel;
+
+    try {
+      // IMPORTANT: Utiliser interaction.member (GuildMember) et non interaction.user (User)
+      // pour vérifier correctement les permissions dans le contexte du serveur
+      const member = interaction.member;
+      const memberPermissions = parentChannel.permissionsFor(member);
+
+      const hasSendMessages = memberPermissions?.has(PermissionFlagsBits.SendMessages);
+      const hasSendMessagesInThreads = memberPermissions?.has(PermissionFlagsBits.SendMessagesInThreads);
+
+      console.log(`🔍 [PERMISSION DEBUG] Canal: #${parentChannel.name}, Joueur: ${interaction.user.tag}`);
+      console.log(`🔍 [PERMISSION DEBUG] SendMessages: ${hasSendMessages}, SendMessagesInThreads: ${hasSendMessagesInThreads}, ViewChannel: ${memberPermissions?.has(PermissionFlagsBits.ViewChannel)}`);
+
+      // Ajouter la permission si le joueur ne peut pas écrire dans le canal parent OU dans les threads
+      // Les deux sont nécessaires pour éviter l'affichage "lecture seule" dans le thread
+      if (!hasSendMessages || !hasSendMessagesInThreads) {
+        console.log(`🔐 [PERMISSION] Ajout permission temporaire pour ${interaction.user.tag} dans #${parentChannel.name}`);
+
+        await parentChannel.permissionOverwrites.create(interaction.user, {
+          SendMessages: true,
+          ViewChannel: true,
+          SendMessagesInThreads: true,
+          ReadMessageHistory: true
+        }, { reason: `Permission temporaire pour mission secrète - ${interaction.user.username}` });
+
+        tempPermissionAdded = true;
+      } else {
+        console.log(`✅ [PERMISSION] Joueur ${interaction.user.tag} a déjà toutes les permissions dans #${parentChannel.name}`);
+      }
+    } catch (permError) {
+      console.warn(`⚠️ [PERMISSION] Impossible d'ajouter permission temporaire:`, permError.message);
+    }
+
     // Créer un thread privé pour la mission
     const thread = await interaction.channel.threads.create({
       name: `Mission Secrète - ${interaction.user.username}`,
@@ -1207,7 +1390,7 @@ class MysteryBoxHandler {
       reason: `Mission secrète pour ${interaction.user.username}`
     });
 
-    // Ajouter le joueur
+    // Ajouter le joueur au thread
     await thread.members.add(interaction.user.id);
 
     // Récupérer les préférences de notification
@@ -1287,9 +1470,19 @@ class MysteryBoxHandler {
         .setEmoji(msgConfig.buttonEmoji)
     );
 
+    // Préparer le game_state avec les infos de permission temporaire si applicable
+    const gameState = tempPermissionAdded
+      ? {
+          tempPermission: {
+            channelId: parentChannel.id,
+            userId: interaction.user.id
+          }
+        }
+      : null;
+
     // Créer la progression de mission AVANT d'envoyer le message
     // Cela garantit que même si thread.send() échoue, on a le mission_progress en base
-    await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id);
+    await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id, gameState);
 
     await thread.send({
       content: `<@${interaction.user.id}>`,
@@ -1412,12 +1605,12 @@ class MysteryBoxHandler {
       [interaction.guildId, player.id, trapId]
     );
 
-    // 🏆 BADGE TRACKING - Trap Survived
+    // 🏆 BADGE TRACKING - Trap Triggered (avec type pour badges spécifiques)
     try {
-      await badgeHandler.onTrapSurvived(interaction.guildId, player.id, interaction.client);
-      console.log(`🏆 [BADGES] Trap Survival badge tracking appelé pour player ${player.id}`);
+      await badgeHandler.onTrapTriggered(interaction.guildId, player.id, trap.type, interaction.client);
+      console.log(`🏆 [BADGES] Trap triggered badge tracking appelé pour player ${player.id} (type: ${trap.type})`);
     } catch (error) {
-      console.error('🔴 [BADGES] Erreur tracking trap survival:', error);
+      console.error('🔴 [BADGES] Erreur tracking trap triggered:', error);
     }
   }
 
@@ -2220,6 +2413,1001 @@ class MysteryBoxHandler {
         components: [],
         flags: 64
       });
+    }
+  }
+
+  /**
+   * 📦 Ouvrir une Mystery Box par rareté (via clé du /profile)
+   * @param {ButtonInteraction} interaction - Interaction Discord (déjà deferred)
+   * @param {object} player - Player from database
+   * @param {object} theme - Active theme
+   * @param {string} rarity - common, rare, epic, legendary
+   */
+  async handleRarityBoxOpen(interaction, player, theme, rarity) {
+    const guildId = interaction.guildId;
+
+    console.log(`📦 [RARITY BOX] Ouverture demandée - Rareté: ${rarity}, Player: ${player.username}`);
+
+    // 1. Vérifier et consommer la clé
+    const mbCredits = await db.getMysteryBoxCredits(guildId, player.id);
+    const currentCredits = mbCredits?.[rarity] || 0;
+
+    const rarityFr = { common: 'Commune', rare: 'Rare', epic: 'Épique', legendary: 'Légendaire' };
+
+    if (currentCredits < 1) {
+      return interaction.editReply({
+        content: `❌ Tu n'as pas assez de clés **${rarityFr[rarity]}** pour ouvrir cette box!`,
+        embeds: [],
+        components: []
+      });
+    }
+
+    // 2. Consommer la clé
+    const spent = await db.spendMysteryBoxCredit(guildId, player.id, rarity, null);
+    if (!spent) {
+      return interaction.editReply({
+        content: `❌ Erreur lors de l'utilisation de la clé **${rarityFr[rarity]}**!`,
+        embeds: [],
+        components: []
+      });
+    }
+
+    console.log(`🔑 [RARITY BOX] Clé ${rarity} consommée pour ${player.username}`);
+
+    // 3. UPGRADE STEP-BY-STEP: Common → Rare → Epic → Legendary
+    let finalRarity = rarity;
+    let upgradeChain = [];
+    const UPGRADE_PATH = { common: 'rare', rare: 'epic', epic: 'legendary', legendary: null };
+
+    let currentRarity = rarity;
+    while (UPGRADE_PATH[currentRarity]) {
+      // Récupérer la box par défaut de cette rareté pour obtenir les % d'upgrade
+      const defaultBox = await db.queryOne(`
+        SELECT rarity_upgrade_rare, rarity_upgrade_epic, rarity_upgrade_legendary
+        FROM mystery_box_config
+        WHERE guild_id = $1 AND rarity = $2 AND is_default = TRUE
+      `, [guildId, currentRarity]);
+
+      if (!defaultBox) {
+        console.log(`⚠️ [UPGRADE] Pas de box par défaut pour ${currentRarity}, arrêt upgrade`);
+        break;
+      }
+
+      const targetRarity = UPGRADE_PATH[currentRarity];
+      const upgradeColumn = `rarity_upgrade_${targetRarity}`;
+      const upgradeChance = defaultBox[upgradeColumn] || 0;
+
+      console.log(`⬆️ [UPGRADE] ${currentRarity} → ${targetRarity}: ${upgradeChance}%`);
+
+      if (upgradeChance > 0 && Math.random() * 100 < upgradeChance) {
+        upgradeChain.push({ from: currentRarity, to: targetRarity });
+        finalRarity = targetRarity;
+        currentRarity = targetRarity;
+        console.log(`🌟 [UPGRADE] SUCCÈS! ${upgradeChain[upgradeChain.length - 1].from} → ${targetRarity}`);
+      } else {
+        break;
+      }
+    }
+
+    console.log(`📦 [RARITY BOX] Rareté finale: ${finalRarity} (upgrades: ${upgradeChain.length})`);
+
+    // 4. Sélectionner une box aléatoire parmi les boxes ACTIVÉES de la rareté FINALE
+    const availableBoxes = await db.queryAll(`
+      SELECT * FROM mystery_box_config
+      WHERE guild_id = $1 AND rarity = $2 AND is_enabled = TRUE
+    `, [guildId, finalRarity]);
+
+    const branding = await db.getGuildBranding(guildId);
+    const themeConfig = await db.getThemeConfig(guildId, theme.id);
+
+    // Sélection aléatoire (probabilité égale)
+    let config;
+    if (availableBoxes && availableBoxes.length > 0) {
+      config = availableBoxes[Math.floor(Math.random() * availableBoxes.length)];
+      console.log(`📦 [RARITY BOX] Box sélectionnée: "${config.name}" (${config.id}) parmi ${availableBoxes.length} disponible(s)`);
+    } else {
+      // Config par défaut si aucune config spécifique - utiliser RARITY_DEFAULTS
+      const defaults = RARITY_DEFAULTS[finalRarity] || RARITY_DEFAULTS.common;
+      config = {
+        name: defaults.text_title.replace(/[📦💎✨👑]\s*/g, ''), // Enlever emoji du titre
+        emoji: defaults.emoji,
+        color: defaults.color,
+        prob_collectible: 90,
+        prob_super_bonus: 10,
+        animation_type: 'sequence',
+        animation_duration: 3000,
+        text_title: defaults.text_title,
+        text_description: defaults.text_description,
+        text_opening: defaults.text_opening,
+        text_success: defaults.text_success,
+        text_empty: defaults.text_empty,
+        image_closed: defaults.image_closed,
+        image_opening: defaults.image_opening,
+        image_opened: defaults.image_opened,
+        image_empty: defaults.image_empty
+      };
+      console.log(`⚠️ [RARITY BOX] Aucune box activée pour ${finalRarity}, utilisation config par défaut`);
+    }
+
+    // Stocker les infos d'upgrade pour l'affichage
+    config._upgradeChain = upgradeChain;
+    config._originalRarity = rarity;
+    config._finalRarity = finalRarity;
+
+    console.log(`⚙️ [RARITY BOX] Config chargée:`, {
+      name: config.name,
+      prob_collectible: config.prob_collectible,
+      prob_super_bonus: config.prob_super_bonus,
+      animation_duration: config.animation_duration
+    });
+
+    // 5. Animation d'ouverture (utilise finalRarity pour l'affichage)
+    await this.showRarityBoxAnimation(interaction, config, finalRarity, branding);
+
+    // 6. Roller le contenu (collectible ou super bonus uniquement)
+    // Passer finalRarity pour le roll (l'upgrade a déjà été fait)
+    const content = await this.rollRarityContent(guildId, theme.id, finalRarity, config, themeConfig, interaction.user.id);
+
+    if (!content) {
+      // Box vide - Rembourser la clé ORIGINALE et afficher message text_empty
+      await db.addMysteryBoxCredits(guildId, player.id, rarity, 1, 'compensation', 'roll_failed');
+
+      const defaults = RARITY_DEFAULTS[finalRarity] || RARITY_DEFAULTS.common;
+      const emptyText = config.text_empty || defaults.text_empty;
+      const emptyEmoji = config.emoji || defaults.emoji;
+      const emptyColor = config.color || defaults.color;
+
+      const emptyEmbed = new EmbedBuilder()
+        .setTitle(`${emptyEmoji} Box Vide...`)
+        .setDescription(`${emptyText}\n\n🔑 Ta clé **${rarityFr[rarity]}** a été remboursée.`)
+        .setColor(emptyColor)
+        .setFooter(await getLoomixFooter(guildId));
+
+      // Image vide avec fallback
+      const emptyImage = config.image_empty || defaults.image_empty;
+      if (emptyImage) {
+        emptyEmbed.setImage(emptyImage);
+      }
+
+      const navRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('profile_mysterybox').setLabel('Réessayer').setEmoji('📦').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('profile_overview').setLabel('Profil').setEmoji('🏠').setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ embeds: [emptyEmbed], components: [navRow] });
+    }
+
+    console.log(`🎲 [RARITY BOX] Contenu rollé: ${content.type} (ID: ${content.id})`);
+
+    // 7. Logger dans give_logs avec la rareté finale
+    await db.query(`
+      INSERT INTO give_logs (guild_id, give_type, item_id, mystery_box_rarity, winner_id, winner_username, claimed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `, [guildId, content.type, content.id, finalRarity, interaction.user.id, interaction.user.username]);
+
+    // 8. Révéler le contenu selon le type (utilise finalRarity)
+    switch (content.type) {
+      case 'collectible':
+        await this.revealRarityCollectible(interaction, content, player, finalRarity, config);
+        break;
+
+      case 'super_bonus':
+        // Utiliser le reveal existant mais avec source différente
+        await this.revealRaritySuperBonus(interaction, content.id, player, finalRarity, config);
+        break;
+
+      default:
+        console.error(`❌ [RARITY BOX] Type inconnu: ${content.type}`);
+    }
+
+    // 9. Badge tracking - Mystery Box Opened (avec rareté pour badges spécifiques)
+    try {
+      await badgeHandler.onMysteryBoxOpenedWithRarity(guildId, player.id, finalRarity, interaction.client);
+      console.log(`🏆 [RARITY BOX] Badge tracking appelé pour player ${player.id} (rarity: ${finalRarity})`);
+    } catch (error) {
+      console.error('🔴 [RARITY BOX] Erreur tracking badge:', error);
+    }
+
+    // 10. Badge tracking - Win Streak (mystery boxes sans piège)
+    try {
+      await badgeHandler.onWinStreak(guildId, player.id, null, interaction.client);
+    } catch (error) {
+      console.error('🔴 [RARITY BOX] Erreur tracking win streak:', error);
+    }
+  }
+
+  /**
+   * 🎬 Animation d'ouverture séquencée
+   * Utilise TOUTES les configurations personnalisées avec fallbacks par rareté
+   */
+  async showRarityBoxAnimation(interaction, config, rarity, branding) {
+    // Utiliser la constante globale RARITY_DEFAULTS
+    const defaults = RARITY_DEFAULTS[rarity] || RARITY_DEFAULTS.common;
+
+    // Récupérer les valeurs configurées ou utiliser les fallbacks
+    const boxEmoji = config.emoji || defaults.emoji;
+    const boxColor = config.color || defaults.color;
+    const boxTitle = config.text_title || defaults.text_title;
+    const boxDescription = config.text_description || defaults.text_description;
+    const textOpening = config.text_opening || defaults.text_opening;
+
+    // Images avec fallback (4 phases)
+    const closedImage = config.image_closed || defaults.image_closed;
+    const openingImage = config.image_opening || defaults.image_opening;
+    const openedImage = config.image_opened || defaults.image_opened;
+
+    // Phase 1: Box fermée (0%)
+    const closedEmbed = new EmbedBuilder()
+      .setTitle(boxTitle)
+      .setDescription(
+        `╔═══════════════════════════════════╗\n` +
+        `║       📦 **BOX FERMÉE** 📦         ║\n` +
+        `╚═══════════════════════════════════╝\n\n` +
+        `*${boxDescription}*\n\n` +
+        `🔒 Préparation de l'ouverture...\n\n` +
+        `▱▱▱▱▱▱▱▱▱▱ 0%`
+      )
+      .setColor(boxColor)
+      .setFooter(await getLoomixFooter(interaction.guildId));
+
+    if (closedImage) {
+      closedEmbed.setImage(closedImage);
+    }
+
+    await interaction.editReply({
+      embeds: [closedEmbed],
+      components: []
+    });
+
+    // Pause phase fermée
+    const animDuration = Math.min(config.animation_duration || 3000, 4500); // Max 4.5 secondes
+    await new Promise(resolve => setTimeout(resolve, animDuration / 3));
+
+    // Phase 2: Ouverture en cours (50%)
+    const openingEmbed = new EmbedBuilder()
+      .setTitle(boxTitle)
+      .setDescription(
+        `╔═══════════════════════════════════╗\n` +
+        `║     ${boxEmoji} **OUVERTURE EN COURS** ${boxEmoji}     ║\n` +
+        `╚═══════════════════════════════════╝\n\n` +
+        `*${boxDescription}*\n\n` +
+        `${textOpening}\n\n` +
+        `🔮 Que va-t-elle contenir ?\n\n` +
+        `▰▰▰▰▰▱▱▱▱▱ 50%`
+      )
+      .setColor(boxColor)
+      .setFooter(await getLoomixFooter(interaction.guildId));
+
+    if (openingImage) {
+      openingEmbed.setImage(openingImage);
+    } else if (closedImage) {
+      openingEmbed.setImage(closedImage);
+    }
+
+    await interaction.editReply({
+      embeds: [openingEmbed],
+      components: []
+    });
+
+    // Pause phase ouverture
+    await new Promise(resolve => setTimeout(resolve, animDuration / 3));
+
+    // Phase 3: Box ouverte (100%) - révélation imminente
+    const suspenseEmbed = new EmbedBuilder()
+      .setTitle(boxTitle)
+      .setDescription(
+        `╔═══════════════════════════════════╗\n` +
+        `║      🌟 **BOX OUVERTE** 🌟         ║\n` +
+        `╚═══════════════════════════════════╝\n\n` +
+        `✨ Révélation du contenu... ✨\n\n` +
+        `▰▰▰▰▰▰▰▰▰▰ 100%`
+      )
+      .setColor(boxColor);
+
+    // Phase 100% utilise image_opened (box ouverte avec contenu visible)
+    if (openedImage) {
+      suspenseEmbed.setImage(openedImage);
+    } else if (openingImage) {
+      suspenseEmbed.setImage(openingImage);
+    }
+
+    await interaction.editReply({
+      embeds: [suspenseEmbed],
+      components: []
+    });
+
+    // Dernière pause avant révélation
+    await new Promise(resolve => setTimeout(resolve, animDuration / 3));
+  }
+
+  /**
+   * 🎲 Roller le contenu d'une Mystery Box par rareté
+   * - 90% Collectible (de la rareté demandée ou upgrade)
+   * - 10% Super Bonus (si configuré)
+   * - PAS de missions ni pièges
+   */
+  async rollRarityContent(guildId, themeId, rarity, mbConfig, themeConfig, userId) {
+    console.log(`🎲 [RARITY BOX] Rolling content pour rareté ${rarity}...`);
+
+    // Probabilités configurées ou défaut
+    const probCollectible = mbConfig.prob_collectible || 90;
+    const probSuperBonus = mbConfig.prob_super_bonus || 10;
+    const total = probCollectible + probSuperBonus;
+
+    // Vérifier disponibilité avant le roll
+    const hasCollectibles = await this.hasAvailableCollectibles(guildId, themeId, rarity, mbConfig);
+    const hasSuperBonuses = await this.hasAvailableSuperBonuses(guildId, themeConfig, mbConfig);
+
+    console.log(`📦 [RARITY BOX] Disponibilité - Collectibles: ${hasCollectibles}, Super Bonus: ${hasSuperBonuses}`);
+
+    // Ajuster les probabilités si un type n'est pas disponible
+    let adjustedProbCollectible = hasCollectibles ? probCollectible : 0;
+    let adjustedProbSuperBonus = hasSuperBonuses ? probSuperBonus : 0;
+    const adjustedTotal = adjustedProbCollectible + adjustedProbSuperBonus;
+
+    if (adjustedTotal === 0) {
+      console.error(`❌ [RARITY BOX] Aucun contenu disponible pour rareté ${rarity}`);
+      return null;
+    }
+
+    // Roll avec probabilités ajustées
+    const rand = Math.random() * adjustedTotal;
+    console.log(`🎲 [RARITY BOX] Roll: ${rand.toFixed(2)} / ${adjustedTotal} (collectible: ${adjustedProbCollectible}, super_bonus: ${adjustedProbSuperBonus})`);
+
+    if (rand < adjustedProbCollectible) {
+      // COLLECTIBLE
+      return await this.rollRarityCollectible(guildId, themeId, rarity, mbConfig, themeConfig, userId);
+    } else {
+      // SUPER BONUS - respecter la rareté de la box
+      // Box par défaut: seulement même rareté
+      // Box custom: même rareté ou supérieur
+      const isDefaultBox = mbConfig.is_default !== false;  // true par défaut si non défini
+      console.log(`🎁 [RARITY BOX] Sélection super bonus: box ${rarity}, isDefault: ${isDefaultBox}`);
+
+      const bonus = await this.selectSuperBonus(guildId, themeConfig, rarity, isDefaultBox);
+      if (bonus) {
+        return { type: 'super_bonus', id: bonus.id, item: bonus };
+      } else {
+        // Fallback vers collectible si pas de super bonus dispo (sécurité)
+        console.log(`⚠️ [RARITY BOX] Fallback sécurité vers collectible`);
+        return await this.rollRarityCollectible(guildId, themeId, rarity, mbConfig, themeConfig, userId);
+      }
+    }
+  }
+
+  /**
+   * 🔍 Vérifier si des collectibles sont disponibles pour cette box
+   */
+  async hasAvailableCollectibles(guildId, themeId, rarity, mbConfig) {
+    // Si specific_collectibles est défini et non vide, utiliser cette liste
+    // Gérer les deux cas: array direct (JSONB) ou string JSON
+    let specificList = mbConfig.specific_collectibles;
+    if (specificList && typeof specificList === 'string') {
+      try { specificList = JSON.parse(specificList); } catch (e) { specificList = null; }
+    }
+    if (specificList && Array.isArray(specificList) && specificList.length > 0) {
+      return true;
+    }
+
+    // Sinon, vérifier s'il y a des collectibles de cette rareté dans le thème
+    const count = await db.queryOne(`
+      SELECT COUNT(*) as cnt FROM collectibles
+      WHERE guild_id = $1 AND theme_id = $2 AND rarity = $3
+    `, [guildId, themeId, rarity]);
+
+    return count && parseInt(count.cnt) > 0;
+  }
+
+  /**
+   * 🔍 Vérifier si des super bonus sont disponibles pour cette box
+   * Respecte la contrainte de rareté:
+   * - Box par défaut: seulement même rareté
+   * - Box custom: même rareté ou supérieur
+   */
+  async hasAvailableSuperBonuses(guildId, themeConfig, mbConfig) {
+    // Si specific_super_bonuses est défini et non vide, utiliser cette liste
+    // Gérer les deux cas: array direct (JSONB) ou string JSON
+    let specificList = mbConfig.specific_super_bonuses;
+    if (specificList && typeof specificList === 'string') {
+      try { specificList = JSON.parse(specificList); } catch (e) { specificList = null; }
+    }
+    if (specificList && Array.isArray(specificList) && specificList.length > 0) {
+      return true;
+    }
+
+    // Sinon, vérifier s'il y a des super bonus disponibles selon la rareté
+    const boxRarity = mbConfig.rarity;
+    const isDefaultBox = mbConfig.is_default !== false;
+
+    // Hiérarchie des raretés
+    const RARITY_HIERARCHY = { common: 0, rare: 1, epic: 2, legendary: 3 };
+    const RARITY_ORDER = ['common', 'rare', 'epic', 'legendary'];
+
+    let rarityFilter = '';
+    let rarityParams = [guildId, themeConfig?.theme_id || themeConfig?.id];
+
+    if (boxRarity) {
+      if (isDefaultBox) {
+        // Box par défaut: seulement même rareté
+        rarityFilter = ' AND rarity = $3';
+        rarityParams.push(boxRarity);
+      } else {
+        // Box custom: même rareté ou supérieur
+        const minLevel = RARITY_HIERARCHY[boxRarity];
+        const eligibleRarities = RARITY_ORDER.filter(r => RARITY_HIERARCHY[r] >= minLevel);
+        rarityFilter = ` AND rarity IN (${eligibleRarities.map((_, i) => `$${i + 3}`).join(', ')})`;
+        rarityParams.push(...eligibleRarities);
+      }
+    }
+
+    const count = await db.queryOne(`
+      SELECT COUNT(*) as cnt FROM super_bonuses
+      WHERE guild_id = $1 AND (theme_id IS NULL OR theme_id = $2) AND is_enabled = true${rarityFilter}
+    `, rarityParams);
+
+    console.log(`🔍 [RARITY CHECK] Super bonus dispo pour ${boxRarity} (isDefault: ${isDefaultBox}): ${count?.cnt || 0}`);
+    return count && parseInt(count.cnt) > 0;
+  }
+
+  /**
+   * 🎭 Roller un collectible pour mystery box par rareté
+   * NOTE: L'upgrade step-by-step est maintenant fait dans handleRarityBoxOpen
+   * Cette fonction reçoit directement la rareté finale et sélectionne un collectible
+   */
+  async rollRarityCollectible(guildId, themeId, rarity, mbConfig, themeConfig, userId) {
+    console.log(`🎭 [RARITY BOX] Recherche collectible de rareté: ${rarity}`);
+
+    // L'upgrade est déjà fait, on cherche directement les collectibles de cette rareté
+    const collectibles = await db.queryAll(`
+      SELECT * FROM collectibles
+      WHERE guild_id = $1 AND theme_id = $2 AND rarity = $3
+    `, [guildId, themeId, rarity]);
+
+    // Fallback si pas de collectibles de cette rareté
+    if (!collectibles || collectibles.length === 0) {
+      console.log(`⚠️ [RARITY BOX] Pas de collectibles ${rarity}, recherche fallback...`);
+
+      // Essayer les raretés inférieures dans l'ordre
+      const rarityOrder = ['legendary', 'epic', 'rare', 'common'];
+      const currentIndex = rarityOrder.indexOf(rarity);
+
+      for (let i = currentIndex + 1; i < rarityOrder.length; i++) {
+        const fallbackRarity = rarityOrder[i];
+        const fallbackCollectibles = await db.queryAll(`
+          SELECT * FROM collectibles
+          WHERE guild_id = $1 AND theme_id = $2 AND rarity = $3
+        `, [guildId, themeId, fallbackRarity]);
+
+        if (fallbackCollectibles && fallbackCollectibles.length > 0) {
+          const selected = fallbackCollectibles[Math.floor(Math.random() * fallbackCollectibles.length)];
+          console.log(`🔄 [RARITY BOX] Fallback vers ${fallbackRarity}: ${selected.name}`);
+          return { type: 'collectible', id: selected.id, item: selected, finalRarity: fallbackRarity };
+        }
+      }
+
+      // Dernier recours: n'importe quel collectible du thème
+      const anyCollectibles = await db.getCollectiblesByTheme(guildId, themeId);
+      if (!anyCollectibles || anyCollectibles.length === 0) {
+        console.error(`❌ [RARITY BOX] Aucun collectible disponible pour le thème ${themeId}`);
+        return null;
+      }
+      const selected = anyCollectibles[Math.floor(Math.random() * anyCollectibles.length)];
+      return { type: 'collectible', id: selected.id, item: selected, finalRarity: selected.rarity };
+    }
+
+    // Sélectionner un collectible aléatoire de la rareté demandée
+    const selected = collectibles[Math.floor(Math.random() * collectibles.length)];
+
+    console.log(`🎭 [RARITY BOX] Collectible sélectionné: ${selected.name} (${rarity})`);
+
+    return {
+      type: 'collectible',
+      id: selected.id,
+      item: selected,
+      finalRarity: rarity
+    };
+  }
+
+  /**
+   * 🎭 Révéler un collectible de Mystery Box par rareté
+   * - Gère doublons, Jackpot x2, progression, badges
+   */
+  async revealRarityCollectible(interaction, content, player, rarity, mbConfig) {
+    const guildId = interaction.guildId;
+    const collectible = content.item;
+    const wasUpgraded = content.wasUpgraded;
+    const finalRarity = content.finalRarity;
+
+    const [branding, theme] = await Promise.all([
+      db.getGuildBranding(guildId),
+      db.getActiveTheme(guildId)
+    ]);
+
+    const themeMessages = await db.getThemeMessages(guildId, theme.id);
+
+    // 💰 JACKPOT X2 - Vérifier si le joueur a le bonus actif
+    const jackpotBonus = await superBonusHandler.hasMultiplierBonus(guildId, interaction.user.id, 'collectible');
+    let bonusCollectible = null;
+    let bonusIsDuplicate = false;
+
+    if (jackpotBonus) {
+      console.log(`💰 [JACKPOT X2] Bonus actif pour ${interaction.user.tag}`);
+
+      // Récupérer un collectible différent
+      const allCollectibles = await db.getCollectiblesByTheme(guildId, theme.id);
+      const availableCollectibles = allCollectibles.filter(c => c.id !== collectible.id);
+
+      if (availableCollectibles.length > 0) {
+        bonusCollectible = availableCollectibles[Math.floor(Math.random() * availableCollectibles.length)];
+        bonusIsDuplicate = await db.hasCollectible(guildId, player.id, bonusCollectible.id);
+        console.log(`💰 [JACKPOT X2] Collectible bonus: ${bonusCollectible.name}`);
+      }
+    }
+
+    // Vérifier doublon du collectible principal
+    const alreadyHas = await db.hasCollectible(guildId, player.id, collectible.id);
+
+    // Source pour le logging (inclut la rareté de la clé utilisée)
+    const source = `mystery_box_${rarity}`;
+
+    // Variables progression
+    let progress = null;
+
+    if (alreadyHas) {
+      console.log(`⚠️ [RARITY BOX] Doublon: ${collectible.name}`);
+
+      // Si Jackpot x2 actif, ajouter le bonus malgré le doublon principal
+      if (bonusCollectible) {
+        await db.addCollectible(guildId, player.id, bonusCollectible.id, source);
+        progress = await db.incrementProgress(guildId, player.id, theme.id);
+
+        await superBonusHandler.consumeBonusCharge(guildId, interaction.user.id, jackpotBonus.id);
+        console.log(`💰 [JACKPOT X2] Bonus collectible ajouté malgré doublon principal`);
+      }
+
+      // Embed doublon - utiliser config box ou fallbacks par rareté
+      const defaults = RARITY_DEFAULTS[rarity] || RARITY_DEFAULTS.common;
+      const boxEmoji = mbConfig?.emoji || defaults.emoji;
+      const boxColor = mbConfig?.color || defaults.color;
+
+      let duplicateDesc = themeMessages?.duplicate_collectible || `Tu as déjà **{name}** dans ta collection !`;
+      duplicateDesc = duplicateDesc.replace(/\{name\}/g, collectible.name);
+
+      if (bonusCollectible) {
+        duplicateDesc += `\n\n💰 **Mais grâce au Jackpot x2, tu as reçu un collectible bonus !**`;
+      }
+
+      const bonusDefaults = bonusCollectible ? (RARITY_DEFAULTS[bonusCollectible.rarity] || RARITY_DEFAULTS.common) : null;
+      const embed = new EmbedBuilder()
+        .setTitle(bonusCollectible ? '🎉 Félicitations !' : '⚠️ Doublon !')
+        .setDescription(duplicateDesc)
+        .setColor(bonusCollectible ? (bonusDefaults?.color || boxColor) : branding.secondary_color)
+        .setFooter(await getLoomixFooter(guildId));
+
+      if (collectible.image_url) embed.setThumbnail(collectible.image_url);
+
+      // Image de la box vide pour les doublons (final)
+      const duplicateEmptyImage = mbConfig?.image_empty || defaults.image_empty;
+      if (duplicateEmptyImage) {
+        embed.setImage(duplicateEmptyImage);
+      }
+
+      if (bonusCollectible) {
+        embed.addFields({
+          name: `💰 ${bonusDefaults?.emoji || '🎁'} ${bonusCollectible.name} *(BONUS${bonusIsDuplicate ? ' - ⚠️ DOUBLON' : ''})*`,
+          value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n┗━ Progression: **${progress?.collected_count || '?'}/${theme.required_items}**`,
+          inline: false
+        });
+        // Si bonus collectible, montrer son image à la place de la box ouverte
+        if (bonusCollectible.image_url) embed.setImage(bonusCollectible.image_url);
+      }
+
+      // Boutons de navigation
+      const navRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('profile_mysterybox')
+          .setLabel('Ouvrir un autre')
+          .setEmoji('📦')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('profile_overview')
+          .setLabel('Profil')
+          .setEmoji('🏠')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({ embeds: [embed], components: [navRow] });
+    }
+
+    // Pas de doublon: ajouter le collectible principal
+    await db.addCollectible(guildId, player.id, collectible.id, source);
+
+    // Si Jackpot x2, ajouter aussi le bonus AVANT d'incrémenter la progression
+    if (bonusCollectible) {
+      await db.addCollectible(guildId, player.id, bonusCollectible.id, source);
+      await superBonusHandler.consumeBonusCharge(guildId, interaction.user.id, jackpotBonus.id);
+      console.log(`💰 [JACKPOT X2] 2 collectibles ajoutés!`);
+    }
+
+    // Incrémenter la progression APRÈS avoir ajouté tous les collectibles
+    progress = await db.incrementProgress(guildId, player.id, theme.id);
+
+    // Créer l'embed de succès - utiliser config box ou fallbacks
+    const successDefaults = RARITY_DEFAULTS[finalRarity] || RARITY_DEFAULTS.common;
+    const boxEmoji = mbConfig?.emoji || successDefaults.emoji;
+    const boxColor = mbConfig?.color || successDefaults.color;
+    const textSuccess = mbConfig?.text_success || successDefaults.text_success;
+
+    let title = `${boxEmoji} Collectible Obtenu !`;
+    if (wasUpgraded) {
+      title = `🎰 UPGRADE! ${boxEmoji} Collectible Obtenu !`;
+    }
+    if (bonusCollectible) {
+      title = `💰 JACKPOT X2! ${boxEmoji} Collectibles Obtenus !`;
+    }
+
+    // Utiliser text_success de la config ou fallback vers collectible.reveal_message
+    let description = collectible.reveal_message || themeMessages?.collectible_obtained ||
+      textSuccess || `Félicitations ! Tu as trouvé **{name}** ! ({count}/{total})`;
+    description = description
+      .replace(/\{name\}/g, collectible.name)
+      .replace(/\{count\}/g, progress?.collected_count || '?')
+      .replace(/\{total\}/g, theme.required_items || '?');
+
+    if (wasUpgraded) {
+      description = `🎰 **UPGRADE CHANCEUX !**\n(${rarity} → ${finalRarity})\n\n` + description;
+    }
+
+    if (bonusCollectible) {
+      description += `\n\n💰 **JACKPOT X2 ACTIVÉ !**\nTu as également reçu **${bonusCollectible.name}** (${bonusCollectible.rarity}) en bonus !`;
+      if (bonusIsDuplicate) {
+        description += ` ⚠️ **DOUBLON**`;
+      }
+    }
+
+    const collectibleDefaults = RARITY_DEFAULTS[collectible.rarity] || RARITY_DEFAULTS.common;
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(description)
+      .setColor(boxColor)
+      .addFields({
+        name: `${collectibleDefaults.emoji} ${collectible.name}`,
+        value: `┗━ Rareté: **${collectible.rarity.toUpperCase()}**\n┗━ Progression: **${progress.collected_count}/${theme.required_items}**`,
+        inline: false
+      })
+      .setFooter(await getLoomixFooter(guildId))
+      .setTimestamp();
+
+    // Thumbnail du collectible si disponible
+    if (collectible.image_url) embed.setThumbnail(collectible.image_url);
+
+    // Image de la box vide (final) - après révélation du contenu
+    const emptyImage = mbConfig?.image_empty || successDefaults.image_empty;
+    if (emptyImage) {
+      embed.setImage(emptyImage);
+    } else if (bonusCollectible) {
+      const bonusRarityDefaults = RARITY_DEFAULTS[bonusCollectible.rarity] || RARITY_DEFAULTS.common;
+      embed.addFields({
+        name: `💰 ${bonusRarityDefaults.emoji} ${bonusCollectible.name} *(BONUS)*`,
+        value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**`,
+        inline: false
+      });
+      if (bonusCollectible.image_url) embed.setImage(bonusCollectible.image_url);
+    } else if (collectible.image_url) {
+      embed.setImage(collectible.image_url);
+    }
+
+    // Boutons de navigation
+    const navRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('profile_mysterybox')
+        .setLabel('Ouvrir un autre')
+        .setEmoji('📦')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('profile_overview')
+        .setLabel('Profil')
+        .setEmoji('🏠')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.editReply({ embeds: [embed], components: [navRow] });
+
+    // Annonce si légendaire
+    if (finalRarity === 'legendary') {
+      await announcements.announceLegendaryCollectible(
+        interaction.client,
+        guildId,
+        interaction.user.username,
+        collectible.name,
+        collectible.image_url
+      );
+    }
+
+    // Vérifier collection complète
+    if (progress.collected_count >= theme.required_items && !progress.is_completed) {
+      await this.handleCollectionComplete(interaction, player, collectible);
+    }
+
+    // Badge tracking - Collectible Found (avec rareté)
+    try {
+      await badgeHandler.onCollectibleFoundWithDetails(guildId, player.id, collectible.rarity, null, interaction.client);
+    } catch (error) {
+      console.error('🔴 [RARITY BOX] Erreur tracking badge collectible:', error);
+    }
+
+    // Progression Roles
+    try {
+      const newProgressionRole = await progressionRoleHandler.checkAndAssignProgressionRoles(
+        interaction.guild,
+        interaction.user.id,
+        guildId,
+        theme.id,
+        progress.collected_count
+      );
+      if (newProgressionRole) {
+        await interaction.followUp({
+          content: `🎉 **Félicitations !** Tu as atteint **${newProgressionRole.percentage}%** de la collection et obtenu le rôle **${newProgressionRole.name}** !`,
+          flags: 64
+        });
+      }
+    } catch (error) {
+      console.error('🔴 [RARITY BOX] Erreur progression roles:', error);
+    }
+  }
+
+  /**
+   * ✨ Révéler un super bonus de Mystery Box par rareté
+   */
+  async revealRaritySuperBonus(interaction, bonusId, player, rarity, mbConfig) {
+    const auditLogger = require('../utils/auditLogger');
+    const guildId = interaction.guildId;
+
+    const [bonus, branding] = await Promise.all([
+      db.queryOne(`SELECT * FROM super_bonuses WHERE id = $1 AND guild_id = $2`, [bonusId, guildId]),
+      db.getGuildBranding(guildId)
+    ]);
+
+    if (!bonus) {
+      return interaction.editReply({
+        content: '❌ Super bonus introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Vérifier si le joueur a déjà ce bonus actif (pour cumul)
+    const existingBonus = await db.queryOne(`
+      SELECT * FROM player_active_bonuses
+      WHERE user_id = $1 AND guild_id = $2 AND bonus_id = $3
+      AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())
+    `, [interaction.user.id, guildId, bonusId]);
+
+    if (existingBonus) {
+      // CUMUL - Même logique que revealSuperBonus classique
+      if (bonus.duration_type === 'charges') {
+        const newCharges = (existingBonus.remaining_charges || 0) + bonus.duration_value;
+        await db.query(`UPDATE player_active_bonuses SET remaining_charges = $1 WHERE id = $2`, [newCharges, existingBonus.id]);
+
+        const embed = new EmbedBuilder()
+          .setTitle(`✨ ${bonus.icon} Bonus cumulé !`)
+          .setDescription(`**${bonus.name}** a été cumulé !\n\n🔢 Charges totales: **${newCharges}**`)
+          .setColor(bonus.color || branding.secondary_color)
+          .setFooter(await getLoomixFooter(guildId));
+
+        const navRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('profile_mysterybox').setLabel('Ouvrir un autre').setEmoji('📦').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('profile_overview').setLabel('Profil').setEmoji('🏠').setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.editReply({ embeds: [embed], components: [navRow] });
+      }
+      // Autres types de cumul...
+    }
+
+    // Nouveau bonus - insérer
+    const isAutomatic = bonus.activation_mode === 'automatic';
+    let activated_at = isAutomatic ? new Date() : null;
+    let expires_at = null;
+    let remaining_charges = null;
+
+    if (isAutomatic && bonus.duration_type === 'temporary') {
+      expires_at = new Date(activated_at.getTime() + (bonus.duration_value * 1000));
+    } else if (bonus.duration_type === 'charges') {
+      remaining_charges = bonus.duration_value;
+    }
+
+    await db.query(`
+      INSERT INTO player_active_bonuses (user_id, guild_id, bonus_id, activated_at, expires_at, remaining_charges, is_active, obtained_from)
+      VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+    `, [interaction.user.id, guildId, bonusId, activated_at, expires_at, remaining_charges, `mystery_box_${rarity}`]);
+
+    // Logger
+    await auditLogger.logBonusGranted(guildId, interaction.user.id, bonus.name, {
+      obtained_from: `mystery_box_${rarity}`,
+      bonus_id: bonus.bonus_id,
+      rarity: bonus.rarity,
+      duration_type: bonus.duration_type
+    });
+
+    // Créer l'embed - utiliser config box ou fallbacks
+    const boxDefaults = RARITY_DEFAULTS[rarity] || RARITY_DEFAULTS.common;
+    const boxColor = mbConfig?.color || boxDefaults.color;
+    const bonusRarityDefaults = RARITY_DEFAULTS[bonus.rarity] || RARITY_DEFAULTS.common;
+
+    let description = `${bonus.description}\n\n`;
+    if (isAutomatic) {
+      description += `✨ **Bonus activé automatiquement !**\n`;
+      if (bonus.duration_type === 'charges') {
+        description += `🔢 Charges: **${bonus.duration_value}**\n`;
+      } else if (bonus.duration_type === 'temporary') {
+        const hours = Math.floor(bonus.duration_value / 3600);
+        description += `⏱️ Durée: **${hours}h**\n`;
+      }
+    } else {
+      description += `📱 **Activation manuelle via /profile**\n`;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${bonus.icon} Super Bonus Obtenu !`)
+      .setDescription(description)
+      .setColor(bonus.color || boxColor)
+      .addFields({ name: 'Rareté', value: `${bonusRarityDefaults.emoji} ${bonus.rarity.toUpperCase()}`, inline: true })
+      .setFooter(await getLoomixFooter(guildId));
+
+    // Image de récompense (image_opened si configurée, sinon fallback)
+    const openedImage = mbConfig?.image_opened || boxDefaults.image_opened;
+    if (openedImage) {
+      embed.setImage(openedImage);
+    } else if (bonus.image_url) {
+      embed.setThumbnail(bonus.image_url);
+    }
+
+    const navRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('profile_mysterybox').setLabel('Ouvrir un autre').setEmoji('📦').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('profile_overview').setLabel('Profil').setEmoji('🏠').setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.editReply({ embeds: [embed], components: [navRow] });
+
+    // Annonce si légendaire
+    if (bonus.rarity === 'legendary') {
+      await announcements.announceSuperBonus(
+        interaction.client,
+        guildId,
+        interaction.user.username,
+        bonus.name,
+        bonus.icon,
+        bonus.image_url
+      );
+    }
+
+    console.log(`✅ [RARITY BOX] Super bonus ${bonus.name} attribué à ${interaction.user.username}`);
+  }
+
+  /**
+   * 🎉 Révéler plusieurs récompenses d'une mystery box
+   */
+  async revealMultipleRewards(interaction, results, player, boxConfig) {
+    const guildId = interaction.guildId;
+
+    // Constantes UI
+    const rarityEmojis = {
+      legendary: '🌟',
+      epic: '💎',
+      rare: '💙',
+      common: '⚪'
+    };
+
+    const rarityColors = {
+      legendary: '#FFD700',
+      epic: '#9B59B6',
+      rare: '#3498DB',
+      common: '#95A5A6'
+    };
+
+    // Traiter chaque récompense et construire la liste
+    const rewardsList = [];
+    let highestRarity = 'common';
+    const rarityOrder = ['common', 'rare', 'epic', 'legendary'];
+
+    for (const result of results) {
+      if (result.type === 'collectible') {
+        // Ajouter le collectible avec le système de niveaux
+        const addResult = await db.addCollectibleWithLevels(
+          guildId,
+          player.id,
+          result.item.id,
+          'mystery_box'
+        );
+
+        const emoji = rarityEmojis[result.item.rarity] || '⚪';
+        let text = `${emoji} **${result.item.name}**`;
+
+        if (addResult.isNew) {
+          text += ' *(NOUVEAU!)*';
+        } else if (addResult.leveledUp) {
+          text += ` *(Niveau ${addResult.newLevel}! +${addResult.loomixEarned || 0} Loomix)*`;
+        } else {
+          text += ` *(+${addResult.xpGained || 10} XP)*`;
+        }
+
+        rewardsList.push(text);
+
+        // Track badges pour chaque collectible (nouvelle signature)
+        try {
+          await badgeHandler.onCollectibleFoundWithDetails(guildId, player.id, result.item.rarity, addResult.mintNumber || null, interaction.client);
+          // Si level up, tracker l'évolution
+          if (addResult.leveledUp && addResult.newLevel >= 2) {
+            await badgeHandler.onCollectibleEvolution(guildId, player.id, addResult.newLevel, interaction.client);
+          }
+        } catch (error) {
+          console.error('🔴 [MULTI BOX] Erreur tracking badge collectible:', error);
+        }
+
+      } else if (result.type === 'super_bonus') {
+        // Activer le super bonus
+        await superBonusHandler.activateBonus(guildId, interaction.user.id, result.item.bonus_id);
+
+        const emoji = rarityEmojis[result.item.rarity] || '✨';
+        rewardsList.push(`${emoji} **${result.item.name}** *(Super Bonus ${result.item.icon || '✨'})*`);
+
+        // Track badges pour super bonus
+        try {
+          await badgeHandler.onSuperBonusReceived(guildId, player.id, result.item.effect_type || result.item.name, interaction.client);
+        } catch (error) {
+          console.error('🔴 [MULTI BOX] Erreur tracking badge super bonus:', error);
+        }
+      }
+
+      // Déterminer la plus haute rareté
+      if (rarityOrder.indexOf(result.item.rarity) > rarityOrder.indexOf(highestRarity)) {
+        highestRarity = result.item.rarity;
+      }
+    }
+
+    // Construire l'embed de résumé
+    const embed = new EmbedBuilder()
+      .setTitle(`${boxConfig.emoji || '📦'} ${boxConfig.name} - Ouverture !`)
+      .setDescription(
+        `**${interaction.user.username}** a ouvert une **${boxConfig.name}** et obtenu:\n\n` +
+        rewardsList.map((r, i) => `${i + 1}. ${r}`).join('\n')
+      )
+      .setColor(rarityColors[highestRarity])
+      .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
+      .setFooter(await getLoomixFooter(guildId))
+      .setTimestamp();
+
+    // Incrémenter la progression et vérifier la complétion
+    const theme = await db.getActiveTheme(guildId);
+    const progress = await db.incrementProgress(guildId, player.id, theme.id);
+
+    if (progress && progress.collected >= progress.total) {
+      embed.addFields({
+        name: '🏆 COLLECTION COMPLÈTE !',
+        value: '🎉 Félicitations ! Tu as collecté TOUS les items !',
+        inline: false
+      });
+
+      // Attribution des rôles de progression
+      await progressionRoleHandler.checkAndAssignRoles(interaction, guildId, player.id, theme.id);
+    }
+
+    await interaction.editReply({
+      content: null,
+      embeds: [embed],
+      components: []
+    });
+
+    // Annonces pour les collectibles importants (epic/legendary)
+    for (const result of results) {
+      if (result.type === 'collectible' && ['epic', 'legendary'].includes(result.item.rarity)) {
+        await announcements.send(guildId, 'collectible_found', {
+          player: interaction.user,
+          collectible: result.item,
+          progress: progress
+        });
+      }
     }
   }
 }

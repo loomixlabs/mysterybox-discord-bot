@@ -61,7 +61,13 @@ class ThemeImporter {
       missions: 0,
       keywords: 0,
       questions: 0,
-      announcementTemplates: 0
+      announcementTemplates: 0,
+      // v2.0 - Nouvelles tables
+      dailyRewards: 0,
+      dailyCatchup: false,
+      mysteryBoxConfig: 0,
+      progressionRoles: 0,
+      superBonuses: 0
     };
     this.errors = [];
   }
@@ -161,18 +167,47 @@ class ThemeImporter {
         await this.createAnnouncementTemplates(themeData.announcement_templates);
       }
 
-      // 7. Créer le rôle Discord si demandé
+      // ═══════════════════════════════════════════════════════════
+      // NOUVELLES TABLES v2.0
+      // ═══════════════════════════════════════════════════════════
+
+      // 7. Importer daily_rewards_config (calendrier 28 jours)
+      if (themeData.daily_rewards_config && themeData.daily_rewards_config.length > 0) {
+        await this.createDailyRewardsConfig(themeId, themeData.daily_rewards_config);
+      }
+
+      // 8. Importer daily_catchup_config
+      if (themeData.daily_catchup_config) {
+        await this.createDailyCatchupConfig(themeId, themeData.daily_catchup_config);
+      }
+
+      // 9. Importer mystery_box_config (par rareté)
+      if (themeData.mystery_box_config && themeData.mystery_box_config.length > 0) {
+        await this.createMysteryBoxConfig(themeId, themeData.mystery_box_config);
+      }
+
+      // 10. Importer progression_roles (table séparée)
+      if (themeData.progression_roles && themeData.progression_roles.length > 0) {
+        await this.createProgressionRoles(themeId, themeData.progression_roles);
+      }
+
+      // 11. Importer super_bonuses liés au thème
+      if (themeData.super_bonuses && themeData.super_bonuses.length > 0) {
+        await this.createSuperBonuses(themeId, themeData.super_bonuses);
+      }
+
+      // 12. Créer le rôle Discord si demandé
       let roleCreated = null;
       if (autoCreateRoles && guild) {
         roleCreated = await this.createDiscordRole(guild, themeData.theme);
       }
 
-      // 8. Installer les super bonus si demandé
-      if (autoInstallSuperBonuses) {
+      // 13. Installer les super bonus par défaut si demandé (et si aucun importé)
+      if (autoInstallSuperBonuses && this.importedData.superBonuses === 0) {
         await this.installSuperBonuses();
       }
 
-      // 9. Activer le thème si demandé
+      // 14. Activer le thème si demandé
       if (activateAfterImport) {
         await this.activateTheme(themeId);
       }
@@ -184,6 +219,11 @@ class ThemeImporter {
       console.log(`   - Mots-clés: ${this.importedData.keywords}`);
       console.log(`   - Questions: ${this.importedData.questions}`);
       console.log(`   - Templates d'annonces: ${this.importedData.announcementTemplates}`);
+      console.log(`   - Daily Rewards: ${this.importedData.dailyRewards} jours`);
+      console.log(`   - Daily Catchup: ${this.importedData.dailyCatchup ? 'Oui' : 'Non'}`);
+      console.log(`   - Mystery Box Config: ${this.importedData.mysteryBoxConfig} raretés`);
+      console.log(`   - Progression Roles: ${this.importedData.progressionRoles}`);
+      console.log(`   - Super Bonuses: ${this.importedData.superBonuses}`);
 
       return {
         success: true,
@@ -812,6 +852,267 @@ class ThemeImporter {
       console.error(`   ⚠️  Erreur lors de l'activation du thème:`, error.message);
       this.errors.push(`Thème non activé: ${error.message}`);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOUVELLES MÉTHODES v2.0
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Crée les entrées daily_rewards_config (calendrier 28 jours)
+   */
+  async createDailyRewardsConfig(themeId, rewards) {
+    for (const reward of rewards) {
+      await db.query(`
+        INSERT INTO daily_rewards_config (
+          guild_id, theme_id, day_number, reward_type, reward_rarity, reward_amount,
+          reward_item_id, choice_options, display_name, display_emoji, display_description,
+          is_milestone, is_bonus_day, bonus_multiplier, animation_type, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+        ON CONFLICT (guild_id, theme_id, day_number) DO UPDATE SET
+          reward_type = EXCLUDED.reward_type,
+          reward_rarity = EXCLUDED.reward_rarity,
+          reward_amount = EXCLUDED.reward_amount,
+          reward_item_id = EXCLUDED.reward_item_id,
+          choice_options = EXCLUDED.choice_options,
+          display_name = EXCLUDED.display_name,
+          display_emoji = EXCLUDED.display_emoji,
+          display_description = EXCLUDED.display_description,
+          is_milestone = EXCLUDED.is_milestone,
+          is_bonus_day = EXCLUDED.is_bonus_day,
+          bonus_multiplier = EXCLUDED.bonus_multiplier,
+          animation_type = EXCLUDED.animation_type
+      `, [
+        this.guildId,
+        themeId,
+        reward.day_number,
+        reward.reward_type,
+        reward.reward_rarity || null,
+        reward.reward_amount || null,
+        reward.reward_item_id || null,
+        reward.choice_options ? JSON.stringify(reward.choice_options) : null,
+        reward.display_name || null,
+        reward.display_emoji || null,
+        reward.display_description || null,
+        reward.is_milestone || false,
+        reward.is_bonus_day || false,
+        reward.bonus_multiplier || null,
+        reward.animation_type || null
+      ]);
+
+      this.importedData.dailyRewards++;
+    }
+
+    console.log(`   ✅ ${this.importedData.dailyRewards} jour(s) de calendrier créé(s)`);
+  }
+
+  /**
+   * Crée l'entrée daily_catchup_config
+   */
+  async createDailyCatchupConfig(themeId, config) {
+    await db.query(`
+      INSERT INTO daily_catchup_config (
+        guild_id, theme_id, currency_type, base_price, price_increment,
+        price_multiplier, pricing_mode, max_price, max_catchup_days, enabled, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+      ON CONFLICT (guild_id, theme_id) DO UPDATE SET
+        currency_type = EXCLUDED.currency_type,
+        base_price = EXCLUDED.base_price,
+        price_increment = EXCLUDED.price_increment,
+        price_multiplier = EXCLUDED.price_multiplier,
+        pricing_mode = EXCLUDED.pricing_mode,
+        max_price = EXCLUDED.max_price,
+        max_catchup_days = EXCLUDED.max_catchup_days,
+        enabled = EXCLUDED.enabled
+    `, [
+      this.guildId,
+      themeId,
+      config.currency_type || 'loomix',
+      config.base_price || 100,
+      config.price_increment || 50,
+      config.price_multiplier || null,
+      config.pricing_mode || 'linear',
+      config.max_price || 500,
+      config.max_catchup_days || 7,
+      config.enabled !== false
+    ]);
+
+    this.importedData.dailyCatchup = true;
+    console.log(`   ✅ Configuration Daily Catchup créée`);
+  }
+
+  /**
+   * Crée les entrées mystery_box_config (par rareté)
+   */
+  async createMysteryBoxConfig(themeId, configs) {
+    for (const config of configs) {
+      await db.query(`
+        INSERT INTO mystery_box_config (
+          guild_id, theme_id, rarity, name, emoji, color, image_url,
+          prob_collectible, prob_super_bonus, guaranteed_min_rarity,
+          rarity_upgrade_rare, rarity_upgrade_epic, rarity_upgrade_legendary,
+          image_closed, image_opening, image_opened, image_empty,
+          text_title, text_description, text_opening, text_success, text_empty,
+          sound_open, animation_duration,
+          specific_collectibles, specific_super_bonuses, specific_traps, specific_missions,
+          allow_duplicate, pity_system_enabled, pity_counter_max,
+          is_default, is_enabled, rewards_count, created_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, NOW()
+        )
+        ON CONFLICT (guild_id, theme_id, rarity) DO UPDATE SET
+          name = EXCLUDED.name,
+          emoji = EXCLUDED.emoji,
+          color = EXCLUDED.color,
+          image_url = EXCLUDED.image_url,
+          prob_collectible = EXCLUDED.prob_collectible,
+          prob_super_bonus = EXCLUDED.prob_super_bonus,
+          guaranteed_min_rarity = EXCLUDED.guaranteed_min_rarity,
+          rarity_upgrade_rare = EXCLUDED.rarity_upgrade_rare,
+          rarity_upgrade_epic = EXCLUDED.rarity_upgrade_epic,
+          rarity_upgrade_legendary = EXCLUDED.rarity_upgrade_legendary,
+          image_closed = EXCLUDED.image_closed,
+          image_opening = EXCLUDED.image_opening,
+          image_opened = EXCLUDED.image_opened,
+          image_empty = EXCLUDED.image_empty,
+          text_title = EXCLUDED.text_title,
+          text_description = EXCLUDED.text_description,
+          text_opening = EXCLUDED.text_opening,
+          text_success = EXCLUDED.text_success,
+          text_empty = EXCLUDED.text_empty,
+          sound_open = EXCLUDED.sound_open,
+          animation_duration = EXCLUDED.animation_duration,
+          specific_collectibles = EXCLUDED.specific_collectibles,
+          specific_super_bonuses = EXCLUDED.specific_super_bonuses,
+          specific_traps = EXCLUDED.specific_traps,
+          specific_missions = EXCLUDED.specific_missions,
+          allow_duplicate = EXCLUDED.allow_duplicate,
+          pity_system_enabled = EXCLUDED.pity_system_enabled,
+          pity_counter_max = EXCLUDED.pity_counter_max,
+          is_default = EXCLUDED.is_default,
+          is_enabled = EXCLUDED.is_enabled,
+          rewards_count = EXCLUDED.rewards_count
+      `, [
+        this.guildId,
+        themeId,
+        config.rarity,
+        config.name || null,
+        config.emoji || null,
+        config.color || null,
+        config.image_url || null,
+        config.prob_collectible || null,
+        config.prob_super_bonus || null,
+        config.guaranteed_min_rarity || null,
+        config.rarity_upgrade_rare || null,
+        config.rarity_upgrade_epic || null,
+        config.rarity_upgrade_legendary || null,
+        config.image_closed || null,
+        config.image_opening || null,
+        config.image_opened || null,
+        config.image_empty || null,
+        config.text_title || null,
+        config.text_description || null,
+        config.text_opening || null,
+        config.text_success || null,
+        config.text_empty || null,
+        config.sound_open || null,
+        config.animation_duration || null,
+        config.specific_collectibles ? JSON.stringify(config.specific_collectibles) : null,
+        config.specific_super_bonuses ? JSON.stringify(config.specific_super_bonuses) : null,
+        config.specific_traps ? JSON.stringify(config.specific_traps) : null,
+        config.specific_missions ? JSON.stringify(config.specific_missions) : null,
+        config.allow_duplicate !== false,
+        config.pity_system_enabled || false,
+        config.pity_counter_max || null,
+        config.is_default || false,
+        config.is_enabled !== false,
+        config.rewards_count || 1
+      ]);
+
+      this.importedData.mysteryBoxConfig++;
+    }
+
+    console.log(`   ✅ ${this.importedData.mysteryBoxConfig} configuration(s) Mystery Box créée(s)`);
+  }
+
+  /**
+   * Crée les entrées progression_roles (table séparée)
+   */
+  async createProgressionRoles(themeId, roles) {
+    for (const role of roles) {
+      await db.query(`
+        INSERT INTO progression_roles (
+          guild_id, theme_id, role_name, percentage, color, created_at
+        ) VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (guild_id, theme_id, percentage) DO UPDATE SET
+          role_name = EXCLUDED.role_name,
+          color = EXCLUDED.color
+      `, [
+        this.guildId,
+        themeId,
+        role.role_name,
+        role.percentage,
+        role.color || '#3498db'
+      ]);
+
+      this.importedData.progressionRoles++;
+    }
+
+    console.log(`   ✅ ${this.importedData.progressionRoles} rôle(s) de progression créé(s)`);
+  }
+
+  /**
+   * Crée les entrées super_bonuses liées au thème
+   */
+  async createSuperBonuses(themeId, bonuses) {
+    for (const bonus of bonuses) {
+      await db.query(`
+        INSERT INTO super_bonuses (
+          guild_id, theme_id, bonus_id, name, description, icon, bonus_type,
+          effect_type, effect_config, duration_type, duration_value,
+          image_url, color, rarity, announcement_message, activation_mode, is_enabled, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+        ON CONFLICT (guild_id, bonus_id) DO UPDATE SET
+          theme_id = EXCLUDED.theme_id,
+          name = EXCLUDED.name,
+          description = EXCLUDED.description,
+          icon = EXCLUDED.icon,
+          bonus_type = EXCLUDED.bonus_type,
+          effect_type = EXCLUDED.effect_type,
+          effect_config = EXCLUDED.effect_config,
+          duration_type = EXCLUDED.duration_type,
+          duration_value = EXCLUDED.duration_value,
+          image_url = EXCLUDED.image_url,
+          color = EXCLUDED.color,
+          rarity = EXCLUDED.rarity,
+          announcement_message = EXCLUDED.announcement_message,
+          activation_mode = EXCLUDED.activation_mode,
+          is_enabled = EXCLUDED.is_enabled
+      `, [
+        this.guildId,
+        themeId,
+        bonus.bonus_id,
+        bonus.name,
+        bonus.description || null,
+        bonus.icon || null,
+        bonus.bonus_type || 'instant',
+        bonus.effect_type,
+        bonus.effect_config ? JSON.stringify(bonus.effect_config) : null,
+        bonus.duration_type || null,
+        bonus.duration_value || null,
+        bonus.image_url || null,
+        bonus.color || null,
+        bonus.rarity || 'rare',
+        bonus.announcement_message || null,
+        bonus.activation_mode || 'instant',
+        bonus.is_enabled !== false
+      ]);
+
+      this.importedData.superBonuses++;
+    }
+
+    console.log(`   ✅ ${this.importedData.superBonuses} super bonus créé(s)`);
   }
 }
 

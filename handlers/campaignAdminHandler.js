@@ -441,7 +441,9 @@ class CampaignAdminHandler {
 
     if (customId.startsWith('campaign_resume_')) {
       const campaignId = parseInt(customId.split('_').pop());
-      await campaignHandler.resumeCampaign(interaction.guildId, campaignId);
+
+      // Passer le client Discord pour relancer les timers/cron
+      await campaignHandler.resumeCampaign(interaction.guildId, campaignId, interaction.client);
 
       // Logger l'action
       await audit.logCampaignStarted(
@@ -733,10 +735,10 @@ class CampaignAdminHandler {
     console.log('🔧 [AUDIT] Valeurs extraites - count:', count, 'interval:', interval, 'name:', name);
 
     // Validation
-    if (isNaN(count) || count < 1 || count > 100) {
+    if (isNaN(count) || count < 1 || count > 500) {
       console.log('❌ [AUDIT] Validation count échouée');
       return interaction.reply({
-        content: '❌ Le nombre de boîtes doit être entre 1 et 100.',
+        content: '❌ Le nombre de boîtes doit être entre 1 et 500.',
         flags: 64
       });
     }

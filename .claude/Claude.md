@@ -95,6 +95,113 @@ node verify-mission-system.js           # Vérification système missions
 
 ---
 
+## 🚀 DÉPLOIEMENT VPS - PROCÉDURE OBLIGATOIRE
+
+> **RÈGLE IMPÉRATIVE**: TOUJOURS rebuild le container Docker après avoir copié des fichiers sur le VPS.
+> **NE JAMAIS** juste copier les fichiers sans rebuild - les changements ne seront PAS appliqués !
+
+### Procédure complète de déploiement (3 étapes OBLIGATOIRES)
+
+**Étape 1 - Copier les fichiers modifiés sur le VPS :**
+```bash
+scp -i ~/.ssh/id_rsa_vps_hostinger "c:\ia mogo\bot discord\[fichier]" root@72.60.185.62:/root/bot-mysterybox/[chemin]/
+```
+
+**Étape 2 - Rebuild et redémarrer le container (OBLIGATOIRE) :**
+```bash
+ssh -i ~/.ssh/id_rsa_vps_hostinger root@72.60.185.62 'cd /root/bot-mysterybox && docker compose down && docker compose build --no-cache bot && docker compose up -d'
+```
+
+**Étape 3 - Vérifier que le bot a bien démarré :**
+```bash
+ssh -i ~/.ssh/id_rsa_vps_hostinger root@72.60.185.62 'docker logs bot-mysterybox --tail 30'
+```
+
+### ❌ MÉTHODES INTERDITES
+
+```bash
+# ❌ NE JAMAIS FAIRE - Les fichiers sont copiés mais le container utilise toujours l'ancienne image
+scp fichier.js root@vps:/root/bot-mysterybox/
+# FIN - SANS REBUILD !
+
+# ❌ NE JAMAIS FAIRE - docker restart ne rebuild pas l'image
+docker restart bot-mysterybox
+```
+
+### ✅ Chemins importants sur le VPS
+
+| Local | VPS |
+|-------|-----|
+| `c:\ia mogo\bot discord\` | `/root/bot-mysterybox/` |
+| `handlers/` | `/root/bot-mysterybox/handlers/` |
+| `utils/` | `/root/bot-mysterybox/utils/` |
+| `events/` | `/root/bot-mysterybox/events/` |
+| `scripts/` | `/root/bot-mysterybox/scripts/` |
+
+### Container Docker
+
+- **Nom du container**: `bot-mysterybox`
+- **Nom de l'image**: `bot-mysterybox-bot`
+- **Container DB**: `bot-mysterybox-db`
+
+**CETTE RÈGLE EST NON-NÉGOCIABLE. Tout déploiement sans rebuild est INTERDIT.**
+
+---
+
+## 🔴 REDÉMARRAGE DU BOT - MÉTHODE OBLIGATOIRE
+
+> **RÈGLE IMPÉRATIVE**: TOUJOURS utiliser PowerShell avec l'ID du processus pour arrêter le bot.
+> **NE JAMAIS** utiliser `taskkill /F /IM node.exe` ou autres méthodes génériques.
+
+### Procédure de redémarrage en 2 étapes :
+
+**Étape 1 - Trouver et tuer le processus existant :**
+```powershell
+# Lister les processus node.exe avec leur PID
+powershell -Command "Get-Process node -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime"
+
+# Tuer le processus par son PID (remplacer XXXX par le PID réel)
+powershell -Command "Stop-Process -Id XXXX -Force"
+```
+
+**Étape 2 - Relancer le bot :**
+```bash
+cd "c:\ia mogo\bot discord" && node index.js
+```
+
+### ❌ MÉTHODES INTERDITES
+
+```bash
+# ❌ NE JAMAIS FAIRE - Tue TOUS les processus Node.js
+taskkill /F /IM node.exe
+
+# ❌ NE JAMAIS FAIRE - Syntaxe Windows incorrecte
+cmd /c taskkill /F /IM node.exe
+
+# ❌ NE JAMAIS FAIRE - Timeout Windows dans bash
+timeout /t 2 /nobreak
+```
+
+### ✅ EXEMPLE COMPLET DE REDÉMARRAGE
+
+```powershell
+# 1. Trouver le PID du bot
+powershell -Command "Get-Process node | Select-Object Id, StartTime"
+
+# 2. Tuer le processus (exemple avec PID 12345)
+powershell -Command "Stop-Process -Id 12345 -Force"
+
+# 3. Attendre 2 secondes
+powershell -Command "Start-Sleep -Seconds 2"
+
+# 4. Relancer le bot (en background)
+node index.js
+```
+
+**CETTE RÈGLE EST NON-NÉGOCIABLE. Toute autre méthode de redémarrage est interdite.**
+
+---
+
 ## ⚠️ LACUNES & PRÉVENTION (LECTURE OBLIGATOIRE)
 
 > **DOCUMENTATION CRITIQUE**: Voir [LACUNES-ET-AMELIORATIONS.md](LACUNES-ET-AMELIORATIONS.md)

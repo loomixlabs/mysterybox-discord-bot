@@ -1,6 +1,15 @@
 /**
- * Exportateur de thèmes
+ * Exportateur de thèmes v2.0
  * Exporte un thème existant vers un fichier .theme.json
+ *
+ * Tables exportées:
+ * - themes, theme_config, theme_messages
+ * - collectibles, traps, missions, quiz_questions, mission_keywords
+ * - daily_rewards_config, daily_catchup_config (v2.0)
+ * - mystery_box_config (v2.0)
+ * - progression_roles (v2.0 - table séparée)
+ * - super_bonuses (v2.0)
+ * - announcement_templates (v2.0)
  */
 
 const fs = require('fs');
@@ -74,9 +83,53 @@ class ThemeExporter {
         SELECT * FROM theme_messages WHERE theme_id = $1 AND guild_id = $2
       `, [themeDbId, this.guildId]);
 
+      // ═══════════════════════════════════════════════════════════
+      // NOUVELLES TABLES v2.0
+      // ═══════════════════════════════════════════════════════════
+
+      // 9. Récupérer daily_rewards_config (calendrier 28 jours)
+      const dailyRewardsConfig = await db.queryAll(`
+        SELECT * FROM daily_rewards_config
+        WHERE theme_id = $1 AND guild_id = $2
+        ORDER BY day_number ASC
+      `, [themeDbId, this.guildId]);
+
+      // 10. Récupérer daily_catchup_config
+      const dailyCatchupConfig = await db.queryOne(`
+        SELECT * FROM daily_catchup_config
+        WHERE theme_id = $1 AND guild_id = $2
+      `, [themeDbId, this.guildId]);
+
+      // 11. Récupérer mystery_box_config (par rareté)
+      const mysteryBoxConfig = await db.queryAll(`
+        SELECT * FROM mystery_box_config
+        WHERE theme_id = $1 AND guild_id = $2
+        ORDER BY rarity ASC
+      `, [themeDbId, this.guildId]);
+
+      // 12. Récupérer progression_roles (table séparée)
+      const progressionRoles = await db.queryAll(`
+        SELECT * FROM progression_roles
+        WHERE theme_id = $1 AND guild_id = $2
+        ORDER BY percentage ASC
+      `, [themeDbId, this.guildId]);
+
+      // 13. Récupérer super_bonuses liés au thème
+      const superBonuses = await db.queryAll(`
+        SELECT * FROM super_bonuses
+        WHERE theme_id = $1 AND guild_id = $2
+        ORDER BY rarity DESC, name ASC
+      `, [themeDbId, this.guildId]);
+
+      // 14. Récupérer announcement_templates liés au thème
+      const announcementTemplates = await db.queryAll(`
+        SELECT * FROM announcement_templates
+        WHERE theme_id = $1 AND guild_id = $2
+      `, [themeDbId, this.guildId]);
+
       // Construire l'objet exporté
       const exportedTheme = {
-        version: '1.0.0',
+        version: '2.0.0',
         metadata: {
           name: metadata.name || theme.name,
           description: metadata.description || `Thème ${theme.name} exporté depuis le serveur`,
@@ -99,6 +152,17 @@ class ThemeExporter {
         traps: traps.map(t => this.formatTrap(t)),
         missions: this.formatMissions(missions, keywords, quizQuestions),
         theme_messages: this.formatThemeMessages(themeMessages),
+
+        // ═══════════════════════════════════════════════════════════
+        // NOUVELLES SECTIONS v2.0
+        // ═══════════════════════════════════════════════════════════
+        daily_rewards_config: dailyRewardsConfig.map(d => this.formatDailyReward(d)),
+        daily_catchup_config: dailyCatchupConfig ? this.formatDailyCatchup(dailyCatchupConfig) : null,
+        mystery_box_config: mysteryBoxConfig.map(m => this.formatMysteryBoxConfig(m)),
+        progression_roles: progressionRoles.map(r => this.formatProgressionRole(r)),
+        super_bonuses: superBonuses.map(b => this.formatSuperBonus(b)),
+        announcement_templates: announcementTemplates.map(t => this.formatAnnouncementTemplate(t)),
+
         settings: {
           auto_create_roles: true,
           auto_install_super_bonuses: true,
@@ -111,6 +175,12 @@ class ThemeExporter {
       console.log(`   - Pièges: ${traps.length}`);
       console.log(`   - Missions: ${missions.length}`);
       console.log(`   - Questions quiz: ${quizQuestions.length}`);
+      console.log(`   - Daily Rewards: ${dailyRewardsConfig.length} jours`);
+      console.log(`   - Daily Catchup: ${dailyCatchupConfig ? 'Oui' : 'Non'}`);
+      console.log(`   - Mystery Box Config: ${mysteryBoxConfig.length} raretés`);
+      console.log(`   - Progression Roles: ${progressionRoles.length}`);
+      console.log(`   - Super Bonuses: ${superBonuses.length}`);
+      console.log(`   - Announcement Templates: ${announcementTemplates.length}`);
 
       return {
         success: true,
@@ -177,17 +247,6 @@ class ThemeExporter {
    * Formate la configuration du thème
    */
   formatThemeConfig(config) {
-    // Formater les progression_roles (sans discord_role_id qui est spécifique au serveur)
-    const progressionRoles = (config.progression_roles || []).map(role => ({
-      name: role.name,
-      color: role.color,
-      required_items: role.required_items,
-      percentage: role.percentage,
-      hoist: role.hoist || false,
-      mentionable: role.mentionable || false
-      // discord_role_id est intentionnellement omis car spécifique au serveur source
-    }));
-
     return {
       probability_collectible: config.probability_collectible,
       probability_mission: config.probability_mission,
@@ -201,7 +260,6 @@ class ThemeExporter {
       super_bonus_rarity_epic: config.super_bonus_rarity_epic,
       super_bonus_rarity_rare: config.super_bonus_rarity_rare,
       super_bonus_rarity_common: config.super_bonus_rarity_common,
-      // Probabilités sévérité pièges
       trap_severity_1: config.trap_severity_1,
       trap_severity_2: config.trap_severity_2,
       trap_severity_3: config.trap_severity_3,
@@ -213,8 +271,8 @@ class ThemeExporter {
       mystery_box_winner_message: config.mystery_box_winner_message,
       mystery_box_celebration_gif: config.mystery_box_celebration_gif,
       mystery_box_celebration_emojis: config.mystery_box_celebration_emojis,
-      auto_delete_celebration_message: config.auto_delete_celebration_message,
-      progression_roles: progressionRoles
+      auto_delete_celebration_message: config.auto_delete_celebration_message
+      // Note: progression_roles JSON est maintenant remplacé par la table progression_roles
     };
   }
 
@@ -244,7 +302,7 @@ class ThemeExporter {
       trap_id: t.trap_id,
       name: t.name,
       type: t.type,
-      severity: t.severity || 3, // Inclure la sévérité (default: Medium)
+      severity: t.severity || 3,
       description: t.description
     };
 
@@ -281,13 +339,15 @@ class ThemeExporter {
           description: mission.description,
           timeout: mission.timeout || 60,
           image_url: mission.image_url || undefined,
+          validation_data: mission.validation_data || undefined,
+          reward_data: mission.reward_data || undefined,
+          allowed_channels: mission.allowed_channels || undefined,
           keywords: missionKeywords.map(k => ({
             keyword: k.keyword,
             difficulty: k.difficulty || 'medium'
           }))
         });
       } else if (mission.type === 'quiz') {
-        // Filtrer les questions quiz pour cette mission spécifique
         const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
         const questions = missionQuestions.map(q => ({
           question_text: q.question_text,
@@ -297,7 +357,6 @@ class ThemeExporter {
           difficulty: q.difficulty || 'medium'
         }));
 
-        // Exporter la mission même si pas de questions (pour éviter de perdre la mission)
         result.quiz.push({
           mission_id: mission.mission_id,
           name: mission.name,
@@ -305,6 +364,9 @@ class ThemeExporter {
           timeout: mission.timeout || 60,
           max_attempts: mission.max_attempts || undefined,
           image_url: mission.image_url || undefined,
+          validation_data: mission.validation_data || undefined,
+          reward_data: mission.reward_data || undefined,
+          allowed_channels: mission.allowed_channels || undefined,
           questions: questions
         });
       }
@@ -328,6 +390,137 @@ class ThemeExporter {
     return result;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOUVELLES MÉTHODES v2.0
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Formate une entrée daily_rewards_config
+   */
+  formatDailyReward(d) {
+    return {
+      day_number: d.day_number,
+      reward_type: d.reward_type,
+      reward_rarity: d.reward_rarity,
+      reward_amount: d.reward_amount,
+      reward_item_id: d.reward_item_id,
+      choice_options: d.choice_options,
+      display_name: d.display_name,
+      display_emoji: d.display_emoji,
+      display_description: d.display_description,
+      is_milestone: d.is_milestone,
+      is_bonus_day: d.is_bonus_day,
+      bonus_multiplier: d.bonus_multiplier ? parseFloat(d.bonus_multiplier) : null,
+      animation_type: d.animation_type
+    };
+  }
+
+  /**
+   * Formate daily_catchup_config
+   */
+  formatDailyCatchup(c) {
+    return {
+      currency_type: c.currency_type,
+      base_price: c.base_price,
+      price_increment: c.price_increment,
+      price_multiplier: c.price_multiplier ? parseFloat(c.price_multiplier) : null,
+      pricing_mode: c.pricing_mode,
+      max_price: c.max_price,
+      max_catchup_days: c.max_catchup_days,
+      enabled: c.enabled
+    };
+  }
+
+  /**
+   * Formate mystery_box_config
+   */
+  formatMysteryBoxConfig(m) {
+    return {
+      rarity: m.rarity,
+      name: m.name,
+      emoji: m.emoji,
+      color: m.color,
+      image_url: m.image_url,
+      prob_collectible: m.prob_collectible,
+      prob_super_bonus: m.prob_super_bonus,
+      guaranteed_min_rarity: m.guaranteed_min_rarity,
+      rarity_upgrade_rare: m.rarity_upgrade_rare,
+      rarity_upgrade_epic: m.rarity_upgrade_epic,
+      rarity_upgrade_legendary: m.rarity_upgrade_legendary,
+      image_closed: m.image_closed,
+      image_opening: m.image_opening,
+      image_opened: m.image_opened,
+      image_empty: m.image_empty,
+      text_title: m.text_title,
+      text_description: m.text_description,
+      text_opening: m.text_opening,
+      text_success: m.text_success,
+      text_empty: m.text_empty,
+      sound_open: m.sound_open,
+      animation_duration: m.animation_duration,
+      specific_collectibles: m.specific_collectibles,
+      specific_super_bonuses: m.specific_super_bonuses,
+      specific_traps: m.specific_traps,
+      specific_missions: m.specific_missions,
+      allow_duplicate: m.allow_duplicate,
+      pity_system_enabled: m.pity_system_enabled,
+      pity_counter_max: m.pity_counter_max,
+      is_default: m.is_default,
+      is_enabled: m.is_enabled,
+      rewards_count: m.rewards_count
+    };
+  }
+
+  /**
+   * Formate progression_roles (table séparée)
+   */
+  formatProgressionRole(r) {
+    return {
+      role_name: r.role_name,
+      percentage: r.percentage,
+      color: r.color
+      // discord_role_id est omis car spécifique au serveur
+    };
+  }
+
+  /**
+   * Formate super_bonuses
+   */
+  formatSuperBonus(b) {
+    return {
+      bonus_id: b.bonus_id,
+      name: b.name,
+      description: b.description,
+      icon: b.icon,
+      bonus_type: b.bonus_type,
+      effect_type: b.effect_type,
+      effect_config: b.effect_config,
+      duration_type: b.duration_type,
+      duration_value: b.duration_value,
+      image_url: b.image_url,
+      color: b.color,
+      rarity: b.rarity,
+      announcement_message: b.announcement_message,
+      activation_mode: b.activation_mode,
+      is_enabled: b.is_enabled
+    };
+  }
+
+  /**
+   * Formate announcement_templates
+   */
+  formatAnnouncementTemplate(t) {
+    return {
+      type: t.type,
+      title: t.title,
+      description: t.description,
+      color: t.color,
+      footer_text: t.footer_text,
+      image_url: t.image_url,
+      thumbnail_url: t.thumbnail_url
+    };
+  }
+
   /**
    * Liste les thèmes exportables pour un serveur
    */
@@ -340,9 +533,12 @@ class ThemeExporter {
           t.name,
           t.is_active,
           t.created_at,
-          (SELECT COUNT(*) FROM collectibles c WHERE c.theme_id = t.id) as collectibles_count,
-          (SELECT COUNT(*) FROM missions m WHERE m.theme_id = t.id) as missions_count,
-          (SELECT COUNT(*) FROM traps tr WHERE tr.theme_id = t.id) as traps_count
+          (SELECT COUNT(*) FROM collectibles c WHERE c.theme_id = t.id AND c.guild_id = t.guild_id) as collectibles_count,
+          (SELECT COUNT(*) FROM missions m WHERE m.theme_id = t.id AND m.guild_id = t.guild_id) as missions_count,
+          (SELECT COUNT(*) FROM traps tr WHERE tr.theme_id = t.id AND tr.guild_id = t.guild_id) as traps_count,
+          (SELECT COUNT(*) FROM daily_rewards_config dr WHERE dr.theme_id = t.id AND dr.guild_id = t.guild_id) as daily_rewards_count,
+          (SELECT COUNT(*) FROM mystery_box_config mb WHERE mb.theme_id = t.id AND mb.guild_id = t.guild_id) as mystery_box_count,
+          (SELECT COUNT(*) FROM super_bonuses sb WHERE sb.theme_id = t.id AND sb.guild_id = t.guild_id) as super_bonus_count
         FROM themes t
         WHERE t.guild_id = $1
         ORDER BY t.is_active DESC, t.created_at DESC
@@ -356,7 +552,10 @@ class ThemeExporter {
         created_at: t.created_at,
         collectibles_count: parseInt(t.collectibles_count) || 0,
         missions_count: parseInt(t.missions_count) || 0,
-        traps_count: parseInt(t.traps_count) || 0
+        traps_count: parseInt(t.traps_count) || 0,
+        daily_rewards_count: parseInt(t.daily_rewards_count) || 0,
+        mystery_box_count: parseInt(t.mystery_box_count) || 0,
+        super_bonus_count: parseInt(t.super_bonus_count) || 0
       }));
 
     } catch (error) {

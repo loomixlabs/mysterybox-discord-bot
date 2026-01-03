@@ -15,6 +15,139 @@ const threadManager = require('../utils/threadManager');
 class MissionHandler {
 
   /**
+   * 🔐 Nettoyer la permission temporaire ajoutée pour une mission
+   * Appelée quand une mission se termine (completed, failed, rejected, timeout)
+   * @param {Client} client - Client Discord
+   * @param {string} threadId - ID du thread de mission (pour lookup)
+   * @param {string} guildId - ID du serveur
+   */
+  async cleanupTempPermissionByThread(client, threadId, guildId) {
+    try {
+      // Récupérer le mission_progress avec game_state
+      const progressData = await db.queryOne(
+        `SELECT id, game_state FROM mission_progress WHERE thread_id = $1 AND guild_id = $2`,
+        [threadId, guildId]
+      );
+
+      if (!progressData?.game_state?.tempPermission) {
+        return; // Pas de permission temporaire à nettoyer
+      }
+
+      const { channelId, userId } = progressData.game_state.tempPermission;
+
+      if (!channelId || !userId) {
+        console.warn(`⚠️ [PERMISSION] Données incomplètes pour nettoyage: channelId=${channelId}, userId=${userId}`);
+        return;
+      }
+
+      // Récupérer le channel
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel) {
+        console.warn(`⚠️ [PERMISSION] Channel ${channelId} introuvable pour nettoyage`);
+        return;
+      }
+
+      // Supprimer la permission override
+      await channel.permissionOverwrites.delete(userId, 'Nettoyage permission temporaire - mission terminée');
+      console.log(`✅ [PERMISSION] Permission temporaire supprimée pour user ${userId} dans #${channel.name}`);
+
+      // Mettre à jour le game_state pour retirer l'info de permission
+      const updatedGameState = { ...progressData.game_state };
+      delete updatedGameState.tempPermission;
+      await db.query(
+        `UPDATE mission_progress SET game_state = $1 WHERE id = $2`,
+        [Object.keys(updatedGameState).length > 0 ? JSON.stringify(updatedGameState) : null, progressData.id]
+      );
+    } catch (error) {
+      console.error(`🔴 [PERMISSION] Erreur nettoyage permission temporaire:`, error.message);
+      // Ne pas throw - le nettoyage ne doit pas bloquer la fin de mission
+    }
+  }
+
+  /**
+   * 🔐 Nettoyer les permissions temporaires orphelines
+   * Appelée périodiquement pour nettoyer les permissions de missions:
+   * - Terminées (completed/failed) mais dont le cleanup a échoué
+   * - En cours depuis trop longtemps (> 2h, probablement abandonnées)
+   * @param {Client} client - Client Discord
+   */
+  async cleanupOrphanedPermissions(client) {
+    try {
+      console.log('🔍 [PERMISSION] Recherche de permissions temporaires orphelines...');
+
+      // Récupérer TOUTES les missions avec tempPermission dans game_state:
+      // 1. Missions terminées (cleanup échoué)
+      // 2. Missions in_progress depuis plus de 2 heures (probablement bloquées/abandonnées)
+      const orphanedMissions = await db.queryAll(`
+        SELECT id, guild_id, thread_id, game_state, status, created_at
+        FROM mission_progress
+        WHERE game_state IS NOT NULL
+          AND game_state::text LIKE '%tempPermission%'
+          AND (
+            status != 'in_progress'
+            OR created_at < NOW() - INTERVAL '2 hours'
+          )
+      `);
+
+      if (orphanedMissions.length === 0) {
+        console.log('✅ [PERMISSION] Aucune permission temporaire orpheline détectée');
+        return;
+      }
+
+      console.log(`🧹 [PERMISSION] ${orphanedMissions.length} permission(s) temporaire(s) orpheline(s) à nettoyer`);
+
+      let cleaned = 0;
+      for (const mission of orphanedMissions) {
+        try {
+          const gameState = typeof mission.game_state === 'string'
+            ? JSON.parse(mission.game_state)
+            : mission.game_state;
+
+          if (!gameState?.tempPermission) continue;
+
+          const { channelId, userId } = gameState.tempPermission;
+
+          if (!channelId || !userId) continue;
+
+          // Récupérer le channel
+          const channel = await client.channels.fetch(channelId).catch(() => null);
+          if (!channel) {
+            // Channel introuvable - nettoyer quand même le game_state
+            await db.query(
+              `UPDATE mission_progress SET game_state = game_state - 'tempPermission' WHERE id = $1`,
+              [mission.id]
+            );
+            continue;
+          }
+
+          // Supprimer la permission override
+          try {
+            await channel.permissionOverwrites.delete(userId, 'Nettoyage permission temporaire orpheline');
+            console.log(`✅ [PERMISSION] Permission orpheline supprimée pour user ${userId} dans #${channel.name} (status: ${mission.status})`);
+            cleaned++;
+          } catch (permError) {
+            // Permission déjà supprimée ou inexistante - pas grave
+          }
+
+          // Mettre à jour le game_state pour retirer l'info de permission
+          await db.query(
+            `UPDATE mission_progress SET game_state = game_state - 'tempPermission' WHERE id = $1`,
+            [mission.id]
+          );
+        } catch (error) {
+          console.error(`🔴 [PERMISSION] Erreur nettoyage orphelin mission ${mission.id}:`, error.message);
+        }
+      }
+
+      if (cleaned > 0) {
+        console.log(`✅ [PERMISSION] ${cleaned} permission(s) orpheline(s) nettoyée(s)`);
+      }
+    } catch (error) {
+      console.error('🔴 [PERMISSION] Erreur nettoyage permissions orphelines:', error.message);
+    }
+  }
+
+  /**
    * Joueur clique sur "🎯 Lancer la mission/quiz" - NOUVEAU FLOW
    */
   async handleMissionStart(interaction) {
@@ -310,6 +443,8 @@ class MissionHandler {
         // Fermer le thread après 5 secondes
         setTimeout(async () => {
           try {
+            // Nettoyer les permissions temporaires avant archivage
+            await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
             await interaction.channel.setArchived(true);
           } catch (error) {
             console.warn('⚠️  Impossible d\'archiver le thread');
@@ -593,6 +728,8 @@ class MissionHandler {
           // Fermer le thread après 5 secondes
           setTimeout(async () => {
             try {
+              // Nettoyer les permissions temporaires avant archivage
+              await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
               await interaction.channel.setArchived(true);
             } catch (error) {
               console.warn('⚠️  Impossible d\'archiver le thread');
@@ -641,6 +778,8 @@ class MissionHandler {
           // Fermer le thread après 5 secondes
           setTimeout(async () => {
             try {
+              // Nettoyer les permissions temporaires avant archivage
+              await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
               await interaction.channel.setArchived(true);
             } catch (error) {
               console.warn('⚠️  Impossible d\'archiver le thread');
@@ -694,6 +833,8 @@ class MissionHandler {
       // Fermer le thread après 5 secondes
       setTimeout(async () => {
         try {
+          // Nettoyer les permissions temporaires avant archivage
+          await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
           await interaction.channel.setArchived(true);
         } catch (error) {
           console.warn('⚠️  Impossible d\'archiver le thread');
@@ -960,6 +1101,8 @@ class MissionHandler {
       // Fermer le thread après 5 secondes
       setTimeout(async () => {
         try {
+          // Nettoyer les permissions temporaires avant archivage
+          await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
           await interaction.channel.setArchived(true);
         } catch (error) {
           console.warn('⚠️ Impossible d\'archiver le thread');
@@ -1111,49 +1254,73 @@ class MissionHandler {
           const matchResult = quizAnswerMatcher.matchAnswer(userAnswer, answer, []);
 
           if (matchResult.isCorrect) {
-            await msg.react('🎉');
-            missionCompleted = true;
-            collector.stop('success');
+            // IMPORTANT: Try/catch global pour garantir que resolve() est toujours appelé
+            try {
+              await msg.react('🎉');
+              missionCompleted = true;
+              collector.stop('success');
 
-            const emojisNeeded = currentEmojiIndex;
-            const isFirstEmoji = emojisNeeded === 1;
+              const emojisNeeded = currentEmojiIndex;
+              const isFirstEmoji = emojisNeeded === 1;
 
-            console.log(`✅ [Emoji-Puzzle] Succès avec ${emojisNeeded} emoji(s)!`);
+              console.log(`✅ [Emoji-Puzzle] Succès avec ${emojisNeeded} emoji(s)!`);
 
-            const successEmbed = new EmbedBuilder()
-              .setTitle(isFirstEmoji ? '🏆 INCROYABLE !' : '🎉 Bravo !')
-              .setDescription(
-                `Tu as trouvé avec **${emojisNeeded}/${totalEmojis} emoji${emojisNeeded > 1 ? 's' : ''}** !\n\n` +
-                `${emojiString} = **${answer}**`
-              )
-              .setColor(isFirstEmoji ? '#FFD700' : '#2ECC71');
+              const successEmbed = new EmbedBuilder()
+                .setTitle(isFirstEmoji ? '🏆 INCROYABLE !' : '🎉 Bravo !')
+                .setDescription(
+                  `Tu as trouvé avec **${emojisNeeded}/${totalEmojis} emoji${emojisNeeded > 1 ? 's' : ''}** !\n\n` +
+                  `${emojiString} = **${answer}**`
+                )
+                .setColor(isFirstEmoji ? '#FFD700' : '#2ECC71');
 
-            if (isFirstEmoji) {
-              successEmbed.addFields({
-                name: '🏆 Badge Débloqué !',
-                value: 'Tu as deviné avec 1 seul emoji !',
-                inline: false
-              });
+              if (isFirstEmoji) {
+                successEmbed.addFields({
+                  name: '🏆 Badge Débloqué !',
+                  value: 'Tu as deviné avec 1 seul emoji !',
+                  inline: false
+                });
 
-              // Déclencher le badge (si badgeHandler a cette méthode)
-              try {
-                if (typeof badgeHandler.onEmojiPuzzleSolvedWithOneEmoji === 'function') {
-                  await badgeHandler.onEmojiPuzzleSolvedWithOneEmoji(guildId, player.id, interaction.client);
+                // Déclencher le badge (si badgeHandler a cette méthode)
+                try {
+                  if (typeof badgeHandler.onEmojiPuzzleSolvedWithOneEmoji === 'function') {
+                    await badgeHandler.onEmojiPuzzleSolvedWithOneEmoji(guildId, player.id, interaction.client);
+                  }
+                } catch (badgeError) {
+                  console.error('⚠️ Erreur badge emoji-puzzle:', badgeError);
                 }
-              } catch (badgeError) {
-                console.error('⚠️ Erreur badge emoji-puzzle:', badgeError);
+              }
+
+              await interaction.channel.send({ embeds: [successEmbed] });
+
+              // Sauvegarder le résultat
+              await db.query(
+                `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+                [JSON.stringify({ emojisNeeded, totalEmojis, attempts: attemptCount }), progress.id]
+              );
+
+              await this.completeMission(interaction, mission, player, progress, msg.url);
+            } catch (error) {
+              console.error('🔴 [Emoji-Puzzle] Erreur lors du traitement du succès:', error);
+              // Fallback: marquer la mission comme complétée même si completeMission a échoué
+              try {
+                await db.query(
+                  `UPDATE mission_progress SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1 AND status != 'completed'`,
+                  [progress.id]
+                );
+                console.log('✅ [Emoji-Puzzle] Mission marquée comme complétée (fallback)');
+
+                // Archiver le thread après un délai
+                setTimeout(async () => {
+                  try {
+                    await interaction.channel.setArchived(true);
+                  } catch (archiveError) {
+                    console.warn('⚠️ Impossible d\'archiver le thread (fallback)');
+                  }
+                }, 5000);
+              } catch (fallbackError) {
+                console.error('🔴 [Emoji-Puzzle] Erreur fallback:', fallbackError);
               }
             }
-
-            await interaction.channel.send({ embeds: [successEmbed] });
-
-            // Sauvegarder le résultat
-            await db.query(
-              `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
-              [JSON.stringify({ emojisNeeded, totalEmojis, attempts: attemptCount }), progress.id]
-            );
-
-            await this.completeMission(interaction, mission, player, progress, msg.url);
             resolve('success');
 
           } else if (matchResult.isClose) {
@@ -1227,8 +1394,11 @@ class MissionHandler {
       );
 
       setTimeout(async () => {
-        try { await interaction.channel.setArchived(true); }
-        catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+        try {
+          // Nettoyer les permissions temporaires avant archivage
+          await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+          await interaction.channel.setArchived(true);
+        } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
       }, 5000);
     }
   }
@@ -1261,8 +1431,11 @@ class MissionHandler {
     );
 
     setTimeout(async () => {
-      try { await interaction.channel.setArchived(true); }
-      catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+      try {
+        // Nettoyer les permissions temporaires avant archivage
+        await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+        await interaction.channel.setArchived(true);
+      } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
     }, 5000);
   }
 
@@ -1446,12 +1619,16 @@ class MissionHandler {
         // 🎯 COLLECTIBLE REWARD (random ou specific)
         const collectible = rewardResult.reward;
 
-        // Vérifier si le joueur l'a déjà
-        const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, collectible.id);
+        // Utiliser addCollectibleWithLevels pour le système d'évolution
+        const evolutionResult = await db.addCollectibleWithLevels(
+          interaction.guildId,
+          player.id,
+          collectible.id,
+          'mission'
+        );
 
-        // Ajouter le collectible si pas de doublon
-        if (!alreadyHas) {
-          await db.addCollectible(interaction.guildId, player.id, collectible.id, 'mission');
+        if (evolutionResult.isNew) {
+          // Nouveau collectible
           const playerProgress = await db.incrementProgress(interaction.guildId, player.id, mission.theme_id);
 
           // Message de récompense
@@ -1459,7 +1636,8 @@ class MissionHandler {
             .setTitle('🎉 Mission Réussie !')
             .setDescription(
               `Félicitations ! Tu as terminé la mission **${mission.name}** !\n\n` +
-              `**Récompense:** ${collectible.name}`
+              `**Récompense:** ${collectible.name}` +
+              (evolutionResult.mintNumber ? `\n🏷️ **Mint #${evolutionResult.mintNumber}**` : '')
             )
             .setColor(branding.secondary_color);
 
@@ -1502,19 +1680,68 @@ class MissionHandler {
             console.error('🔴 [PROGRESSION] Erreur check progression roles (mission):', error);
           }
         } else {
-          // Doublon
+          // Fusion (doublon) - le collectible gagne de l'XP !
           const embed = new EmbedBuilder()
-            .setTitle('⚠️ Mission réussie mais doublon !')
-            .setDescription(`Tu as terminé la mission mais tu avais déjà **${collectible.name}** dans ta collection !`)
-            .setColor(branding.secondary_color)
-            .setFooter(await getLoomixFooter(interaction.guildId));
+            .setTitle('🔄 Mission Réussie - Fusion !')
+            .setDescription(
+              `Tu as terminé la mission **${mission.name}** !\n\n` +
+              `**${collectible.name}** a fusionné avec ton exemplaire existant !\n` +
+              `✨ **+100 XP** │ Niveau ${evolutionResult.level} ${'★'.repeat(evolutionResult.level)}\n` +
+              `📊 XP: ${evolutionResult.currentXp}/${evolutionResult.nextLevelXp || 'MAX'}`
+            )
+            .setColor(0xF1C40F);
 
           // Thumbnail uniquement si URL valide (non vide)
           if (collectible.image_url && collectible.image_url.trim()) {
             embed.setThumbnail(collectible.image_url);
           }
 
+          // Ajouter info level up si applicable
+          if (evolutionResult.leveledUp) {
+            embed.addFields({
+              name: '🎉 LEVEL UP !',
+              value: `Niveau ${evolutionResult.previousLevel} → Niveau ${evolutionResult.level}`,
+              inline: true
+            });
+          }
+
+          embed.setFooter(await getLoomixFooter(interaction.guildId));
+
           await interaction.channel.send({ embeds: [embed] });
+
+          // 📢 ANNONCES D'ÉVOLUTION - Envoyer dans le canal d'annonces
+          try {
+            const MAX_LEVEL = 4;
+            if (evolutionResult.leveledUp) {
+              if (evolutionResult.level >= MAX_LEVEL) {
+                // Niveau maximum atteint !
+                await announcements.announceCollectibleMaxLevel(
+                  interaction.client,
+                  interaction.guildId,
+                  interaction.user.username,
+                  collectible.name,
+                  evolutionResult.level,
+                  evolutionResult.mintNumber,
+                  null  // Pas d'image générée pour les missions
+                );
+              } else {
+                // Level up normal
+                await announcements.announceCollectibleLevelUp(
+                  interaction.client,
+                  interaction.guildId,
+                  interaction.user.username,
+                  collectible.name,
+                  evolutionResult.previousLevel,
+                  evolutionResult.level,
+                  evolutionResult.currentXp || 0,
+                  evolutionResult.nextLevelXp || 100,
+                  null  // Pas d'image générée pour les missions
+                );
+              }
+            }
+          } catch (announceError) {
+            console.error('🔴 [MISSION] Erreur annonce évolution:', announceError);
+          }
         }
 
         rewardName = collectible.name;
@@ -1529,10 +1756,16 @@ class MissionHandler {
         rewardName
       );
 
-      // 🏆 BADGE TRACKING - Mission Completed
+      // 🏆 BADGE TRACKING - Mission Completed (avec détails pour badges spécifiques)
       try {
-        await badgeHandler.onMissionCompleted(interaction.guildId, player.id, interaction.client);
-        console.log(`🏆 [BADGES] Mission badge tracking appelé pour player ${player.id}`);
+        const missionDetails = {
+          missionType: mission.type,
+          missionName: mission.name,
+          duration: progress?.started_at ? (new Date() - new Date(progress.started_at)) / 1000 : null, // en secondes
+          isFlawless: !progress?.failed_attempts || progress.failed_attempts === 0
+        };
+        await badgeHandler.onMissionCompletedWithDetails(interaction.guildId, player.id, missionDetails, interaction.client);
+        console.log(`🏆 [BADGES] Mission badge tracking appelé pour player ${player.id} (type: ${mission.type})`);
       } catch (error) {
         console.error('🔴 [BADGES] Erreur tracking mission:', error);
       }
@@ -1542,6 +1775,8 @@ class MissionHandler {
 
       setTimeout(async () => {
         try {
+          // Nettoyer les permissions temporaires avant archivage
+          await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
           await interaction.channel.setArchived(true);
         } catch (error) {
           console.warn('⚠️  Impossible d\'archiver le thread');
@@ -1684,10 +1919,17 @@ class MissionHandler {
         } else {
           // 🎯 COLLECTIBLE REWARD (random ou specific)
           const collectible = rewardResult.reward;
-          const alreadyHas = await db.hasCollectible(interaction.guildId, player.id, collectible.id);
 
-          if (!alreadyHas) {
-            await db.addCollectible(interaction.guildId, player.id, collectible.id, 'mission');
+          // Utiliser addCollectibleWithLevels pour le système d'évolution
+          const evolutionResult = await db.addCollectibleWithLevels(
+            interaction.guildId,
+            player.id,
+            collectible.id,
+            'mission'
+          );
+
+          if (evolutionResult.isNew) {
+            // Nouveau collectible
             const playerProgress = await db.incrementProgress(interaction.guildId, player.id, progressData.theme_id);
 
             // 🏅 PROGRESSION ROLES - Vérifier et attribuer rôles intermédiaires (mission approuvée)
@@ -1708,11 +1950,56 @@ class MissionHandler {
             } catch (error) {
               console.error('🔴 [PROGRESSION] Erreur check progression roles (approve):', error);
             }
-          }
 
-          await interaction.channel.send({
-            content: `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> !\n🎁 Récompense : **${collectible.name}**`
-          });
+            await interaction.channel.send({
+              content: `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> !\n🎁 Récompense : **${collectible.name}**` +
+                (evolutionResult.mintNumber ? ` 🏷️ Mint #${evolutionResult.mintNumber}` : '')
+            });
+          } else {
+            // Fusion (doublon) - afficher le level up
+            let fusionMsg = `✅ Mission **${progressData.mission_name}** validée pour <@${progressData.discord_id}> !\n` +
+              `🔄 **${collectible.name}** a fusionné ! ✨ +100 XP │ Niveau ${evolutionResult.level} ${'★'.repeat(evolutionResult.level)}`;
+
+            if (evolutionResult.leveledUp) {
+              fusionMsg += `\n🎉 **LEVEL UP !** Niveau ${evolutionResult.previousLevel} → ${evolutionResult.level}`;
+            }
+
+            await interaction.channel.send({ content: fusionMsg });
+
+            // 📢 ANNONCES D'ÉVOLUTION - Envoyer dans le canal d'annonces
+            try {
+              const MAX_LEVEL = 4;
+              if (evolutionResult.leveledUp) {
+                if (evolutionResult.level >= MAX_LEVEL) {
+                  // Niveau maximum atteint !
+                  await announcements.announceCollectibleMaxLevel(
+                    interaction.client,
+                    interaction.guildId,
+                    progressData.username,
+                    collectible.name,
+                    evolutionResult.level,
+                    evolutionResult.mintNumber,
+                    null  // Pas d'image générée pour les missions
+                  );
+                } else {
+                  // Level up normal
+                  await announcements.announceCollectibleLevelUp(
+                    interaction.client,
+                    interaction.guildId,
+                    progressData.username,
+                    collectible.name,
+                    evolutionResult.previousLevel,
+                    evolutionResult.level,
+                    evolutionResult.currentXp || 0,
+                    evolutionResult.nextLevelXp || 100,
+                    null  // Pas d'image générée pour les missions
+                  );
+                }
+              }
+            } catch (announceError) {
+              console.error('🔴 [MISSION APPROVE] Erreur annonce évolution:', announceError);
+            }
+          }
         }
       }
 
@@ -1744,6 +2031,8 @@ class MissionHandler {
       // Archiver le thread après 5 secondes
       setTimeout(async () => {
         try {
+          // Nettoyer les permissions temporaires avant archivage
+          await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
           await interaction.channel.setArchived(true);
         } catch (error) {
           console.warn('⚠️  Impossible d\'archiver le thread');
@@ -3027,6 +3316,8 @@ class MissionHandler {
               // Fermer le thread après 10 secondes
               setTimeout(async () => {
                 try {
+                  // Nettoyer les permissions temporaires avant archivage
+                  await this.cleanupTempPermissionByThread(client, mission.thread_id, mission.guild_id);
                   await thread.setArchived(true);
                   console.log(`✅ [DEBUG TIMEOUT] Thread archivé`);
                 } catch (error) {

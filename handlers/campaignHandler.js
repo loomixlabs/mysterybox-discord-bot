@@ -16,43 +16,68 @@ class CampaignHandler {
 
   /**
    * Initialiser les campagnes actives au démarrage du bot
+   * @param {Client} client - Client Discord
+   * @param {string} guildId - (Optionnel) Si fourni, initialise uniquement ce serveur. Sinon, tous les serveurs.
    */
-  async initActiveCampaigns(client, guildId) {
+  async initActiveCampaigns(client, guildId = null) {
     console.log('🔄 Initialisation des campagnes actives...');
 
-    const campaigns = await db.getActiveCampaigns(guildId);
+    // Si pas de guildId spécifié, récupérer toutes les campagnes actives de tous les serveurs
+    let campaigns;
+    if (guildId) {
+      campaigns = await db.getActiveCampaigns(guildId);
+    } else {
+      // Récupérer les campagnes actives de TOUS les serveurs
+      campaigns = await db.queryAll(
+        `SELECT * FROM give_campaigns
+         WHERE status IN ('running', 'paused')
+         ORDER BY started_at DESC`
+      );
+    }
+
+    let initializedCount = 0;
 
     for (const campaign of campaigns) {
-      if (campaign.campaign_type === 'burst') {
-        // Vérifier si la campagne burst est terminée
-        if (campaign.total_gives_posted >= campaign.burst_count) {
-          await db.completeCampaign(campaign.guild_id, campaign.id);
-          console.log(`✅ Campagne burst #${campaign.id} marquée comme terminée`);
-        } else {
+      try {
+        if (campaign.campaign_type === 'burst') {
+          // Vérifier si la campagne burst est terminée
+          if (campaign.total_gives_posted >= campaign.burst_count) {
+            await db.completeCampaign(campaign.guild_id, campaign.id);
+            console.log(`✅ Campagne burst #${campaign.id} marquée comme terminée`);
+          } else if (campaign.status === 'running') {
+            // Ne reprendre que les campagnes "running" (pas "paused")
+            // Vérifier si la campagne était déjà démarrée (redémarrage du bot)
+            if (campaign.started_at) {
+              console.log(`🔄 Reprise campagne burst #${campaign.id} [${campaign.guild_id}] (${campaign.total_gives_posted}/${campaign.burst_count})`);
+              await this.resumeBurstCampaign(client, campaign);
+              initializedCount++;
+            } else {
+              // Nouveau démarrage
+              console.log(`🚀 Démarrage campagne burst #${campaign.id} [${campaign.guild_id}]`);
+              await this.startBurstCampaign(client, campaign);
+              initializedCount++;
+            }
+          }
+        } else if (campaign.campaign_type === 'scheduled' && campaign.status === 'running') {
+          // Ne reprendre que les campagnes "running" (pas "paused")
           // Vérifier si la campagne était déjà démarrée (redémarrage du bot)
           if (campaign.started_at) {
-            console.log(`🔄 Reprise campagne burst #${campaign.id} (${campaign.total_gives_posted}/${campaign.burst_count})`);
-            await this.resumeBurstCampaign(client, campaign);
+            console.log(`🔄 Reprise campagne schedule #${campaign.id} [${campaign.guild_id}]`);
+            await this.resumeScheduleCampaign(client, campaign);
+            initializedCount++;
           } else {
             // Nouveau démarrage
-            console.log(`🚀 Démarrage campagne burst #${campaign.id}`);
-            await this.startBurstCampaign(client, campaign);
+            console.log(`🚀 Démarrage campagne schedule #${campaign.id} [${campaign.guild_id}]`);
+            await this.startScheduleCampaign(client, campaign);
+            initializedCount++;
           }
         }
-      } else if (campaign.campaign_type === 'scheduled') {
-        // Vérifier si la campagne était déjà démarrée (redémarrage du bot)
-        if (campaign.started_at) {
-          console.log(`🔄 Reprise campagne schedule #${campaign.id}`);
-          await this.resumeScheduleCampaign(client, campaign);
-        } else {
-          // Nouveau démarrage
-          console.log(`🚀 Démarrage campagne schedule #${campaign.id}`);
-          await this.startScheduleCampaign(client, campaign);
-        }
+      } catch (error) {
+        console.error(`🔴 Erreur initialisation campagne #${campaign.id}:`, error.message);
       }
     }
 
-    console.log(`✅ ${campaigns.length} campagne(s) active(s) initialisée(s)`);
+    console.log(`✅ ${initializedCount} campagne(s) active(s) initialisée(s) sur ${campaigns.length} trouvée(s)`);
   }
 
   /**
@@ -512,11 +537,39 @@ class CampaignHandler {
   }
 
   /**
-   * Reprendre une campagne
+   * Reprendre une campagne en pause
+   * @param {string} guildId - ID du serveur
+   * @param {number} campaignId - ID de la campagne
+   * @param {Client} client - Client Discord (optionnel, pour relancer les timers)
    */
-  async resumeCampaign(guildId, campaignId) {
-    await db.updateCampaignStatus(guildId, campaignId, 'active');
-    console.log(`▶️ Campagne #${campaignId} reprise`);
+  async resumeCampaign(guildId, campaignId, client = null) {
+    // Récupérer la campagne
+    const campaign = await db.getCampaignById(guildId, campaignId);
+
+    if (!campaign) {
+      throw new Error('Campagne introuvable');
+    }
+
+    if (campaign.status !== 'paused') {
+      console.warn(`⚠️ Campagne #${campaignId} n'est pas en pause (status: ${campaign.status})`);
+    }
+
+    // Mettre à jour le statut à 'running' (pas 'active' !)
+    await db.updateCampaignStatus(guildId, campaignId, 'running');
+    console.log(`▶️ Campagne #${campaignId} reprise (status: running)`);
+
+    // Si un client Discord est fourni, relancer les timers/cron
+    if (client) {
+      if (campaign.campaign_type === 'burst') {
+        // Relancer les timers pour les boîtes restantes
+        await this.resumeBurstCampaign(client, campaign);
+        console.log(`🔄 Timers burst relancés pour campagne #${campaignId}`);
+      } else if (campaign.campaign_type === 'scheduled') {
+        // Relancer la tâche cron
+        await this.resumeScheduleCampaign(client, campaign);
+        console.log(`🔄 Cron schedule relancé pour campagne #${campaignId}`);
+      }
+    }
   }
 
   /**

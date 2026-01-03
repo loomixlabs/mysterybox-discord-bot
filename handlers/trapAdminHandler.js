@@ -212,13 +212,20 @@ class TrapAdminHandler {
           `🎯 **Instructions:**\n` +
           `• Drag & drop ton image ici\n` +
           `• Ou colle un screenshot (Ctrl+V)\n` +
+          `• Ou colle une **URL d'image** (https://...)\n` +
           `• Formats acceptés: PNG, JPG, GIF, WEBP\n\n` +
           `⏱️ Tu as **2 minutes**\n\n` +
           `💡 L'image sera automatiquement mise à jour dans la configuration du piège.`
       });
 
-      // Créer le collector pour l'upload d'image
-      const filter = (m) => m.author.id === interaction.user.id && m.attachments.size > 0;
+      // Créer le collector pour l'upload d'image (attachment OU URL)
+      const filter = (m) => {
+        if (m.author.id !== interaction.user.id) return false;
+        if (m.attachments.size > 0) return true;
+        const urlPattern = /https?:\/\/[^\s]+/i;
+        if (urlPattern.test(m.content)) return true;
+        return false;
+      };
       const collector = thread.createMessageCollector({
         filter,
         time: 120000, // 2 minutes
@@ -226,15 +233,31 @@ class TrapAdminHandler {
       });
 
       collector.on('collect', async (message) => {
-        const attachment = message.attachments.first();
-        const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+        let imageUrl;
 
-        if (!validImageTypes.includes(attachment.contentType)) {
-          await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
-          return;
+        // Cas 1: Attachment (fichier uploadé)
+        if (message.attachments.size > 0) {
+          const attachment = message.attachments.first();
+          const validImageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+
+          if (!validImageTypes.includes(attachment.contentType)) {
+            await thread.send('❌ Le fichier doit être une image (PNG, JPG, GIF, WEBP).');
+            return;
+          }
+
+          imageUrl = attachment.url;
         }
-
-        const imageUrl = attachment.url;
+        // Cas 2: URL collée
+        else {
+          const urlPattern = /https?:\/\/[^\s]+/i;
+          const match = message.content.match(urlPattern);
+          if (match) {
+            imageUrl = match[0].replace(/[<>)}\]]+$/, '');
+          } else {
+            await thread.send('❌ URL invalide. Colle une URL commençant par http:// ou https://');
+            return;
+          }
+        }
 
         // Mettre à jour directement dans la base de données
         await db.query(

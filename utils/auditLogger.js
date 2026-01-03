@@ -83,6 +83,14 @@ async function logCollectibleDeleted(guildId, adminId, collectibleData) {
   });
 }
 
+async function logCollectibleEdited(guildId, adminId, collectibleData, changes) {
+  return logAdminAction(guildId, adminId, 'collectible_edited', {
+    collectible_id: collectibleData.id,
+    name: collectibleData.name,
+    changes: changes
+  });
+}
+
 // MISSIONS
 async function logMissionAdded(guildId, adminId, missionData) {
   return logAdminAction(guildId, adminId, 'mission_added', {
@@ -370,6 +378,7 @@ module.exports = {
   // Collectibles
   logCollectibleAdded,
   logCollectibleDeleted,
+  logCollectibleEdited,
 
   // Missions
   logMissionAdded,

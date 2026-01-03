@@ -56,113 +56,64 @@ async function getPlayerActiveBonuses(guildId, userId) {
 }
 
 /**
- * Appliquer les modifications de probabilités dues aux bonus actifs
- * @param {string} guildId - ID du serveur Discord
- * @param {string} userId - ID Discord du joueur
- * @param {object} baseProbabilities - Probabilités de base {collectible, mission, trap}
- * @returns {object} Probabilités modifiées + informations sur les bonus appliqués
- */
-async function applyProbabilityBonuses(guildId, userId, baseProbabilities) {
-  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
-
-  let modifiedProbs = { ...baseProbabilities };
-  const appliedBonuses = [];
-
-  for (const bonus of activeBonuses) {
-    const config = bonus.effect_config || {};
-
-    // Boost de probabilité global (ex: Chance du Diable)
-    if (bonus.effect_type === 'probability' && config.boost_percentage) {
-      const boostPercent = config.boost_percentage;
-
-      if (config.applies_to === 'all' || !config.applies_to) {
-        // Boost global sur collectible
-        modifiedProbs.collectible += (baseProbabilities.collectible * boostPercent / 100);
-        appliedBonuses.push({
-          name: bonus.name,
-          icon: bonus.icon,
-          description: `+${boostPercent}% chance globale`
-        });
-      }
-    }
-
-    // Boost de rareté (ex: Aimant à Légendaires)
-    if (bonus.effect_type === 'rarity_boost' && config.boost_percentage && config.target_rarity) {
-      appliedBonuses.push({
-        name: bonus.name,
-        icon: bonus.icon,
-        description: `+${config.boost_percentage}% chance ${config.target_rarity}`,
-        rarity_boost: {
-          target: config.target_rarity,
-          percentage: config.boost_percentage
-        }
-      });
-    }
-  }
-
-  // Normaliser les probabilités si elles dépassent 100
-  const total = modifiedProbs.collectible + modifiedProbs.mission + modifiedProbs.trap;
-  if (total > 100) {
-    const factor = 100 / total;
-    modifiedProbs.collectible = Math.round(modifiedProbs.collectible * factor);
-    modifiedProbs.mission = Math.round(modifiedProbs.mission * factor);
-    modifiedProbs.trap = Math.round(modifiedProbs.trap * factor);
-  }
-
-  return {
-    probabilities: modifiedProbs,
-    appliedBonuses,
-    hasBoosts: appliedBonuses.length > 0
-  };
-}
-
-/**
  * Vérifier si le joueur a un bonus de révélation actif (Vision Divine)
+ * IMPORTANT: Le bonus doit être activé (activated_at != null) pour fonctionner
  */
 async function hasRevealBonus(guildId, userId) {
   const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   return activeBonuses.find(bonus =>
     bonus.effect_type === 'reveal' &&
+    bonus.activated_at !== null &&  // ⚠️ Doit être activé (pas en pause)
     (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
   );
 }
 
 /**
- * Consommer une charge de révélation
+ * Consommer une charge de révélation (Vision Divine)
+ * @param {string} guildId - Guild ID
+ * @param {string} userId - User Discord ID
+ * @param {object} client - Discord client (optionnel, pour notifications badges)
  */
-async function consumeRevealCharge(guildId, userId) {
+async function consumeRevealCharge(guildId, userId, client = null) {
   const revealBonus = await hasRevealBonus(guildId, userId);
   if (!revealBonus) return null;
 
   if (revealBonus.duration_type === 'charges') {
     await db.decrementBonusCharge(guildId, revealBonus.id);
-    // TODO: Implémenter db.logBonusUsage() dans database-pg.js
-    // await db.logBonusUsage(
-    //   userId,
-    //   revealBonus.bonus_id,
-    //   { action: 'revealed_mystery_box' },
-    //   'manual'
-    // );
+
+    // Logger l'utilisation dans bonus_usage_history
+    try {
+      await db.query(`
+        INSERT INTO bonus_usage_history (guild_id, user_id, bonus_id, used_at, effect_result, trigger_type)
+        VALUES ($1, $2, $3, NOW(), $4, 'vision_divine_reveal')
+      `, [guildId, userId, revealBonus.bonus_id, JSON.stringify({ action: 'revealed_mystery_box' })]);
+    } catch (logError) {
+      console.error('⚠️  Erreur logging Vision Divine usage:', logError);
+    }
+
+    // Tracking badge Vision Divine
+    try {
+      const player = await db.getPlayerByDiscordId(guildId, userId);
+      if (player) {
+        await badgeHandler.onSuperBonusUsed(guildId, player.id, revealBonus.bonus_id, client);
+      }
+    } catch (badgeError) {
+      console.error('🔴 Erreur tracking badge Vision Divine:', badgeError);
+    }
   }
 
   return revealBonus;
 }
 
 /**
- * Vérifier si le joueur a un bonus de détection de pièges actif
- */
-async function hasTrapDetector(guildId, userId) {
-  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
-  return activeBonuses.find(bonus => bonus.effect_type === 'detector');
-}
-
-/**
  * Vérifier si le joueur a un multiplicateur de récompense actif
+ * IMPORTANT: Le bonus doit être activé (activated_at != null) pour fonctionner
  */
 async function getRewardMultiplier(guildId, userId) {
   const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   const multiplierBonus = activeBonuses.find(bonus =>
     bonus.effect_type === 'multiplier' &&
+    bonus.activated_at !== null &&  // ⚠️ Doit être activé (pas en pause)
     (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
   );
 
@@ -201,11 +152,13 @@ async function consumeMultiplierCharge(guildId, userId) {
 
 /**
  * Vérifier si le joueur a un bouclier anti-piège actif
+ * IMPORTANT: Le bonus doit être activé (activated_at != null) pour fonctionner
  */
 async function hasTrapShield(guildId, userId) {
   const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
   return activeBonuses.find(bonus =>
     bonus.effect_type === 'protection' &&
+    bonus.activated_at !== null &&  // ⚠️ Doit être activé (pas en pause)
     (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
   );
 }
@@ -264,6 +217,93 @@ async function consumeTrapShield(guildId, userId, trapName) {
     ...shield,
     remainingCharges: updatedBonus?.remaining_charges || 0,
     totalCharges: shield.default_charges || 3
+  };
+}
+
+/**
+ * Vérifier si le joueur a un Accélérateur de Cooldown actif
+ */
+async function hasCooldownAccelerator(guildId, userId) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
+  return activeBonuses.find(bonus =>
+    bonus.effect_type === 'cooldown' &&
+    (bonus.remaining_charges > 0 || bonus.duration_type !== 'charges')
+  );
+}
+
+/**
+ * Activer l'Accélérateur de Cooldown - supprime tous les cooldowns actifs
+ * @returns {object|null} Résultat avec succès/erreur et détails
+ */
+async function activateCooldownAccelerator(guildId, userId) {
+  // 1. Vérifier si le joueur a le bonus
+  const accelerator = await hasCooldownAccelerator(guildId, userId);
+  if (!accelerator) {
+    return { success: false, error: 'no_bonus', message: 'Tu n\'as pas d\'Accélérateur de Cooldown actif.' };
+  }
+
+  // 2. Récupérer le joueur
+  const player = await db.getPlayerByDiscordId(guildId, userId);
+  if (!player) {
+    return { success: false, error: 'no_player', message: 'Joueur introuvable.' };
+  }
+
+  // 3. Vérifier si le joueur a un cooldown actif
+  const activeCooldowns = await db.getActiveCooldowns(guildId, player.id);
+  if (activeCooldowns.length === 0) {
+    return {
+      success: false,
+      error: 'no_cooldown',
+      message: '⚠️ Tu n\'as aucun cooldown actif ! Ta charge n\'a pas été consommée.'
+    };
+  }
+
+  // 4. Supprimer tous les cooldowns
+  const removedCount = await db.removeAllCooldowns(guildId, player.id);
+
+  // 5. Consommer une charge du bonus
+  await db.decrementBonusCharge(guildId, accelerator.id);
+
+  // 6. Vérifier s'il reste des charges après décrémentation
+  const updatedBonus = await db.queryOne(`
+    SELECT remaining_charges
+    FROM player_active_bonuses
+    WHERE id = $1 AND guild_id = $2
+  `, [accelerator.id, guildId]);
+
+  // 7. Si plus de charges, désactiver le bonus
+  if (updatedBonus && updatedBonus.remaining_charges <= 0) {
+    await db.query(`
+      UPDATE player_active_bonuses
+      SET is_active = FALSE, used_at = NOW()
+      WHERE id = $1 AND guild_id = $2
+    `, [accelerator.id, guildId]);
+  }
+
+  // 8. Logger l'utilisation du bonus
+  try {
+    await db.query(`
+      INSERT INTO bonus_usage_history (guild_id, user_id, bonus_id, used_at, effect_result, trigger_type)
+      VALUES ($1, $2, $3, NOW(), $4, 'cooldown_removed')
+    `, [
+      guildId,
+      userId,
+      accelerator.bonus_id,
+      JSON.stringify({
+        cooldowns_removed: removedCount,
+        remaining_charges: updatedBonus?.remaining_charges || 0
+      })
+    ]);
+  } catch (logError) {
+    console.error('⚠️  Erreur logging bonus usage:', logError);
+  }
+
+  return {
+    success: true,
+    cooldownsRemoved: removedCount,
+    remainingCharges: updatedBonus?.remaining_charges || 0,
+    bonusName: accelerator.name,
+    bonusIcon: accelerator.icon
   };
 }
 
@@ -871,7 +911,7 @@ function createVisionDivineEmbed(content, branding) {
  * @param {string} messageId - Message ID de la mystery box
  * @returns {Promise<Object|null>} { embed, components } si Vision Divine active, null sinon
  */
-async function checkAndRevealVisionDivine(userId, guildId, content, messageId) {
+async function checkAndRevealVisionDivine(userId, guildId, content, messageId, client = null) {
   try {
     // Créer la clé de tracking pour cette révélation
     const trackingKey = `${messageId}:${userId}`;
@@ -915,8 +955,8 @@ async function checkAndRevealVisionDivine(userId, guildId, content, messageId) {
     visionDivineUsed.add(trackingKey);
     console.log(`🔐 [VISION DIVINE] Révélation trackée: ${trackingKey}`);
 
-    // Consommer 1 charge de Vision Divine
-    await consumeRevealCharge(guildId, userId);
+    // Consommer 1 charge de Vision Divine (avec tracking badge)
+    await consumeRevealCharge(guildId, userId, client);
     console.log(`✅ [VISION DIVINE] 1 charge consommée pour ${userId}`);
 
     return {
@@ -1323,13 +1363,736 @@ async function disableAllSuperBonuses(interaction) {
   await showSuperBonusesAdminPanel(interaction);
 }
 
+// =====================================================
+// MYSTERY BOX JOKER - Système de choix de collectible
+// =====================================================
+
+/**
+ * Vérifier si le joueur a un bonus Joker actif
+ */
+async function hasJokerBonus(guildId, userId) {
+  const activeBonuses = await getPlayerActiveBonuses(guildId, userId);
+  return activeBonuses.find(bonus => {
+    if (bonus.effect_type !== 'joker') return false;
+
+    // Pour les bonus avec charges
+    if (bonus.duration_type === 'charges') {
+      // null = non initialisé, considérer comme ayant des charges disponibles
+      // sinon vérifier que > 0
+      return bonus.remaining_charges === null || bonus.remaining_charges > 0;
+    }
+
+    // Pour les bonus temporaires ou permanents
+    return true;
+  });
+}
+
+/**
+ * Récupérer la liste des collectibles manquants d'un joueur
+ * (collectibles du thème actif qu'il n'a pas encore)
+ * @deprecated Utilisez getCollectiblesForJoker() pour le nouveau système avec niveaux
+ */
+async function getMissingCollectibles(guildId, userId) {
+  const result = await getCollectiblesForJoker(guildId, userId);
+  // Compatibilité: retourner uniquement les non-possédés
+  return result.collectibles.filter(c => !c.owned);
+}
+
+/**
+ * Récupérer TOUS les collectibles du thème avec leur état de possession et niveau
+ * pour l'interface de sélection du Joker (système de leveling)
+ *
+ * @returns {Object} { collectibles: Array, stats: { total, owned, missing, maxLevel } }
+ */
+async function getCollectiblesForJoker(guildId, userId) {
+  try {
+    // Récupérer le thème actif
+    const activeTheme = await db.getActiveTheme(guildId);
+    if (!activeTheme) {
+      console.log('⚠️ [JOKER] Aucun thème actif');
+      return { collectibles: [], stats: { total: 0, owned: 0, missing: 0, maxLevel: 0, lost: 0 } };
+    }
+
+    // Récupérer le joueur
+    const player = await db.queryOne(`
+      SELECT id FROM players WHERE guild_id = $1 AND discord_id = $2
+    `, [guildId, userId]);
+
+    // Récupérer TOUS les collectibles du thème AVEC leur état de possession et niveau
+    // Important: On récupère aussi les collectibles perdus (lost_at IS NOT NULL) avec leur ancien niveau
+    const collectibles = await db.queryAll(`
+      SELECT
+        col.id,
+        col.name,
+        col.rarity,
+        col.theme_id,
+        CASE WHEN c_owned.id IS NOT NULL THEN TRUE ELSE FALSE END as owned,
+        CASE WHEN c_lost.id IS NOT NULL THEN TRUE ELSE FALSE END as was_lost,
+        COALESCE(c_owned.level, c_lost.level, 0) as level,
+        COALESCE(c_owned.xp, c_lost.xp, 0) as xp
+      FROM collectibles col
+      LEFT JOIN collections c_owned ON c_owned.collectible_id = col.id
+        AND c_owned.guild_id = col.guild_id
+        AND c_owned.player_id = $3
+        AND c_owned.lost_at IS NULL
+      LEFT JOIN collections c_lost ON c_lost.collectible_id = col.id
+        AND c_lost.guild_id = col.guild_id
+        AND c_lost.player_id = $3
+        AND c_lost.lost_at IS NOT NULL
+      WHERE col.guild_id = $1 AND col.theme_id = $2
+      ORDER BY
+        CASE col.rarity
+          WHEN 'legendary' THEN 1
+          WHEN 'epic' THEN 2
+          WHEN 'rare' THEN 3
+          WHEN 'common' THEN 4
+          ELSE 5
+        END,
+        col.name ASC
+    `, [guildId, activeTheme.id, player?.id || -1]);
+
+    // Calculer les stats
+    const MAX_LEVEL = 4;
+    const stats = {
+      total: collectibles.length,
+      owned: collectibles.filter(c => c.owned).length,
+      missing: collectibles.filter(c => !c.owned && !c.was_lost).length,
+      lost: collectibles.filter(c => !c.owned && c.was_lost).length,
+      maxLevel: collectibles.filter(c => c.owned && c.level >= MAX_LEVEL).length
+    };
+
+    // Règles de sélection:
+    // - Perdu (was_lost=true, owned=false): TOUJOURS sélectionnable (récupération, pas de gain XP)
+    // - Possédé niveau max: BLOQUÉ (pas de gain possible)
+    // - Possédé pas niveau max: sélectionnable (fusion XP)
+    // - Jamais eu: sélectionnable (nouveau)
+    const collectiblesWithStatus = collectibles.map(c => ({
+      ...c,
+      isMaxLevel: c.owned && c.level >= MAX_LEVEL,
+      // Perdu = toujours récupérable, même si c'était niveau max
+      canSelect: c.was_lost || !c.owned || c.level < MAX_LEVEL
+    }));
+
+    console.log(`🃏 [JOKER] ${stats.missing} manquants, ${stats.lost} perdus, ${stats.owned} possédés (${stats.maxLevel} niveau max) sur ${stats.total} pour ${userId}`);
+
+    return { collectibles: collectiblesWithStatus, stats };
+  } catch (error) {
+    console.error('❌ [JOKER] Erreur récupération collectibles:', error);
+    return { collectibles: [], stats: { total: 0, owned: 0, missing: 0, maxLevel: 0, lost: 0 } };
+  }
+}
+
+/**
+ * Consommer le bonus Joker et donner le collectible choisi
+ * Supporte le système de leveling: si déjà possédé, ajoute de l'XP (fusion)
+ *
+ * @returns {Object} { success, collectible, player, isLevelUp, newLevel, loomixReward, wasDuplicate }
+ */
+async function consumeJokerBonus(guildId, userId, collectibleId) {
+  const jokerBonus = await hasJokerBonus(guildId, userId);
+  if (!jokerBonus) {
+    console.log('⚠️ [JOKER] Pas de bonus joker actif');
+    return { success: false, error: 'no_bonus' };
+  }
+
+  try {
+    // Vérifier que le collectible existe
+    const collectible = await db.queryOne(`
+      SELECT id, name, rarity, theme_id
+      FROM collectibles
+      WHERE id = $1 AND guild_id = $2
+    `, [collectibleId, guildId]);
+
+    if (!collectible) {
+      return { success: false, error: 'invalid_collectible' };
+    }
+
+    // Récupérer le player
+    const player = await db.queryOne(`
+      SELECT id FROM players WHERE guild_id = $1 AND discord_id = $2
+    `, [guildId, userId]);
+
+    if (!player) {
+      return { success: false, error: 'player_not_found' };
+    }
+
+    // Vérifier si le joueur possède déjà ce collectible au niveau max (BLOCAGE)
+    const existingOwned = await db.queryOne(`
+      SELECT c.id, c.level, c.xp
+      FROM collections c
+      WHERE c.guild_id = $1 AND c.player_id = $2 AND c.collectible_id = $3 AND c.lost_at IS NULL
+    `, [guildId, player.id, collectibleId]);
+
+    const MAX_LEVEL = 4;
+
+    // SEUL cas de blocage: possédé ET niveau max
+    if (existingOwned && existingOwned.level >= MAX_LEVEL) {
+      return { success: false, error: 'max_level_reached' };
+    }
+
+    // Utiliser db.addCollectibleWithLevels qui gère tous les cas:
+    // - Nouveau collectible → isNew: true
+    // - Collectible perdu → restored: true (conserve niveau/XP/mint)
+    // - Doublon → fusion: true (ajoute XP, level up possible)
+    const addResult = await db.addCollectibleWithLevels(guildId, player.id, collectibleId, 'joker');
+
+    if (!addResult) {
+      return { success: false, error: 'database_error' };
+    }
+
+    const wasDuplicate = addResult.fusion || false;
+    const wasRecovered = addResult.restored || false;
+    const isNew = addResult.isNew || false;
+    const isLevelUp = addResult.leveledUp || false;
+    const newLevel = addResult.newLevel || 1;
+    const loomixReward = addResult.rewards?.loomix || 0;
+
+    // Logs adaptés au type d'action
+    if (wasRecovered) {
+      console.log(`🃏 [JOKER] Récupération: ${collectible.name} (niveau ${newLevel} conservé, mint #${addResult.mintNumber})`);
+    } else if (wasDuplicate) {
+      console.log(`🃏 [JOKER] Fusion: ${collectible.name} level ${addResult.oldLevel} → ${newLevel}` +
+        (isLevelUp ? ` (+${loomixReward} Loomix)` : ''));
+    } else {
+      console.log(`🃏 [JOKER] Nouveau collectible: ${collectible.name} (mint #${addResult.mintNumber})`);
+    }
+
+    // Consommer la charge du joker
+    if (jokerBonus.duration_type === 'charges') {
+      if (jokerBonus.remaining_charges === null) {
+        await db.query(`
+          UPDATE player_active_bonuses
+          SET remaining_charges = 0, is_active = FALSE, used_at = NOW(), activated_at = COALESCE(activated_at, NOW())
+          WHERE id = $1 AND guild_id = $2
+        `, [jokerBonus.id, guildId]);
+        console.log(`🃏 [JOKER] Charges null -> désactivé directement`);
+      } else {
+        await db.decrementBonusCharge(guildId, jokerBonus.id);
+
+        const updatedBonus = await db.queryOne(`
+          SELECT remaining_charges
+          FROM player_active_bonuses
+          WHERE id = $1 AND guild_id = $2
+        `, [jokerBonus.id, guildId]);
+
+        if (updatedBonus && updatedBonus.remaining_charges <= 0) {
+          await db.query(`
+            UPDATE player_active_bonuses
+            SET is_active = FALSE, used_at = NOW()
+            WHERE id = $1 AND guild_id = $2
+          `, [jokerBonus.id, guildId]);
+        }
+      }
+    }
+
+    // Logger l'utilisation du bonus
+    try {
+      await db.query(`
+        INSERT INTO bonus_usage_history (guild_id, user_id, bonus_id, used_at, effect_result, trigger_type)
+        VALUES ($1, $2, $3, NOW(), $4, 'joker_used')
+      `, [
+        guildId,
+        userId,
+        jokerBonus.bonus_id,
+        JSON.stringify({
+          collectible_id: collectibleId,
+          collectible_name: collectible.name,
+          collectible_rarity: collectible.rarity,
+          is_new: isNew,
+          was_duplicate: wasDuplicate,
+          was_recovered: wasRecovered,
+          level_up: isLevelUp,
+          old_level: addResult.oldLevel || 0,
+          new_level: newLevel,
+          loomix_reward: loomixReward,
+          mint_number: addResult.mintNumber
+        })
+      ]);
+    } catch (logError) {
+      console.error('⚠️ Erreur logging joker usage:', logError);
+    }
+
+    // Message de log adapté au type d'action
+    const actionType = wasRecovered ? 'récupérer' : (wasDuplicate ? 'améliorer' : 'obtenir');
+    console.log(`🃏 [JOKER] ${userId} a utilisé son joker pour ${actionType} ${collectible.name} (${collectible.rarity})`);
+
+    return {
+      success: true,
+      collectible: collectible,
+      player: player,
+      isNew,
+      wasDuplicate,
+      wasRecovered,
+      isLevelUp,
+      oldLevel: addResult.oldLevel || 0,
+      newLevel,
+      loomixReward,
+      mintNumber: addResult.mintNumber,
+      currentXp: addResult.currentXp || 0,
+      remainingCharges: 0
+    };
+
+  } catch (error) {
+    console.error('❌ [JOKER] Erreur consommation bonus:', error);
+    return { success: false, error: 'database_error' };
+  }
+}
+
+/**
+ * Créer l'embed pour la sélection du collectible (interface joker) - LEGENDARY UI
+ * Supporte le nouveau système de leveling avec affichage des niveaux
+ *
+ * @param {Array} collectibles - Liste des collectibles avec owned, level, canSelect
+ * @param {string} username - Nom du joueur
+ * @param {Object} stats - Statistiques { total, owned, missing, maxLevel }
+ */
+function createJokerSelectionEmbed(collectibles, username, stats = null) {
+  // Compatibilité avec l'ancien format (tableau simple)
+  const isNewFormat = collectibles.length > 0 && typeof collectibles[0].owned !== 'undefined';
+
+  // Calculer les stats si non fournies
+  if (!stats && isNewFormat) {
+    stats = {
+      total: collectibles.length,
+      owned: collectibles.filter(c => c.owned).length,
+      missing: collectibles.filter(c => !c.owned && !c.was_lost).length,
+      lost: collectibles.filter(c => c.was_lost && !c.owned).length,
+      maxLevel: collectibles.filter(c => c.isMaxLevel).length
+    };
+  }
+
+  // Collectibles sélectionnables (non-possédés OU possédés mais pas niveau max)
+  const selectableCount = isNewFormat
+    ? collectibles.filter(c => c.canSelect).length
+    : collectibles.length;
+
+  // Collectibles haut niveau pour recommandations (level 3+)
+  const highLevelCollectibles = isNewFormat
+    ? collectibles.filter(c => c.owned && c.level >= 3 && c.level < 4)
+    : [];
+
+  const embed = new EmbedBuilder()
+    .setTitle('🃏✨ MYSTERYBOX JOKER ACTIVÉ ✨🃏')
+    .setDescription(
+      `╔═══════════════════════════════════════════════╗\n` +
+      `║     🎰 **POUVOIR LÉGENDAIRE DÉBLOQUÉ** 🎰     ║\n` +
+      `╚═══════════════════════════════════════════════╝\n\n` +
+      `🌟 **${username}**, le pouvoir ultime t'appartient ! 🌟\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `Tu peux choisir **N'IMPORTE QUEL** collectible:\n` +
+      `• 🆕 Un collectible **manquant** pour l'obtenir\n` +
+      `• ⬆️ Un collectible **possédé** pour le faire **monter de niveau**\n\n` +
+      `👑 **Même les LÉGENDAIRES !** 👑\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      (stats ? `📊 **${stats.missing}** manquants` +
+        (stats.lost > 0 ? ` | **${stats.lost}** perdus 🔮` : '') +
+        ` | **${stats.owned}** possédés` +
+        (stats.maxLevel > 0 ? ` | **${stats.maxLevel}** niveau max 🔒` : '') + `\n` : '') +
+      `📦 **${selectableCount} collectibles** sélectionnables\n\n` +
+      `╭─────────────────────────────────────────╮\n` +
+      `│  ⚡ *Ce pouvoir est unique...* ⚡  │\n` +
+      `│  💎 *Choisis avec sagesse !* 💎  │\n` +
+      `╰─────────────────────────────────────────╯`
+    )
+    .setColor('#FFD700')
+    .setImage('attachment://joker-wow.gif');
+
+  const rarityConfig = {
+    legendary: { emoji: '🌟', label: 'LÉGENDAIRE' },
+    epic: { emoji: '💜', label: 'ÉPIQUE' },
+    rare: { emoji: '💙', label: 'RARE' },
+    common: { emoji: '⚪', label: 'COMMUN' }
+  };
+
+  // Fonction pour formater un collectible avec son niveau
+  const formatCollectible = (c) => {
+    const config = rarityConfig[c.rarity] || rarityConfig.common;
+
+    // Collectible perdu (peut être récupéré)
+    if (c.was_lost && !c.owned) {
+      const stars = '★'.repeat(c.level) + '☆'.repeat(4 - c.level);
+      return `${config.emoji} **${c.name}** ${stars} 🔮`;
+    }
+
+    // Nouveau (jamais possédé)
+    if (!isNewFormat || !c.owned) {
+      return `${config.emoji} **${c.name}** 🆕`;
+    }
+
+    // Possédé
+    const stars = '★'.repeat(c.level) + '☆'.repeat(4 - c.level);
+    if (c.isMaxLevel) {
+      return `${config.emoji} ~~${c.name}~~ ${stars} 🔒`;
+    }
+    return `${config.emoji} **${c.name}** ${stars}`;
+  };
+
+  // Grouper par rareté
+  const byRarity = {
+    legendary: collectibles.filter(c => c.rarity === 'legendary'),
+    epic: collectibles.filter(c => c.rarity === 'epic'),
+    rare: collectibles.filter(c => c.rarity === 'rare'),
+    common: collectibles.filter(c => c.rarity === 'common')
+  };
+
+  // Section prioritaire: Collectibles proches du niveau max (recommandations)
+  if (highLevelCollectibles.length > 0) {
+    const recommendations = highLevelCollectibles
+      .slice(0, 5)
+      .map(c => {
+        const config = rarityConfig[c.rarity];
+        const stars = '★'.repeat(c.level) + '☆'.repeat(4 - c.level);
+        return `${config.emoji} **${c.name}** ${stars} → ★★★★`;
+      });
+
+    embed.addFields({
+      name: `💡 ═══ RECOMMANDATIONS ═══ 💡`,
+      value: `*Ces collectibles sont proches du niveau max:*\n` + recommendations.join('\n'),
+      inline: false
+    });
+  }
+
+  // Légendaires en section spéciale
+  if (byRarity.legendary.length > 0) {
+    const legendaryList = byRarity.legendary
+      .slice(0, 8)
+      .map(formatCollectible);
+    const moreText = byRarity.legendary.length > 8
+      ? `\n*+${byRarity.legendary.length - 8} autres...*`
+      : '';
+    embed.addFields({
+      name: `🏆 ═══ LÉGENDAIRES ═══ 🏆`,
+      value: legendaryList.join('\n') + moreText,
+      inline: false
+    });
+  }
+
+  // Autres raretés en colonnes
+  for (const [rarity, items] of Object.entries(byRarity)) {
+    if (rarity === 'legendary') continue;
+    if (items.length > 0) {
+      const config = rarityConfig[rarity];
+      const itemsList = items.slice(0, 6).map(formatCollectible);
+      const moreText = items.length > 6 ? `\n*+${items.length - 6} autres...*` : '';
+      embed.addFields({
+        name: `${config.emoji} ${config.label} (${items.length})`,
+        value: itemsList.join('\n') + moreText,
+        inline: true
+      });
+    }
+  }
+
+  embed.addFields({
+    name: '📖 Légende',
+    value: '🆕 = Nouveau | 🔮 = Perdu (récupérable) | ★ = Niveau | 🔒 = Max',
+    inline: false
+  });
+
+  embed.setFooter({ text: '🃏 MysteryBox Joker • Bonus Légendaire • Usage unique' });
+  embed.setTimestamp();
+
+  return embed;
+}
+
+/**
+ * Créer l'embed de succès après utilisation du joker - LEGENDARY UI
+ * Note: Utilise attachment://joker-wow.gif - le fichier doit être attaché lors de l'envoi
+ *
+ * @param {string} username - Nom de l'utilisateur
+ * @param {Object} collectible - Infos du collectible
+ * @param {Object} result - Résultat de consumeJokerBonus (optionnel pour rétrocompat)
+ */
+function createJokerSuccessEmbed(username, collectible, result = {}) {
+  const rarityConfig = {
+    legendary: {
+      emoji: '👑',
+      color: '#FFD700',
+      label: 'LÉGENDAIRE'
+    },
+    epic: {
+      emoji: '💜',
+      color: '#9b59b6',
+      label: 'ÉPIQUE'
+    },
+    rare: {
+      emoji: '💙',
+      color: '#3498db',
+      label: 'RARE'
+    },
+    common: {
+      emoji: '⚪',
+      color: '#95a5a6',
+      label: 'COMMUN'
+    }
+  };
+
+  const config = rarityConfig[collectible.rarity] || rarityConfig.common;
+  const isLegendary = collectible.rarity === 'legendary';
+  const isEpicOrHigher = ['legendary', 'epic'].includes(collectible.rarity);
+
+  // Helpers pour les niveaux
+  const getLevelStars = (level) => {
+    const MAX_LEVEL = 4;
+    return '★'.repeat(level) + '☆'.repeat(MAX_LEVEL - level);
+  };
+
+  // Déterminer le type d'action et le message adapté
+  const { wasRecovered, wasDuplicate, isLevelUp, oldLevel, newLevel, loomixReward, mintNumber, currentXp } = result;
+
+  // Helper pour créer une barre de progression XP (même logique que profileView.js)
+  const XP_THRESHOLDS = { 2: 100, 3: 300, 4: 700 };
+  const MAX_COLLECTIBLE_LEVEL = 4;
+
+  const createXpProgressBar = (currentXp, level, barLength = 20) => {
+    if (level >= MAX_COLLECTIBLE_LEVEL) {
+      return `\`[${'█'.repeat(barLength)}]\` **MAX**`;
+    }
+
+    const prevThreshold = level === 1 ? 0 : XP_THRESHOLDS[level] || 0;
+    const nextThreshold = XP_THRESHOLDS[level + 1] || XP_THRESHOLDS[MAX_COLLECTIBLE_LEVEL];
+    const xpInLevel = currentXp - prevThreshold;
+    const xpNeeded = nextThreshold - prevThreshold;
+    const progress = Math.min(xpInLevel / xpNeeded, 1);
+
+    const filled = Math.round(progress * barLength);
+    const empty = barLength - filled;
+
+    return `\`[${'█'.repeat(filled)}${'░'.repeat(empty)}]\` **${currentXp}/${nextThreshold}** XP`;
+  };
+
+  let actionTitle, actionDescription, footerText;
+
+  if (wasRecovered) {
+    // RÉCUPÉRATION d'un collectible perdu
+    actionTitle = `🔮 COLLECTIBLE RETROUVÉ ! 🔮`;
+    actionDescription =
+      `🃏 **${username}** a utilisé son **MysteryBox Joker** !\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🔮 **COLLECTIBLE RÉCUPÉRÉ:**\n\n` +
+      `╭─────────────────────────────────────────╮\n` +
+      `│  ${config.emoji} **${collectible.name}**\n` +
+      `│  \n` +
+      `│  📊 Rareté: **${config.label}**\n` +
+      `│  ${getLevelStars(newLevel)} Niveau **${newLevel}** conservé\n` +
+      (mintNumber ? `│  🏆 Mint **#${mintNumber}** original\n` : '') +
+      `╰─────────────────────────────────────────╯\n\n` +
+      `✨ *Tu as retrouvé ce collectible que tu avais perdu !* ✨\n` +
+      `🛡️ *Son niveau et son numéro de mint sont préservés !* 🛡️`;
+    footerText = `🃏 MysteryBox Joker • Collectible récupéré • Niveau ${newLevel} conservé`;
+
+  } else if (wasDuplicate) {
+    // FUSION (amélioration d'un doublon)
+    if (isLevelUp) {
+      actionTitle = `⬆️ LEVEL UP ! ⬆️`;
+      actionDescription =
+        `🃏 **${username}** a utilisé son **MysteryBox Joker** !\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `⬆️ **FUSION RÉUSSIE - LEVEL UP !**\n\n` +
+        `╭─────────────────────────────────────────╮\n` +
+        `│  ${config.emoji} **${collectible.name}**\n` +
+        `│  \n` +
+        `│  📊 Rareté: **${config.label}**\n` +
+        `│  ${getLevelStars(oldLevel)} → ${getLevelStars(newLevel)}\n` +
+        `│  📈 Niveau **${oldLevel}** → **${newLevel}**\n` +
+        (loomixReward > 0 ? `│  💰 **+${loomixReward} Loomix** gagnés !\n` : '') +
+        `╰─────────────────────────────────────────╯\n\n` +
+        `🎉 *Félicitations ! Ton collectible a monté de niveau !* 🎉\n` +
+        `💎 *Plus le niveau est haut, plus il est précieux !* 💎`;
+      footerText = `🃏 MysteryBox Joker • Level Up ! • +${loomixReward} Loomix`;
+    } else {
+      // Calculer la progression vers le niveau suivant (passer currentXp et niveau actuel)
+      const xpProgressBar = createXpProgressBar(currentXp || 0, newLevel || 1);
+
+      actionTitle = `⚡ FUSION ! ⚡`;
+      actionDescription =
+        `🃏 **${username}** a utilisé son **MysteryBox Joker** !\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `⚡ **XP GAGNÉ PAR FUSION:**\n\n` +
+        `╭─────────────────────────────────────────╮\n` +
+        `│  ${config.emoji} **${collectible.name}**\n` +
+        `│  \n` +
+        `│  📊 Rareté: **${config.label}**\n` +
+        `│  ${getLevelStars(newLevel)} Niveau **${newLevel}**\n` +
+        `│  \n` +
+        `│  📈 **+100 XP** ajoutés !\n` +
+        `│  \n` +
+        `│  ⏳ Progression: ${xpProgressBar}\n` +
+        `╰─────────────────────────────────────────╯\n\n` +
+        `⚡ *Fusion réussie ! Continue pour level up !* ⚡\n` +
+        `📈 *Chaque doublon te rapproche du niveau suivant !* 📈`;
+      footerText = `🃏 MysteryBox Joker • Fusion • +100 XP`;
+    }
+
+  } else {
+    // NOUVEAU collectible (comportement par défaut)
+    actionTitle = isLegendary
+      ? '🎆✨ JACKPOT LÉGENDAIRE OBTENU ✨🎆'
+      : `🃏✨ JOKER UTILISÉ - ${config.label} ✨🃏`;
+    actionDescription =
+      (isLegendary
+        ? `╔═══════════════════════════════════════════════╗\n` +
+          `║     🏆 **CHOIX LÉGENDAIRE EFFECTUÉ !** 🏆     ║\n` +
+          `╚═══════════════════════════════════════════════╝\n\n`
+        : isEpicOrHigher
+          ? `╔════════════════════════════════════════╗\n` +
+            `║     💜 **EXCELLENT CHOIX !** 💜     ║\n` +
+            `╚════════════════════════════════════════╝\n\n`
+          : ''
+      ) +
+      `🃏 **${username}** a utilisé son **MysteryBox Joker** !\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🎁 **NOUVEAU COLLECTIBLE:**\n\n` +
+      `╭─────────────────────────────────────────╮\n` +
+      `│  ${config.emoji} **${collectible.name}**\n` +
+      `│  \n` +
+      `│  📊 Rareté: **${config.label}**\n` +
+      `│  ${getLevelStars(1)} Niveau **1**\n` +
+      (mintNumber ? `│  🏆 Mint **#${mintNumber}**\n` : '') +
+      `╰─────────────────────────────────────────╯\n\n` +
+      (isLegendary
+        ? `🌟 *Un choix audacieux et légendaire !* 🌟\n` +
+          `👑 *Tu as rejoint l'élite des collectionneurs !* 👑`
+        : isEpicOrHigher
+          ? `💎 *Excellent choix !* 💎\n` +
+            `✨ *Ta collection s'enrichit !* ✨`
+          : `✨ *Ajouté à ta collection !* ✨`
+      );
+    footerText = `🃏 MysteryBox Joker • Nouveau collectible • Mint #${mintNumber || '?'}`;
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(actionTitle)
+    .setDescription(actionDescription)
+    .setColor(config.color)
+    .setImage('attachment://joker-wow.gif') // GIF local attaché
+    .setFooter({ text: footerText })
+    .setTimestamp();
+
+  return embed;
+}
+
+/**
+ * Créer le menu de sélection pour le joker (paginated si nécessaire)
+ * Supporte le nouveau système avec niveaux - filtre les collectibles niveau max
+ *
+ * @param {Array} collectibles - Liste des collectibles (avec canSelect pour le nouveau format)
+ * @param {number} page - Page actuelle (0-indexed)
+ */
+function createJokerSelectMenu(collectibles, page = 0) {
+  const ITEMS_PER_PAGE = 25; // Limite Discord pour les select menus
+
+  // Nouveau format: filtrer les collectibles non sélectionnables (niveau max)
+  const isNewFormat = collectibles.length > 0 && typeof collectibles[0].canSelect !== 'undefined';
+  const selectableCollectibles = isNewFormat
+    ? collectibles.filter(c => c.canSelect)
+    : collectibles;
+
+  const startIdx = page * ITEMS_PER_PAGE;
+  const pageItems = selectableCollectibles.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(selectableCollectibles.length / ITEMS_PER_PAGE);
+
+  const rarityEmojis = {
+    legendary: '🌟',
+    epic: '💜',
+    rare: '💙',
+    common: '⚪'
+  };
+
+  const options = pageItems.map(c => {
+    // Description avec niveau si possédé
+    let description = c.rarity.toUpperCase();
+
+    if (isNewFormat) {
+      if (c.was_lost && !c.owned) {
+        // Collectible perdu - peut être récupéré
+        const stars = '★'.repeat(c.level);
+        description = `${c.rarity.toUpperCase()} - 🔮 Récupérable (Niv.${c.level} ${stars})`;
+      } else if (c.owned) {
+        // Possédé - fusion pour +XP
+        const stars = '★'.repeat(c.level);
+        description = `${c.rarity.toUpperCase()} - Niveau ${c.level} ${stars} → +XP`;
+      } else {
+        // Nouveau collectible
+        description = `${c.rarity.toUpperCase()} - 🆕 Nouveau !`;
+      }
+    }
+
+    return {
+      label: c.name.substring(0, 100), // Limite Discord
+      value: `joker_select_${c.id}`,
+      description: description.substring(0, 100),
+      emoji: rarityEmojis[c.rarity] || '📦'
+    };
+  });
+
+  // Si aucun collectible sélectionnable, retourner un message
+  if (options.length === 0) {
+    const cancelRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('joker_cancel')
+        .setLabel('❌ Annuler - Tous les collectibles sont au niveau max')
+        .setStyle(ButtonStyle.Danger)
+    );
+    return [cancelRow];
+  }
+
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`joker_collectible_select:${page}`)
+    .setPlaceholder(`Choisissez un collectible (Page ${page + 1}/${totalPages})`)
+    .addOptions(options);
+
+  const row = new ActionRowBuilder().addComponents(selectMenu);
+  const rows = [row];
+
+  // Ajouter pagination si nécessaire
+  if (totalPages > 1) {
+    const paginationRow = new ActionRowBuilder();
+
+    if (page > 0) {
+      paginationRow.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`joker_page_${page - 1}`)
+          .setLabel('◀️ Page précédente')
+          .setStyle(ButtonStyle.Secondary)
+      );
+    }
+
+    if (page < totalPages - 1) {
+      paginationRow.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`joker_page_${page + 1}`)
+          .setLabel('Page suivante ▶️')
+          .setStyle(ButtonStyle.Secondary)
+      );
+    }
+
+    paginationRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId('joker_cancel')
+        .setLabel('❌ Annuler')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    rows.push(paginationRow);
+  } else {
+    // Juste le bouton annuler si une seule page
+    const cancelRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('joker_cancel')
+        .setLabel('❌ Annuler')
+        .setStyle(ButtonStyle.Danger)
+    );
+    rows.push(cancelRow);
+  }
+
+  return rows;
+}
+
 module.exports = {
   cleanupExpiredBonuses,
   getPlayerActiveBonuses,
-  applyProbabilityBonuses,
   hasRevealBonus,
   consumeRevealCharge,
-  hasTrapDetector,
   getRewardMultiplier,
   consumeMultiplierCharge,
   hasTrapShield,
@@ -1354,5 +2117,16 @@ module.exports = {
   showSuperBonusesAdminPanel,
   toggleSuperBonus,
   enableAllSuperBonuses,
-  disableAllSuperBonuses
+  disableAllSuperBonuses,
+  // MysteryBox Joker
+  hasJokerBonus,
+  getMissingCollectibles,
+  getCollectiblesForJoker,  // Nouveau: avec niveaux pour le système de leveling
+  consumeJokerBonus,
+  createJokerSelectionEmbed,
+  createJokerSelectMenu,
+  createJokerSuccessEmbed,
+  // Accélérateur de Cooldown
+  hasCooldownAccelerator,
+  activateCooldownAccelerator
 };

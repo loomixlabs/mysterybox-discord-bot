@@ -401,12 +401,31 @@ CREATE TABLE IF NOT EXISTS announcement_channel (
 CREATE TABLE IF NOT EXISTS announcement_settings (
   id SERIAL PRIMARY KEY,
   guild_id TEXT NOT NULL UNIQUE REFERENCES guild_config(guild_id) ON DELETE CASCADE,
+  -- Collections
   legendary_collectible BOOLEAN DEFAULT TRUE,
   collection_completed BOOLEAN DEFAULT TRUE,
   collection_traded BOOLEAN DEFAULT TRUE,
   collection_lost BOOLEAN DEFAULT TRUE,
-  trap_curse BOOLEAN DEFAULT TRUE,
+  -- Pièges
+  trap_cooldown BOOLEAN DEFAULT TRUE,
+  trap_lose_collectible BOOLEAN DEFAULT TRUE,
+  trap_public_shame BOOLEAN DEFAULT TRUE,
+  trap_empty_box BOOLEAN DEFAULT TRUE,
+  trap_lose_all_collectibles BOOLEAN DEFAULT TRUE,
+  -- Missions
   mission_word_guessed BOOLEAN DEFAULT TRUE,
+  mission_started BOOLEAN DEFAULT TRUE,
+  mission_completed BOOLEAN DEFAULT TRUE,
+  mission_failed BOOLEAN DEFAULT TRUE,
+  mission_approved BOOLEAN DEFAULT TRUE,
+  mission_rejected BOOLEAN DEFAULT TRUE,
+  -- Thèmes
+  theme_expired BOOLEAN DEFAULT TRUE,
+  theme_expiring_soon BOOLEAN DEFAULT TRUE,
+  -- Super Bonus
+  legendary_super_bonus BOOLEAN DEFAULT TRUE,
+  super_bonus_joker_used BOOLEAN DEFAULT TRUE,
+  -- Timestamps
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );

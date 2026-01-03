@@ -133,9 +133,41 @@ class ThreadManager {
 
       let cleaned = 0;
       let failed = 0;
+      let permissionsCleaned = 0;
 
       for (const mission of orphanedMissions) {
         try {
+          // 🔐 FIX: Nettoyer les permissions temporaires si présentes
+          const gameState = typeof mission.game_state === 'string'
+            ? JSON.parse(mission.game_state || '{}')
+            : (mission.game_state || {});
+
+          if (gameState?.tempPermission) {
+            const { channelId, userId } = gameState.tempPermission;
+            if (channelId && userId) {
+              try {
+                const channel = await client.channels.fetch(channelId).catch(() => null);
+                if (channel && channel.permissionOverwrites) {
+                  await channel.permissionOverwrites.delete(userId, 'Nettoyage thread orphelin');
+                  console.log(`🔐 [PERMISSION] Permission supprimée pour user ${userId} (thread orphelin)`);
+                  permissionsCleaned++;
+                }
+              } catch (permError) {
+                // Ignorer silencieusement
+              }
+            }
+
+            // Nettoyer tempPermission du game_state
+            await db.query(`
+              UPDATE mission_progress
+              SET game_state = CASE
+                WHEN game_state IS NOT NULL THEN game_state - 'tempPermission'
+                ELSE NULL
+              END
+              WHERE id = $1
+            `, [mission.id]);
+          }
+
           const thread = await client.channels.fetch(mission.thread_id).catch(() => null);
 
           if (thread && !thread.archived) {
@@ -155,6 +187,10 @@ class ThreadManager {
           console.error(`${this.config.logPrefix} Erreur nettoyage mission ${mission.id}:`, error.message);
           failed++;
         }
+      }
+
+      if (permissionsCleaned > 0) {
+        console.log(`🔐 [PERMISSION] ${permissionsCleaned} permission(s) temporaire(s) nettoyée(s) (threads orphelins)`);
       }
 
       console.log(`${this.config.logPrefix} Nettoyage terminé: ${cleaned} archivé(s), ${failed} échec(s)`);
@@ -194,13 +230,40 @@ class ThreadManager {
       console.log(`${this.config.logPrefix} ${abandonedMissions.length} mission(s) abandonnée(s) détectée(s)`);
 
       let processed = 0;
+      let permissionsCleaned = 0;
 
       for (const mission of abandonedMissions) {
         try {
-          // Marquer comme failed
+          // 🔐 FIX: Nettoyer les permissions temporaires AVANT de changer le status
+          const gameState = typeof mission.game_state === 'string'
+            ? JSON.parse(mission.game_state || '{}')
+            : (mission.game_state || {});
+
+          if (gameState?.tempPermission) {
+            const { channelId, userId } = gameState.tempPermission;
+            if (channelId && userId) {
+              try {
+                const channel = await client.channels.fetch(channelId).catch(() => null);
+                if (channel && channel.permissionOverwrites) {
+                  await channel.permissionOverwrites.delete(userId, 'Nettoyage mission abandonnée');
+                  console.log(`🔐 [PERMISSION] Permission supprimée pour user ${userId} dans #${channel.name} (mission abandonnée)`);
+                  permissionsCleaned++;
+                }
+              } catch (permError) {
+                console.warn(`⚠️ [PERMISSION] Erreur suppression permission: ${permError.message}`);
+              }
+            }
+          }
+
+          // Marquer comme failed ET nettoyer tempPermission du game_state
           await db.query(`
             UPDATE mission_progress
-            SET status = 'failed', updated_at = NOW()
+            SET status = 'failed',
+                game_state = CASE
+                  WHEN game_state IS NOT NULL THEN game_state - 'tempPermission'
+                  ELSE NULL
+                END,
+                updated_at = NOW()
             WHERE id = $1
           `, [mission.id]);
 
@@ -223,6 +286,10 @@ class ThreadManager {
         } catch (error) {
           console.error(`${this.config.logPrefix} Erreur traitement mission abandonnée ${mission.id}:`, error);
         }
+      }
+
+      if (permissionsCleaned > 0) {
+        console.log(`🔐 [PERMISSION] ${permissionsCleaned} permission(s) temporaire(s) nettoyée(s)`);
       }
 
       console.log(`${this.config.logPrefix} ${processed} mission(s) abandonnée(s) traitée(s)`);

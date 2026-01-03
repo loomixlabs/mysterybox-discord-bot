@@ -5,10 +5,11 @@
  * (développeurs du bot uniquement)
  */
 
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
 const db = require('../utils/database-pg');
 const GuildConfig = require('../utils/guildConfig');
 const permissions = require('../utils/permissions');
+const ThemeExporter = require('../utils/themeExporter');
 
 /**
  * Vérifier si un utilisateur est super-admin
@@ -283,11 +284,15 @@ Dernière act. : ${config.last_activity ? new Date(config.last_activity).toLocal
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`superadmin_bonuses_${guildId}`)
-        .setLabel('🎁 Gérer les Super Bonus')
+        .setLabel('🎁 Super Bonus')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId(`superadmin_export_themes_${guildId}`)
+        .setLabel('📦 Exporter Thème')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
         .setCustomId('superadmin_guilds')
-        .setLabel('⬅️ Liste des serveurs')
+        .setLabel('⬅️ Retour')
         .setStyle(ButtonStyle.Secondary)
     );
 
@@ -1325,6 +1330,451 @@ async function handleExtendTrial(interaction, guildId) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// EXPORT DE THÈMES v2.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Afficher la liste des thèmes exportables pour un serveur
+ */
+async function showThemeExportSelection(interaction, guildId) {
+  await interaction.deferUpdate();
+
+  const config = await GuildConfig.getConfig(guildId);
+
+  if (!config) {
+    return interaction.followUp({
+      content: '❌ Serveur introuvable.',
+      flags: 64
+    });
+  }
+
+  try {
+    // Récupérer la liste des thèmes exportables
+    const themes = await ThemeExporter.listExportableThemes(guildId);
+
+    if (themes.length === 0) {
+      const embed = new EmbedBuilder()
+        .setTitle(`📦 Export de Thèmes - ${config.guild_name}`)
+        .setDescription('❌ **Aucun thème disponible à exporter**\n\nCe serveur n\'a pas encore de thème créé.')
+        .setColor('#E74C3C')
+        .setTimestamp();
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`superadmin_guild_${guildId}`)
+            .setLabel('⬅️ Retour au serveur')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row]
+      });
+    }
+
+    // Créer la description avec les stats des thèmes
+    let description = `**${themes.length}** thème(s) disponible(s) à exporter.\n\n`;
+    description += 'Sélectionnez un thème pour l\'exporter au format **JSON v2.0** :\n\n';
+
+    for (const theme of themes.slice(0, 10)) {
+      const activeEmoji = theme.is_active ? '✅' : '❌';
+      description += `${activeEmoji} **${theme.name}** (ID: ${theme.id})\n`;
+      description += `└─ 📦 ${theme.collectibles_count} collectibles | 🎯 ${theme.missions_count} missions | ⚠️ ${theme.traps_count} pièges\n`;
+      if (theme.daily_rewards_count > 0) {
+        description += `└─ 📅 ${theme.daily_rewards_count} jours | 📦 ${theme.mystery_box_count} MB config | ⭐ ${theme.super_bonus_count} bonus\n`;
+      }
+      description += '\n';
+    }
+
+    if (themes.length > 10) {
+      description += `\n*...et ${themes.length - 10} autres thèmes*`;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`📦 Export de Thèmes - ${config.guild_name}`)
+      .setDescription(description)
+      .setColor('#3498db')
+      .setFooter({ text: 'Export v2.0 - Inclut toutes les tables liées au thème' })
+      .setTimestamp();
+
+    // Créer le menu de sélection des thèmes
+    const options = themes.slice(0, 25).map(theme => ({
+      label: theme.name.substring(0, 100),
+      description: `${theme.collectibles_count} items, ${theme.missions_count} missions${theme.is_active ? ' (Actif)' : ''}`,
+      value: theme.id.toString(),
+      emoji: theme.is_active ? '✅' : '📁'
+    }));
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`superadmin_export_theme_select_${guildId}`)
+      .setPlaceholder('📦 Choisir un thème à exporter...')
+      .addOptions(options);
+
+    const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+    const row2 = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`superadmin_guild_${guildId}`)
+          .setLabel('⬅️ Retour au serveur')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+    await interaction.editReply({
+      embeds: [embed],
+      components: [row1, row2]
+    });
+  } catch (error) {
+    console.error('❌ Erreur lors de la récupération des thèmes:', error);
+    await interaction.followUp({
+      content: `❌ Erreur: ${error.message}`,
+      flags: 64
+    });
+  }
+}
+
+/**
+ * Afficher les options d'export après sélection d'un thème
+ */
+async function handleThemeExport(interaction, guildId, themeId) {
+  await interaction.deferUpdate();
+
+  const config = await GuildConfig.getConfig(guildId);
+
+  if (!config) {
+    return interaction.followUp({
+      content: '❌ Serveur introuvable.',
+      flags: 64
+    });
+  }
+
+  try {
+    // Récupérer les infos du thème
+    const themeInfo = await db.queryOne(
+      'SELECT id, theme_id, name FROM themes WHERE id = $1 AND guild_id = $2',
+      [themeId, guildId]
+    );
+
+    if (!themeInfo) {
+      return interaction.editReply({
+        content: '❌ Thème introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Récupérer les stats du thème
+    const stats = await ThemeExporter.listExportableThemes(guildId);
+    const themeStat = stats.find(t => t.id.toString() === themeId.toString());
+
+    const embed = new EmbedBuilder()
+      .setTitle(`📦 Export - ${themeInfo.name}`)
+      .setDescription(
+        `**Thème sélectionné:** ${themeInfo.name}\n` +
+        `**Serveur:** ${config.guild_name}\n\n` +
+        `**Contenu à exporter:**\n` +
+        `├─ 📦 Collectibles: ${themeStat?.collectibles_count || '?'}\n` +
+        `├─ 🎯 Missions: ${themeStat?.missions_count || '?'}\n` +
+        `├─ ⚠️ Pièges: ${themeStat?.traps_count || '?'}\n` +
+        `├─ 📅 Daily Rewards: ${themeStat?.daily_rewards_count || '?'} jours\n` +
+        `├─ ⭐ Super Bonuses: ${themeStat?.super_bonus_count || '?'}\n\n` +
+        `**Choisissez une option d'export:**`
+      )
+      .setColor('#3498db')
+      .setFooter({ text: 'Export v2.0' })
+      .setTimestamp();
+
+    const row = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`superadmin_export_download_${guildId}_${themeId}`)
+          .setLabel('📥 Télécharger JSON')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`superadmin_export_template_${guildId}_${themeId}`)
+          .setLabel('📁 Ajouter aux templates')
+          .setStyle(ButtonStyle.Success)
+      );
+
+    const row2 = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`superadmin_export_themes_${guildId}`)
+          .setLabel('⬅️ Retour aux thèmes')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`superadmin_guild_${guildId}`)
+          .setLabel('🏠 Retour au serveur')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+    await interaction.editReply({
+      embeds: [embed],
+      components: [row, row2]
+    });
+  } catch (error) {
+    console.error('❌ Erreur handleThemeExport:', error);
+    await interaction.editReply({
+      content: `❌ Erreur: ${error.message}`,
+      embeds: [],
+      components: []
+    });
+  }
+}
+
+/**
+ * Télécharger le thème en fichier JSON
+ */
+async function handleThemeExportDownload(interaction, guildId, themeId) {
+  await interaction.deferUpdate();
+
+  const config = await GuildConfig.getConfig(guildId);
+
+  if (!config) {
+    return interaction.followUp({
+      content: '❌ Serveur introuvable.',
+      flags: 64
+    });
+  }
+
+  try {
+    // Afficher le message de progression
+    await interaction.editReply({
+      content: `⏳ **Export en cours...**\n\nThème ID: ${themeId}\nServeur: ${config.guild_name}\n\nCette opération peut prendre quelques secondes.`,
+      embeds: [],
+      components: []
+    });
+
+    // Récupérer les infos du thème
+    const themeInfo = await db.queryOne(
+      'SELECT id, theme_id, name FROM themes WHERE id = $1 AND guild_id = $2',
+      [themeId, guildId]
+    );
+
+    if (!themeInfo) {
+      return interaction.editReply({
+        content: '❌ Thème introuvable.'
+      });
+    }
+
+    // Exporter le thème
+    const exporter = new ThemeExporter(guildId);
+    const exportResult = await exporter.export(parseInt(themeId), {
+      name: themeInfo.name,
+      description: `Export du thème "${themeInfo.name}" depuis ${config.guild_name}`,
+      author: interaction.user.username
+    });
+
+    if (!exportResult.success) {
+      return interaction.editReply({
+        content: `❌ **Erreur lors de l'export:**\n\n${exportResult.error}`
+      });
+    }
+
+    const exportedData = exportResult.data;
+
+    // Créer le fichier JSON
+    const jsonContent = JSON.stringify(exportedData, null, 2);
+    const timestamp = new Date().toISOString().split('T')[0];
+    const filename = `${themeInfo.theme_id || themeInfo.name.replace(/[^a-z0-9]/gi, '_')}_v2_${timestamp}.theme.json`;
+
+    // Créer l'attachment
+    const buffer = Buffer.from(jsonContent, 'utf-8');
+    const attachment = new AttachmentBuilder(buffer, { name: filename });
+
+    // Logger l'action
+    await logSuperAdminAction(
+      interaction.user.id,
+      'theme_exported_download',
+      guildId,
+      { theme_id: themeId, theme_name: themeInfo.name, filename }
+    );
+
+    // Créer le résumé de l'export
+    const embed = new EmbedBuilder()
+      .setTitle(`✅ Export Réussi - ${themeInfo.name}`)
+      .setDescription(
+        `**Fichier:** \`${filename}\`\n` +
+        `**Version:** ${exportedData.version}\n` +
+        `**Serveur source:** ${config.guild_name}\n\n` +
+        `**Contenu exporté:**\n` +
+        `├─ 📦 Collectibles: ${exportedData.collectibles.length}\n` +
+        `├─ ⚠️ Pièges: ${exportedData.traps.length}\n` +
+        `├─ 🎯 Missions keyword: ${exportedData.missions.keyword.length}\n` +
+        `├─ ❓ Missions quiz: ${exportedData.missions.quiz.length}\n` +
+        `├─ 📅 Daily Rewards: ${exportedData.daily_rewards_config.length} jours\n` +
+        `├─ 💰 Daily Catchup: ${exportedData.daily_catchup_config ? 'Oui' : 'Non'}\n` +
+        `├─ 📦 Mystery Box Config: ${exportedData.mystery_box_config.length} raretés\n` +
+        `├─ 🎭 Progression Roles: ${exportedData.progression_roles.length}\n` +
+        `├─ ⭐ Super Bonuses: ${exportedData.super_bonuses.length}\n` +
+        `└─ 📢 Announcement Templates: ${exportedData.announcement_templates.length}`
+      )
+      .setColor('#2ECC71')
+      .setFooter({ text: `Export v2.0 par ${interaction.user.username}` })
+      .setTimestamp();
+
+    const row = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`superadmin_export_themes_${guildId}`)
+          .setLabel('📦 Exporter un autre thème')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`superadmin_guild_${guildId}`)
+          .setLabel('⬅️ Retour au serveur')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+    await interaction.editReply({
+      content: null,
+      embeds: [embed],
+      components: [row],
+      files: [attachment]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur lors de l\'export du thème:', error);
+    await interaction.editReply({
+      content: `❌ **Erreur inattendue:**\n\n${error.message}`,
+      embeds: [],
+      components: []
+    });
+  }
+}
+
+/**
+ * Sauvegarder le thème dans le dossier templates
+ */
+async function handleThemeExportToTemplates(interaction, guildId, themeId) {
+  await interaction.deferUpdate();
+
+  const config = await GuildConfig.getConfig(guildId);
+
+  if (!config) {
+    return interaction.followUp({
+      content: '❌ Serveur introuvable.',
+      flags: 64
+    });
+  }
+
+  const fs = require('fs');
+  const path = require('path');
+
+  try {
+    // Afficher le message de progression
+    await interaction.editReply({
+      content: `⏳ **Sauvegarde vers templates en cours...**\n\nThème ID: ${themeId}\nServeur: ${config.guild_name}`,
+      embeds: [],
+      components: []
+    });
+
+    // Récupérer les infos du thème
+    const themeInfo = await db.queryOne(
+      'SELECT id, theme_id, name FROM themes WHERE id = $1 AND guild_id = $2',
+      [themeId, guildId]
+    );
+
+    if (!themeInfo) {
+      return interaction.editReply({
+        content: '❌ Thème introuvable.'
+      });
+    }
+
+    // Exporter le thème
+    const exporter = new ThemeExporter(guildId);
+    const exportResult = await exporter.export(parseInt(themeId), {
+      name: themeInfo.name,
+      description: `Export du thème "${themeInfo.name}" depuis ${config.guild_name}`,
+      author: interaction.user.username
+    });
+
+    if (!exportResult.success) {
+      return interaction.editReply({
+        content: `❌ **Erreur lors de l'export:**\n\n${exportResult.error}`
+      });
+    }
+
+    const exportedData = exportResult.data;
+
+    // Créer le fichier JSON
+    const jsonContent = JSON.stringify(exportedData, null, 2);
+    const safeThemeId = (themeInfo.theme_id || themeInfo.name).replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
+    const filename = `${safeThemeId}.theme.json`;
+
+    // Chemin vers le dossier templates
+    const templatesDir = path.join(__dirname, '..', 'themes', 'templates');
+
+    // Créer le dossier si nécessaire
+    if (!fs.existsSync(templatesDir)) {
+      fs.mkdirSync(templatesDir, { recursive: true });
+    }
+
+    const outputPath = path.join(templatesDir, filename);
+
+    // Vérifier si un fichier existe déjà
+    const fileExists = fs.existsSync(outputPath);
+
+    // Sauvegarder le fichier
+    fs.writeFileSync(outputPath, jsonContent, 'utf-8');
+
+    // Logger l'action
+    await logSuperAdminAction(
+      interaction.user.id,
+      'theme_exported_template',
+      guildId,
+      { theme_id: themeId, theme_name: themeInfo.name, filename, path: outputPath }
+    );
+
+    // Créer le résumé de l'export
+    const embed = new EmbedBuilder()
+      .setTitle(`✅ Thème ajouté aux templates`)
+      .setDescription(
+        `**Fichier:** \`${filename}\`\n` +
+        `**Emplacement:** \`themes/templates/\`\n` +
+        `**Action:** ${fileExists ? '📝 Fichier remplacé' : '✨ Nouveau fichier créé'}\n\n` +
+        `**Contenu exporté:**\n` +
+        `├─ 📦 Collectibles: ${exportedData.collectibles.length}\n` +
+        `├─ ⚠️ Pièges: ${exportedData.traps.length}\n` +
+        `├─ 🎯 Missions: ${exportedData.missions.keyword.length + exportedData.missions.quiz.length}\n` +
+        `├─ 📅 Daily Rewards: ${exportedData.daily_rewards_config.length} jours\n` +
+        `├─ ⭐ Super Bonuses: ${exportedData.super_bonuses.length}\n` +
+        `└─ 📢 Templates annonces: ${exportedData.announcement_templates.length}\n\n` +
+        `💡 Ce thème sera disponible dans \`/setup\` pour l'import sur d'autres serveurs.`
+      )
+      .setColor('#2ECC71')
+      .setFooter({ text: `Export v2.0 par ${interaction.user.username}` })
+      .setTimestamp();
+
+    const row = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`superadmin_export_themes_${guildId}`)
+          .setLabel('📦 Exporter un autre thème')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`superadmin_guild_${guildId}`)
+          .setLabel('⬅️ Retour au serveur')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+    await interaction.editReply({
+      content: null,
+      embeds: [embed],
+      components: [row]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur lors de la sauvegarde du thème:', error);
+    await interaction.editReply({
+      content: `❌ **Erreur inattendue:**\n\n${error.message}`,
+      embeds: [],
+      components: []
+    });
+  }
+}
+
 module.exports = {
   isSuperAdmin,
   showMainPanel,
@@ -1349,5 +1799,10 @@ module.exports = {
   handleStartTrial,
   handleConvertToPremium,
   handleExtendTrialModal,
-  handleExtendTrial
+  handleExtendTrial,
+  // Theme Export v2.0
+  showThemeExportSelection,
+  handleThemeExport,
+  handleThemeExportDownload,
+  handleThemeExportToTemplates
 };

@@ -4,12 +4,16 @@ const missionHandler = require('../handlers/missionHandler');
 const subscriptionHandler = require('../handlers/subscriptionHandler');
 const threadManager = require('../utils/threadManager');
 const db = require('../utils/database-pg');
+const imageGenerator = require('../utils/imageGenerator');
 
 module.exports = {
   name: 'clientReady',
   once: true,
   async execute(client) {
     console.log(`✅ Bot prêt ! Connecté en tant que ${client.user.tag}`);
+
+    // Configurer le client Discord pour l'imageGenerator (rafraîchissement URLs expirées)
+    imageGenerator.setDiscordClient(client);
     console.log(`🎮 Serveurs: ${client.guilds.cache.size}`);
     console.log(`👥 Utilisateurs: ${client.users.cache.size}`);
 
@@ -92,6 +96,14 @@ module.exports = {
 
     // Nettoyage immédiat au démarrage
     superBonusHandler.cleanupExpiredBonuses();
+
+    // 🔐 Nettoyage des permissions temporaires orphelines (missions terminées avant cleanup)
+    missionHandler.cleanupOrphanedPermissions(client);
+
+    // 🔐 Nettoyage périodique des permissions orphelines (toutes les 10 minutes)
+    setInterval(() => {
+      missionHandler.cleanupOrphanedPermissions(client);
+    }, 600000); // 10 minutes en millisecondes
 
     // Récupération des missions bloquées (boutons inactifs après restart)
     missionHandler.recoverStaleMissions(client);

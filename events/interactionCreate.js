@@ -10,6 +10,8 @@ const profileHandler = require('../handlers/profileHandler');
 const ServerConfigHandler = require('../handlers/serverConfigHandler');
 const progressionRoleAdminHandler = require('../handlers/progressionRoleAdminHandler');
 const subscriptionHandler = require('../handlers/subscriptionHandler');
+const mysteryBoxConfigHandler = require('../handlers/mysteryBoxConfigHandler');
+const craftingHandler = require('../handlers/craftingHandler');
 const tutorialView = require('../views/tutorialView');
 
 // Pour le tracking des connexions et badges Engagement
@@ -73,14 +75,46 @@ module.exports = {
       const customId = interaction.customId;
 
       try {
-        // Boutons de profil (profile_* et activate_bonus:*)
-        if (customId.startsWith('profile_') || customId.startsWith('activate_bonus:')) {
+        // 🔨 Boutons Crafting Config Admin (AVANT craft_ général)
+        if (customId.startsWith('craft_config_')) {
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
+        // 🔨 Boutons Crafting Joueur (craft_* et recycle_*)
+        else if (customId.startsWith('craft_') || customId.startsWith('recycle_')) {
+          await craftingHandler.handleCraftingInteraction(interaction);
+        }
+
+        // Boutons de profil (profile_*, activate_bonus:*, deactivate_bonus:*)
+        else if (customId.startsWith('profile_') || customId.startsWith('activate_bonus:') || customId.startsWith('deactivate_bonus:')) {
           await profileHandler.handleProfileInteraction(interaction);
         }
 
         // 🃏 Boutons MysteryBox Joker (pagination/annulation)
         else if (customId.startsWith('joker_page_') || customId === 'joker_cancel') {
           await profileHandler.handleJokerInteraction(interaction);
+        }
+
+        // 📊 Boutons Leaderboard (pagination prev/next)
+        else if (customId.startsWith('leaderboard_prev_') || customId.startsWith('leaderboard_next_')) {
+          const leaderboardCommand = interaction.client.commands.get('leaderboard');
+          if (leaderboardCommand && leaderboardCommand.handleButton) {
+            await leaderboardCommand.handleButton(interaction);
+          }
+        }
+
+        // 🔧 Boutons Daily Rewards Admin (DOIT ÊTRE AVANT daily_ générique)
+        else if (customId.startsWith('daily_admin_')) {
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
+
+        // 🎁 Boutons Daily Claim (daily_claim, daily_calendar, daily_rewards_list, daily_catchup, daily_catchup_buy:*)
+        else if (customId.startsWith('daily_')) {
+          await profileHandler.handleProfileInteraction(interaction);
+        }
+
+        // 📦 Boutons Mystery Box par rareté (mb_open:rarity)
+        else if (customId.startsWith('mb_open:')) {
+          await profileHandler.handleProfileInteraction(interaction);
         }
 
         // Bouton "Voir mes badges" depuis MP (view_my_badges:guildId)
@@ -105,8 +139,32 @@ module.exports = {
           };
 
           // BUG 16 FIX: showBadges est dans views/profileView, pas handlers/profileHandler
+          // Signature: showBadges(interaction, player, theme, guildId, mode, selectedCategory, page)
           const { showBadges } = require('../views/profileView');
-          const content = await showBadges(interaction, player, theme, guildId, state.badgesCategory, state.badgesRarity, state.badgesPage);
+          const content = await showBadges(interaction, player, theme, guildId, 'overview', state.badgesCategory, state.badgesPage);
+
+          await interaction.editReply(content);
+        }
+
+        // Bouton "Voir ma progression" depuis MP (view_badge_progress:guildId)
+        else if (customId.startsWith('view_badge_progress:')) {
+          await interaction.deferReply({ flags: 64 }); // Ephemeral
+
+          const guildId = customId.split(':')[1];
+          const player = await db.getPlayerByDiscordId(guildId, interaction.user.id);
+
+          if (!player) {
+            return interaction.editReply({
+              content: '❌ Tu n\'es pas enregistré sur ce serveur. Utilise `/profile` sur le serveur pour t\'inscrire.',
+            });
+          }
+
+          const theme = await db.getActiveTheme(guildId);
+
+          // Afficher les badges en mode progression
+          // Signature: showBadges(interaction, player, theme, guildId, mode, selectedCategory, page)
+          const { showBadges } = require('../views/profileView');
+          const content = await showBadges(interaction, player, theme, guildId, 'progress', 'all', 0);
 
           await interaction.editReply(content);
         }
@@ -232,6 +290,23 @@ module.exports = {
         else if (customId.startsWith('mission_timeout_config_')) {
           await adminPanelHandler.handleMissionTimeoutConfig(interaction);
         }
+        else if (customId.startsWith('mission_image_upload_')) {
+          await adminPanelHandler.handleMissionImageUpload(interaction);
+        }
+        else if (customId.startsWith('mission_image_cancel_')) {
+          // Annulation depuis le thread - juste archiver le thread
+          await interaction.deferUpdate();
+          if (interaction.channel?.isThread()) {
+            await interaction.channel.send('❌ **Upload annulé.** Ce thread sera archivé.');
+            setTimeout(async () => {
+              try {
+                await interaction.channel.setArchived(true);
+              } catch (err) {
+                console.warn('⚠️ Impossible d\'archiver le thread:', err);
+              }
+            }, 3000);
+          }
+        }
         else if (customId.startsWith('mission_max_attempts_config_')) {
           await missionHandler.handleMaxAttemptsConfig(interaction);
         }
@@ -247,8 +322,8 @@ module.exports = {
         else if (customId.startsWith('mission_reward_back_')) {
           await adminPanelHandler.handleMissionSelection(interaction);
         }
-        // Boutons admin des missions (add, delete, modify)
-        else if (customId === 'mission_add' || customId.startsWith('mission_delete_confirm_') || customId === 'mission_modify') {
+        // Boutons admin des missions (add, delete, modify, gif config)
+        else if (customId === 'mission_add' || customId.startsWith('mission_delete_confirm_') || customId === 'mission_modify' || customId === 'mission_revealed_gif_config') {
           await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
@@ -263,7 +338,7 @@ module.exports = {
         }
 
         // Boutons du panneau admin
-        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId.startsWith('select_trap_cancel_') || customId === 'thread_cancel_collectible') {
+        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('mb_config_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('collectibles_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId.startsWith('frames_') || customId.startsWith('select_trap_cancel_') || customId === 'thread_cancel_collectible' || customId.startsWith('thread_cancel_edit_image_')) {
           await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
@@ -332,6 +407,12 @@ module.exports = {
           await progressionRoleAdminHandler.handleInteraction(interaction);
         }
 
+        // ⚖️ Boutons Fairness Config (système d'équité)
+        else if (customId.startsWith('fairness_')) {
+          const fairnessConfigHandler = require('../handlers/fairnessConfigHandler');
+          await fairnessConfigHandler.handleInteraction(interaction);
+        }
+
         // 📚 Boutons Tutoriel (navigation entre sections)
         else if (customId.startsWith('tutorial_')) {
           await interaction.deferUpdate();
@@ -381,6 +462,10 @@ module.exports = {
         if (interaction.customId === 'modal_add_progression_role' || interaction.customId.startsWith('modal_edit_progression_role:')) {
           await progressionRoleAdminHandler.handleModalSubmit(interaction);
         }
+        // Modals d'édition de collectibles (AVANT modal_edit_ car plus spécifique)
+        else if (interaction.customId.startsWith('modal_edit_collectible_')) {
+          await adminPanelHandler.handleEditCollectibleModalSubmit(interaction);
+        }
         // Modals de server-config
         else if (interaction.customId.startsWith('modal_edit_')) {
           const handler = new ServerConfigHandler();
@@ -391,7 +476,15 @@ module.exports = {
           const profileColorHandler = require('../handlers/profileColorHandler');
           await profileColorHandler.handleCustomColorModal(interaction);
         }
-        // Autres modals
+        // Modals Daily Rewards Admin
+        else if (interaction.customId.startsWith('daily_admin_')) {
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
+        // Modals Mystery Box Config
+        else if (interaction.customId.startsWith('mb_config_modal_')) {
+          await mysteryBoxConfigHandler.handleInteraction(interaction);
+        }
+        // Autres modals (inclut modal_frame_ via modalHandler.js)
         else {
           await modalHandler.handleModalSubmit(interaction);
         }
@@ -422,6 +515,23 @@ module.exports = {
         // Select menu du profil (filtrage inventaire)
         else if (interaction.customId.startsWith('profile_')) {
           await profileHandler.handleProfileInteraction(interaction);
+        }
+        // 🔨 Select menus Crafting Config Admin (AVANT craft_ général)
+        else if (interaction.customId.startsWith('craft_config_')) {
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
+        // 🔨 Select menus Crafting Joueur (craft_upgrade_select, craft_recycle_select)
+        else if (interaction.customId.startsWith('craft_')) {
+          await craftingHandler.handleCraftingInteraction(interaction);
+        }
+        // Select menu Daily Rewards Admin (DOIT ÊTRE AVANT daily_)
+        else if (interaction.customId.startsWith('daily_admin_')) {
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
+        // Select menu Daily Claim (rattrapage)
+        else if (interaction.customId.startsWith('daily_')) {
+          const dailyClaimHandler = require('../handlers/dailyClaimHandler');
+          await dailyClaimHandler.handleDailyClaimInteraction(interaction);
         }
         // Select menu du leaderboard
         else if (interaction.customId === 'leaderboard_type_select') {
@@ -475,7 +585,9 @@ module.exports = {
             interaction.customId.startsWith('campaign_') ||
             interaction.customId.startsWith('trap_') ||
             interaction.customId.startsWith('super_bonus_') ||
-            interaction.customId.startsWith('mission_keyword_select_')) {
+            interaction.customId.startsWith('mission_keyword_select_') ||
+            interaction.customId.startsWith('frames_condition_select_') ||
+            interaction.customId.startsWith('collectible_rarity_select_')) {
           await adminPanelHandler.handleSelectMenu(interaction);
         }
         // Select menu Setup - Sélection de thème préconfigurés
@@ -493,6 +605,11 @@ module.exports = {
         // 🃏 Select menu MysteryBox Joker
         else if (interaction.customId.startsWith('joker_collectible_select')) {
           await profileHandler.handleJokerInteraction(interaction);
+        }
+        // 📦 Select menus Mystery Box Config par rareté
+        else if (interaction.customId.startsWith('mb_config_')) {
+          const mysteryBoxConfigHandler = require('../handlers/mysteryBoxConfigHandler');
+          await mysteryBoxConfigHandler.handleInteraction(interaction);
         }
         else {
           console.warn(`⚠️ Select menu non géré: ${interaction.customId}`);
@@ -553,6 +670,11 @@ module.exports = {
       try {
         if (interaction.customId === 'setup_role_select') {
           await setupHandler.handleRoleSelect(interaction);
+        }
+        // Fairness exempt roles (système d'équité)
+        else if (interaction.customId === 'fairness_exempt_roles_select') {
+          const fairnessConfigHandler = require('../handlers/fairnessConfigHandler');
+          await fairnessConfigHandler.handleInteraction(interaction);
         }
         else {
           console.warn(`⚠️ Role select menu non géré: ${interaction.customId}`);
@@ -717,6 +839,28 @@ async function handleSuperAdminButton(interaction) {
     return await superAdminHandler.handleExtendTrialModal(interaction, guildId);
   }
 
+  // Exporter thèmes d'un serveur (affiche sélection)
+  if (customId.startsWith('superadmin_export_themes_')) {
+    const guildId = customId.replace('superadmin_export_themes_', '');
+    return await superAdminHandler.showThemeExportSelection(interaction, guildId);
+  }
+
+  // Télécharger un thème en JSON
+  if (customId.startsWith('superadmin_export_download_')) {
+    const parts = customId.replace('superadmin_export_download_', '').split('_');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    return await superAdminHandler.handleThemeExportDownload(interaction, guildId, themeId);
+  }
+
+  // Sauvegarder un thème dans les templates
+  if (customId.startsWith('superadmin_export_template_')) {
+    const parts = customId.replace('superadmin_export_template_', '').split('_');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    return await superAdminHandler.handleThemeExportToTemplates(interaction, guildId, themeId);
+  }
+
   // Voir détails d'un serveur
   if (customId.startsWith('superadmin_guild_')) {
     const guildId = customId.replace('superadmin_guild_', '');
@@ -749,6 +893,13 @@ async function handleSuperAdminSelect(interaction) {
     const guildId = customId.replace('superadmin_remove_role_', '');
     const roleId = interaction.values[0];
     return await superAdminHandler.handleRemoveAdminRole(interaction, guildId, roleId);
+  }
+
+  // Sélection d'un thème à exporter
+  if (customId.startsWith('superadmin_export_theme_select_')) {
+    const guildId = customId.replace('superadmin_export_theme_select_', '');
+    const themeId = interaction.values[0];
+    return await superAdminHandler.handleThemeExport(interaction, guildId, themeId);
   }
 }
 

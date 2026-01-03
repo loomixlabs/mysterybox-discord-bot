@@ -132,6 +132,26 @@ class ModalHandler {
       const guildId = customId.replace('superadmin_extend_trial_modal_', '');
       return superAdminHandler.handleExtendTrial(interaction, guildId);
     }
+    // Gestion des modals crafting config (délégation vers craftingConfigHandler)
+    else if (customId.startsWith('craft_config_') && customId.includes('_modal')) {
+      const craftingConfigHandler = require('./craftingConfigHandler');
+      return craftingConfigHandler.handleCraftingConfigModal(interaction);
+    }
+    // Gestion des modals frames config (délégation vers framesConfigHandler)
+    else if (customId.startsWith('modal_frame_')) {
+      const framesConfigHandler = require('./framesConfigHandler');
+      return framesConfigHandler.handleInteraction(interaction);
+    }
+    // Gestion des modals d'édition de collectibles
+    else if (customId.startsWith('modal_edit_collectible_')) {
+      const adminPanelHandler = require('./adminPanelHandler');
+      return adminPanelHandler.handleEditCollectibleModalSubmit(interaction);
+    }
+    // Gestion des modals fairness (système d'équité)
+    else if (customId === 'modal_fairness_steps') {
+      const fairnessConfigHandler = require('./fairnessConfigHandler');
+      return fairnessConfigHandler.handleStepsModalSubmit(interaction);
+    }
     // Gestion des modals server-config (délégation)
     else if (customId.startsWith('modal_edit_')) {
       const ServerConfigHandler = require('./serverConfigHandler');

@@ -87,12 +87,93 @@ function cacheImage(cacheKey, buffer) {
   return cachePath;
 }
 
+// Référence au client Discord (sera définie par setDiscordClient)
+let discordClient = null;
+
+/**
+ * Définit le client Discord pour permettre le rafraîchissement des URLs
+ * @param {Client} client - Instance du client Discord.js
+ */
+function setDiscordClient(client) {
+  discordClient = client;
+  console.log('🖼️ [ImageGenerator] Client Discord configuré pour rafraîchissement URLs');
+}
+
+/**
+ * Extrait les IDs channel et message d'une URL Discord CDN
+ * @param {string} url - URL Discord CDN
+ * @returns {Object|null} { channelId, messageId, filename } ou null
+ */
+function parseDiscordCdnUrl(url) {
+  // Format: https://cdn.discordapp.com/attachments/CHANNEL_ID/MESSAGE_ID/filename.ext?...
+  const match = url.match(/cdn\.discordapp\.com\/attachments\/(\d+)\/(\d+)\/([^?]+)/);
+  if (match) {
+    return {
+      channelId: match[1],
+      messageId: match[2],
+      filename: match[3]
+    };
+  }
+  return null;
+}
+
+/**
+ * Rafraîchit une URL Discord expirée en récupérant le message original
+ * @param {string} url - URL Discord expirée
+ * @returns {Promise<string|null>} Nouvelle URL ou null si échec
+ */
+async function refreshDiscordUrl(url) {
+  if (!discordClient) {
+    console.log('⚠️ [ImageGenerator] Client Discord non configuré, impossible de rafraîchir l\'URL');
+    return null;
+  }
+
+  const parsed = parseDiscordCdnUrl(url);
+  if (!parsed) {
+    return null;
+  }
+
+  try {
+    const channel = await discordClient.channels.fetch(parsed.channelId);
+    if (!channel) {
+      console.log(`⚠️ [ImageGenerator] Channel ${parsed.channelId} non trouvé`);
+      return null;
+    }
+
+    const message = await channel.messages.fetch(parsed.messageId);
+    if (!message) {
+      console.log(`⚠️ [ImageGenerator] Message ${parsed.messageId} non trouvé`);
+      return null;
+    }
+
+    // Chercher l'attachment correspondant
+    const attachment = message.attachments.find(a => a.name === parsed.filename || a.url.includes(parsed.filename));
+    if (attachment) {
+      console.log(`✅ [ImageGenerator] URL rafraîchie: ${parsed.filename}`);
+      return attachment.url;
+    }
+
+    // Sinon prendre le premier attachment
+    if (message.attachments.size > 0) {
+      const firstAttachment = message.attachments.first();
+      console.log(`✅ [ImageGenerator] URL rafraîchie (premier attachment): ${firstAttachment.name}`);
+      return firstAttachment.url;
+    }
+
+    return null;
+  } catch (error) {
+    console.log(`⚠️ [ImageGenerator] Erreur rafraîchissement URL: ${error.message}`);
+    return null;
+  }
+}
+
 /**
  * Télécharge une image depuis une URL
  * @param {string} url - URL de l'image
+ * @param {boolean} allowRefresh - Tenter de rafraîchir les URLs Discord expirées
  * @returns {Promise<Buffer>} Buffer de l'image
  */
-async function fetchImage(url) {
+async function fetchImage(url, allowRefresh = true) {
   try {
     // Vérifier si c'est un fichier local
     if (url.startsWith('/') || url.startsWith('./') || url.match(/^[A-Z]:\\/i)) {
@@ -116,6 +197,15 @@ async function fetchImage(url) {
     clearTimeout(timeout);
 
     if (!response.ok) {
+      // Si 404 sur une URL Discord, tenter de la rafraîchir
+      if (response.status === 404 && allowRefresh && url.includes('cdn.discordapp.com')) {
+        console.log('🔄 [ImageGenerator] URL Discord expirée, tentative de rafraîchissement...');
+        const refreshedUrl = await refreshDiscordUrl(url);
+        if (refreshedUrl) {
+          // Réessayer avec la nouvelle URL (sans permettre un nouveau refresh pour éviter boucle infinie)
+          return fetchImage(refreshedUrl, false);
+        }
+      }
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
@@ -422,7 +512,8 @@ async function generateLevelUpImage(collectibleUrl, options = {}) {
     oldRarity = null,
     newRarity = null,
     oldLevel = 1,
-    newLevel = 2
+    newLevel = 2,
+    mintNumber = null  // Ajout du mint number
   } = options;
 
   const singleWidth = 200;
@@ -433,9 +524,10 @@ async function generateLevelUpImage(collectibleUrl, options = {}) {
 
   try {
     // Générer les deux images du collectible avec leurs frames respectives
+    // Le mintNumber est passé pour s'afficher sur les deux images
     const [oldImage, newImage] = await Promise.all([
-      generateCollectibleWithFrame(collectibleUrl, oldFrameUrl, oldRarity, { level: oldLevel, useCache: false }),
-      generateCollectibleWithFrame(collectibleUrl, newFrameUrl, newRarity, { level: newLevel, useCache: false })
+      generateCollectibleWithFrame(collectibleUrl, oldFrameUrl, oldRarity, { level: oldLevel, mintNumber, useCache: false }),
+      generateCollectibleWithFrame(collectibleUrl, newFrameUrl, newRarity, { level: newLevel, mintNumber, useCache: false })
     ]);
 
     // Redimensionner
@@ -957,5 +1049,6 @@ module.exports = {
   cleanCache,
   getCacheStats,
   fetchImage,
+  setDiscordClient,
   CONFIG
 };

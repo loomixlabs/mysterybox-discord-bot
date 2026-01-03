@@ -85,9 +85,9 @@ client.login(process.env.DISCORD_TOKEN)
       process.exit(1);
     }
 
-    // Initialiser les campagnes actives
+    // Initialiser les campagnes actives (tous les serveurs)
     try {
-      await campaignHandler.initActiveCampaigns(client, process.env.GUILD_ID);
+      await campaignHandler.initActiveCampaigns(client);
     } catch (error) {
       console.error('🔴 Erreur lors de l\'initialisation des campagnes:', error);
     }

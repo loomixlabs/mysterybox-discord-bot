@@ -817,14 +817,18 @@ async function showBonuses(interaction, player, theme) {
   const activeBonuses = await superBonusHandler.getPlayerActiveBonuses(guildId, interaction.user.id);
 
   // Séparer les bonus par type
+  // IMPORTANT: L'Accélérateur de Cooldown (effect_type === 'cooldown') est TOUJOURS manuel
+  // même si activated_at est défini par erreur - son effet est instantané et consomme une charge
   const automaticBonuses = activeBonuses.filter(b => {
     // Les bonus automatiques sont ceux qui sont déjà activés (activated_at != null)
-    return b.activated_at !== null;
+    // SAUF l'Accélérateur de Cooldown qui doit toujours apparaître dans les manuels
+    return b.activated_at !== null && b.effect_type !== 'cooldown';
   });
 
   const manualBonuses = activeBonuses.filter(b => {
     // Les bonus manuels sont ceux qui attendent activation (activated_at == null)
-    return b.activated_at === null;
+    // OU l'Accélérateur de Cooldown (même si activated_at est défini par erreur)
+    return b.activated_at === null || b.effect_type === 'cooldown';
   });
 
   const color = branding.primary_color;
@@ -1020,185 +1024,595 @@ async function showBonuses(interaction, player, theme) {
 }
 
 /**
- * 🏆 VIEW 6: BADGES - Vue des badges et achievements
+ * 🏆 VIEW 6: BADGES - Vue des badges et achievements (REFONTE v2)
+ *
+ * Modes disponibles:
+ * - 'overview': Vue d'ensemble avec stats + badges récents
+ * - 'unlocked': Badges obtenus avec date d'obtention
+ * - 'progress': Tous les badges avec progression détaillée
+ * - 'discover': Badges pas encore commencés avec guides
  */
-async function showBadges(interaction, player, theme, guildId, selectedCategory = 'all', selectedRarity = 'all', page = 0) {
+async function showBadges(interaction, player, theme, guildId, mode = 'overview', selectedCategory = 'all', page = 0) {
   // BUG 16 FIX: guildId passé en paramètre au lieu de interaction.guildId pour supporter DM context
   const badgeHandler = require('../handlers/badgeHandler');
 
   // Récupérer les stats des badges du joueur
   const stats = await badgeHandler.getPlayerBadgeStats(guildId, player.id);
 
-  // Récupérer les badges débloqués avec filtres
-  const filters = {};
-  if (selectedCategory !== 'all') filters.category = selectedCategory;
-  if (selectedRarity !== 'all') filters.rarity = selectedRarity;
+  // Récupérer tous les badges existants avec calculs dynamiques pour plusieurs catégories
+  // On récupère les données du joueur pour les badges calculés dynamiquement
+  // Les données Loomix sont dans la table player_currency (currency_type = 'loomix')
+  const playerData = await db.queryOne(`
+    SELECT
+      EXTRACT(DAY FROM NOW() - p.created_at)::int as days_since_creation,
+      p.current_claim_streak,
+      p.best_claim_streak,
+      COALESCE(pc.balance, 0) as loomix_balance,
+      COALESCE(pc.total_earned, 0) as total_loomix_earned,
+      COALESCE(pc.total_spent, 0) as total_loomix_spent
+    FROM players p
+    LEFT JOIN player_currency pc ON pc.guild_id = p.guild_id AND pc.player_id = p.id AND pc.currency_type = 'loomix'
+    WHERE p.guild_id = $1 AND p.id = $2
+  `, [guildId, player.id]);
 
-  const unlockedBadges = await db.getPlayerBadges(guildId, player.id, filters);
+  // Données de collection par rareté
+  const collectionData = await db.queryOne(`
+    SELECT
+      COUNT(DISTINCT c.collectible_id) as total_collected,
+      COUNT(DISTINCT CASE WHEN col.rarity = 'legendary' THEN c.collectible_id END) as legendary_count,
+      COUNT(DISTINCT CASE WHEN col.rarity = 'epic' THEN c.collectible_id END) as epic_count,
+      COUNT(DISTINCT CASE WHEN col.rarity = 'rare' THEN c.collectible_id END) as rare_count
+    FROM collections c
+    JOIN collectibles col ON c.collectible_id = col.id
+    WHERE c.guild_id = $1 AND c.player_id = $2 AND c.lost_at IS NULL
+  `, [guildId, player.id]);
 
-  // Récupérer la progression
-  const progressBadges = await db.getPlayerBadgeProgress(guildId, player.id);
+  // Données de missions
+  const missionData = await db.queryOne(`
+    SELECT COUNT(*) as completed_missions
+    FROM mission_progress
+    WHERE guild_id = $1 AND player_id = $2 AND status = 'completed'
+  `, [guildId, player.id]);
 
-  // Couleur selon rareté sélectionnée
-  const rarityColors = badgeHandler.RARITY_COLORS;
-  const color = selectedRarity !== 'all' ? rarityColors[selectedRarity] : '#2B2D31';
+  // Données de mystery boxes
+  const mysteryBoxData = await db.queryOne(`
+    SELECT COUNT(*) as boxes_opened
+    FROM give_logs
+    WHERE guild_id = $1 AND winner_id = $2
+  `, [guildId, player.discord_id]);
 
-  // Construction de l'embed
+  // Données de pièges
+  // Note: La colonne 'blocked' n'existe pas dans trap_triggered
+  // On utilise traps_blocked de la table players + count de trap_triggered
+  const trapData = await db.queryOne(`
+    SELECT
+      (SELECT COUNT(*) FROM trap_triggered WHERE guild_id = $1 AND player_id = $2) as traps_triggered,
+      (SELECT COALESCE(traps_blocked, 0) FROM players WHERE guild_id = $1 AND id = $2) as traps_blocked
+  `, [guildId, player.id]);
+
+  // Données super bonus
+  const superBonusData = await db.queryOne(`
+    SELECT COUNT(*) as bonuses_used
+    FROM bonus_usage_history
+    WHERE guild_id = $1 AND user_id = $2
+  `, [guildId, player.discord_id]);
+
+  const allBadges = await db.queryAll(`
+    SELECT b.*,
+           pb.unlocked_at,
+           bp.current_value,
+           bp.target_value,
+           CASE WHEN pb.id IS NOT NULL THEN true ELSE false END as is_unlocked
+    FROM badges b
+    LEFT JOIN player_badges pb ON pb.badge_id = b.id AND pb.guild_id = $1 AND pb.player_id = $2
+    LEFT JOIN badge_progress bp ON bp.badge_id = b.id AND bp.guild_id = $1 AND bp.player_id = $2
+    ORDER BY b.rarity DESC, b.category, b.name
+  `, [guildId, player.id]);
+
+  // Enrichir les badges avec les valeurs calculées dynamiquement selon leur catégorie/condition_type
+  allBadges.forEach(badge => {
+    const condType = badge.condition_type;
+    const target = parseInt(badge.condition_value) || 1;
+
+    // SENIORITY - jours depuis création
+    if (badge.category === 'seniority' && playerData) {
+      badge.current_value = playerData.days_since_creation || 0;
+      badge.target_value = target;
+    }
+    // ENGAGEMENT - meilleur streak de claims
+    else if (badge.category === 'engagement' && playerData) {
+      badge.current_value = Math.max(playerData.current_claim_streak || 0, playerData.best_claim_streak || 0);
+      badge.target_value = target;
+    }
+    // ECONOMY - loomix balance/earned/spent
+    else if (badge.category === 'economy' && playerData) {
+      if (condType === 'loomix_balance') {
+        badge.current_value = parseInt(playerData.loomix_balance) || 0;
+      } else if (condType === 'loomix_earned') {
+        badge.current_value = parseInt(playerData.total_loomix_earned) || 0;
+      } else if (condType === 'loomix_spent') {
+        badge.current_value = parseInt(playerData.total_loomix_spent) || 0;
+      }
+      badge.target_value = target;
+    }
+    // COLLECTION - nombre de collectibles / par rareté
+    else if (badge.category === 'collection' && collectionData) {
+      if (condType === 'collectible_count') {
+        badge.current_value = parseInt(collectionData.total_collected) || 0;
+      }
+      badge.target_value = target;
+    }
+    // RARITY - comptage par rareté spécifique
+    else if (badge.category === 'rarity' && collectionData) {
+      if (condType === 'legendary_count') {
+        badge.current_value = parseInt(collectionData.legendary_count) || 0;
+      } else if (condType === 'epic_count') {
+        badge.current_value = parseInt(collectionData.epic_count) || 0;
+      } else if (condType === 'rare_count') {
+        badge.current_value = parseInt(collectionData.rare_count) || 0;
+      }
+      badge.target_value = target;
+    }
+    // MISSION - missions complétées
+    else if (badge.category === 'mission' && missionData) {
+      if (condType === 'mission_complete') {
+        badge.current_value = parseInt(missionData.completed_missions) || 0;
+      }
+      badge.target_value = target;
+    }
+    // MYSTERY_BOX - mystery boxes ouvertes
+    else if (badge.category === 'mystery_box' && mysteryBoxData) {
+      if (condType === 'mystery_box_open') {
+        badge.current_value = parseInt(mysteryBoxData.boxes_opened) || 0;
+      }
+      badge.target_value = target;
+    }
+    // TRAP - pièges déclenchés/bloqués
+    else if (badge.category === 'trap' && trapData) {
+      if (condType === 'trap_triggered') {
+        badge.current_value = parseInt(trapData.traps_triggered) || 0;
+      } else if (condType === 'trap_survive') {
+        badge.current_value = parseInt(trapData.traps_blocked) || 0;
+      }
+      badge.target_value = target;
+    }
+    // SUPER_BONUS - bonus utilisés
+    else if (badge.category === 'super_bonus' && superBonusData) {
+      if (condType === 'super_bonus_usage' || condType === 'trap_block') {
+        badge.current_value = parseInt(superBonusData.bonuses_used) || 0;
+      }
+      badge.target_value = target;
+    }
+  });
+
+  // Filtrer par catégorie si demandé
+  const filteredBadges = selectedCategory === 'all'
+    ? allBadges
+    : allBadges.filter(b => b.category === selectedCategory);
+
+  // Séparer les badges par état
+  const unlockedBadges = filteredBadges.filter(b => b.is_unlocked);
+  const inProgressBadges = filteredBadges.filter(b => !b.is_unlocked && b.current_value > 0);
+  const notStartedBadges = filteredBadges.filter(b => !b.is_unlocked && (!b.current_value || b.current_value === 0));
+
+  // Couleur selon mode
+  const modeColors = {
+    overview: '#2B2D31',
+    unlocked: '#2ecc71',  // Vert pour les badges obtenus
+    progress: '#3498db',
+    discover: '#9b59b6'
+  };
+
+  // Générer l'image de profil avec frame (comme showOverview)
+  const files = [];
+  let thumbnailUrl = interaction.user.displayAvatarURL({ dynamic: true, size: 256 });
+  const discordId = interaction.user.id;
+
+  // Récupérer la frame équipée du joueur
+  const equippedFrame = await db.getEquippedFrame(discordId, guildId);
+
+  if (equippedFrame?.frame_url) {
+    try {
+      const avatarUrl = interaction.user.displayAvatarURL({ extension: 'png', size: 256 });
+      const profileBuffer = await imageGenerator.generateProfileWithFrame(avatarUrl, equippedFrame.frame_url);
+      const attachment = new AttachmentBuilder(profileBuffer, { name: 'profile_framed.png' });
+      files.push(attachment);
+      thumbnailUrl = 'attachment://profile_framed.png';
+    } catch (error) {
+      console.warn('⚠️ Erreur génération image profil avec frame (badges):', error.message);
+      // Fallback: utiliser l'avatar normal
+    }
+  }
+
   const embed = new EmbedBuilder()
-    .setTitle('🏆 MES BADGES & ACHIEVEMENTS')
-    .setColor(color)
-    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setDescription(
-      `### 📊 Statistiques Globales\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `**Total**: ${stats.total_badges} badges débloqués (${stats.completionPercentage}%)\n\n` +
-      `**Par rareté**:\n` +
-      `${badgeHandler.RARITY_EMOJIS.mythic} Mythique: ${stats.mythic_count}\n` +
-      `${badgeHandler.RARITY_EMOJIS.legendary} Légendaire: ${stats.legendary_count}\n` +
-      `${badgeHandler.RARITY_EMOJIS.epic} Épique: ${stats.epic_count}\n` +
-      `${badgeHandler.RARITY_EMOJIS.rare} Rare: ${stats.rare_count}\n` +
-      `${badgeHandler.RARITY_EMOJIS.uncommon} Peu commun: ${stats.uncommon_count}\n` +
-      `${badgeHandler.RARITY_EMOJIS.common} Commun: ${stats.common_count}\n\n` +
-      `**Super Bonus**: ${stats.super_bonus_count} badges\n\n`
-    );
+    .setColor(modeColors[mode])
+    .setThumbnail(thumbnailUrl);
 
-  // Section badges récents
-  if (unlockedBadges.length > 0) {
-    const ITEMS_PER_PAGE = 5;
-    const totalPages = Math.ceil(unlockedBadges.length / ITEMS_PER_PAGE);
-    const startIndex = page * ITEMS_PER_PAGE;
-    const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, unlockedBadges.length);
-    const pageBadges = unlockedBadges.slice(startIndex, endIndex);
+  // ========== MODE: OVERVIEW ==========
+  if (mode === 'overview') {
+    embed.setTitle('🏆 MES BADGES & ACHIEVEMENTS');
 
-    let badgesList = `### 🎖️ Badges Débloqués (${unlockedBadges.length})\n`;
-    badgesList += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    // Barre de progression globale
+    const totalBadges = allBadges.length;
+    const globalProgress = Math.round((stats.total_badges / totalBadges) * 100);
+    const globalBar = createProgressBar(stats.total_badges, totalBadges, 15);
 
-    pageBadges.forEach(badge => {
-      const rarityEmoji = badgeHandler.RARITY_EMOJIS[badge.rarity];
-      const rarityName = badgeHandler.RARITY_NAMES[badge.rarity];
-      const unlockedDate = new Date(badge.unlocked_at);
-      const timeAgo = formatTimeAgo(unlockedDate);
+    let description = `### 📊 Progression Globale\n`;
+    description += `${globalBar}\n`;
+    description += `**${stats.total_badges}/${totalBadges}** badges débloqués (${globalProgress}%)\n\n`;
 
-      badgesList += `${badge.emoji} **${badge.name}** ${rarityEmoji}\n`;
-      badgesList += `   *${badge.description}*\n`;
-      badgesList += `   📅 Débloqué ${timeAgo}\n\n`;
-    });
+    description += `### 🎯 Répartition par Rareté\n`;
+    description += `${badgeHandler.RARITY_EMOJIS.mythic} Mythique: **${stats.mythic_count}**\n`;
+    description += `${badgeHandler.RARITY_EMOJIS.legendary} Légendaire: **${stats.legendary_count}**\n`;
+    description += `${badgeHandler.RARITY_EMOJIS.epic} Épique: **${stats.epic_count}**\n`;
+    description += `${badgeHandler.RARITY_EMOJIS.rare} Rare: **${stats.rare_count}**\n`;
+    description += `${badgeHandler.RARITY_EMOJIS.uncommon} Peu commun: **${stats.uncommon_count}**\n`;
+    description += `${badgeHandler.RARITY_EMOJIS.common} Commun: **${stats.common_count}**\n`;
 
-    if (totalPages > 1) {
-      badgesList += `\n📄 Page ${page + 1}/${totalPages}\n`;
+    embed.setDescription(description);
+
+    // Badges récemment débloqués (top 3)
+    const recentBadges = unlockedBadges
+      .sort((a, b) => new Date(b.unlocked_at) - new Date(a.unlocked_at))
+      .slice(0, 3);
+
+    if (recentBadges.length > 0) {
+      let recentText = '';
+      recentBadges.forEach(badge => {
+        const timeAgo = formatTimeAgo(new Date(badge.unlocked_at));
+        recentText += `${badge.emoji} **${badge.name}** ${badgeHandler.RARITY_EMOJIS[badge.rarity]}\n`;
+        recentText += `└ 📅 ${timeAgo}\n`;
+      });
+      embed.addFields({ name: '🆕 Récemment Débloqués', value: recentText, inline: true });
     }
 
-    embed.addFields({
-      name: '\u200B',
-      value: badgesList
-    });
-  } else {
-    embed.addFields({
-      name: '🎖️ Badges Débloqués',
-      value: '❌ Aucun badge débloqué avec ces filtres.\n*Utilise les super bonus et collecte pour débloquer des badges !*'
-    });
+    // Prochains badges à débloquer (top 3 les plus proches)
+    const almostThere = inProgressBadges
+      .map(b => ({
+        ...b,
+        percentage: b.target_value ? (b.current_value / b.target_value) * 100 : 0
+      }))
+      .sort((a, b) => b.percentage - a.percentage)
+      .slice(0, 3);
+
+    if (almostThere.length > 0) {
+      let almostText = '';
+      almostThere.forEach(badge => {
+        const pct = Math.round(badge.percentage);
+        almostText += `${badge.emoji} **${badge.name}** ${badgeHandler.RARITY_EMOJIS[badge.rarity]}\n`;
+        almostText += `└ ${createProgressBar(badge.current_value, badge.target_value, 8)} **${pct}%**\n`;
+      });
+      embed.addFields({ name: '🔥 Presque Débloqués !', value: almostText, inline: true });
+    }
   }
 
-  // Section progression
-  if (progressBadges.length > 0) {
-    let progressList = `### 📈 Progression en Cours\n`;
-    progressList += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  // ========== MODE: UNLOCKED (Mes Badges Obtenus) ==========
+  else if (mode === 'unlocked') {
+    embed.setTitle('✅ MES BADGES OBTENUS');
 
-    progressBadges.slice(0, 3).forEach(progress => {
-      const rarityEmoji = badgeHandler.RARITY_EMOJIS[progress.rarity];
-      const progressBar = createProgressBar(progress.current_value, progress.target_value, 10);
+    // Filtrer les badges débloqués par catégorie si demandé
+    const filteredUnlocked = selectedCategory === 'all'
+      ? unlockedBadges
+      : unlockedBadges.filter(b => b.category === selectedCategory);
 
-      progressList += `${progress.emoji} **${progress.name}** ${rarityEmoji}\n`;
-      progressList += `${progressBar} ${Math.round(progress.percentage)}%\n`;
-      progressList += `${progress.current_value}/${progress.target_value}\n\n`;
-    });
+    // Pagination
+    const ITEMS_PER_PAGE = 6;
+    const totalPages = Math.ceil(filteredUnlocked.length / ITEMS_PER_PAGE) || 1;
+    const startIdx = page * ITEMS_PER_PAGE;
+    const pageBadges = filteredUnlocked
+      .sort((a, b) => new Date(b.unlocked_at) - new Date(a.unlocked_at)) // Plus récents d'abord
+      .slice(startIdx, startIdx + ITEMS_PER_PAGE);
 
-    embed.addFields({
-      name: '\u200B',
-      value: progressList
-    });
+    let description = `### ${selectedCategory === 'all' ? 'Tous mes Badges' : getCategoryDisplayName(selectedCategory)}\n`;
+    description += `🏆 **${filteredUnlocked.length}** badge(s) obtenu(s)\n\n`;
+
+    if (pageBadges.length === 0) {
+      description += '*Aucun badge obtenu dans cette catégorie.*\n';
+      description += '💡 Consulte l\'onglet **Découvrir** pour voir comment les débloquer !';
+    } else {
+      pageBadges.forEach(badge => {
+        // Formater la date d'obtention
+        const unlockedDate = new Date(badge.unlocked_at);
+        const dateStr = unlockedDate.toLocaleDateString('fr-FR', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        });
+        const timeStr = unlockedDate.toLocaleTimeString('fr-FR', {
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        description += `${badge.emoji} **${badge.name}** ${badgeHandler.RARITY_EMOJIS[badge.rarity]}\n`;
+        description += `└ 📅 Obtenu le **${dateStr}** à ${timeStr}\n`;
+        description += `└ *${badge.description}*\n\n`;
+      });
+    }
+
+    if (totalPages > 1) {
+      description += `\n📄 Page ${page + 1}/${totalPages}`;
+    }
+
+    embed.setDescription(description);
   }
 
-  // Composants (filtres + navigation)
+  // ========== MODE: PROGRESS ==========
+  else if (mode === 'progress') {
+    embed.setTitle('📈 PROGRESSION DES BADGES');
+
+    // Pagination
+    const ITEMS_PER_PAGE = 6;
+    const badgesToShow = [...inProgressBadges, ...notStartedBadges];
+    const totalPages = Math.ceil(badgesToShow.length / ITEMS_PER_PAGE);
+    const startIdx = page * ITEMS_PER_PAGE;
+    const pageBadges = badgesToShow.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+
+    let description = `### ${selectedCategory === 'all' ? 'Tous les Badges' : getCategoryDisplayName(selectedCategory)}\n`;
+    description += `*Clique sur un badge pour voir comment le débloquer*\n\n`;
+
+    if (pageBadges.length === 0) {
+      description += '✅ **Tous les badges de cette catégorie sont débloqués !**';
+    } else {
+      pageBadges.forEach(badge => {
+        const currentVal = badge.current_value || 0;
+        const targetVal = badge.target_value || badge.condition_value || 1;
+        const pct = Math.round((currentVal / targetVal) * 100);
+        const progressBar = createProgressBar(currentVal, targetVal, 10);
+
+        description += `${badge.emoji} **${badge.name}** ${badgeHandler.RARITY_EMOJIS[badge.rarity]}\n`;
+        description += `${progressBar} ${currentVal}/${targetVal} (${pct}%)\n`;
+        description += `💡 *${getBadgeHint(badge)}*\n\n`;
+      });
+    }
+
+    if (totalPages > 1) {
+      description += `\n📄 Page ${page + 1}/${totalPages}`;
+    }
+
+    embed.setDescription(description);
+  }
+
+  // ========== MODE: DISCOVER ==========
+  else if (mode === 'discover') {
+    embed.setTitle('🔍 DÉCOUVRIR DE NOUVEAUX BADGES');
+
+    // Pagination
+    const ITEMS_PER_PAGE = 5;
+    const totalPages = Math.ceil(notStartedBadges.length / ITEMS_PER_PAGE);
+    const startIdx = page * ITEMS_PER_PAGE;
+    const pageBadges = notStartedBadges.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+
+    let description = `### Badges à Découvrir (${notStartedBadges.length})\n`;
+    description += `*Ces badges attendent d'être débloqués !*\n\n`;
+
+    if (pageBadges.length === 0) {
+      description += '🎉 **Tu as commencé tous les badges disponibles !**\n';
+      description += 'Consulte l\'onglet **Progression** pour voir ton avancement.';
+    } else {
+      pageBadges.forEach(badge => {
+        description += `${badge.emoji} **${badge.name}** ${badgeHandler.RARITY_EMOJIS[badge.rarity]}\n`;
+        description += `└ *${badge.description}*\n`;
+        description += `└ 🎯 **Comment l'obtenir:** ${getBadgeHowTo(badge)}\n\n`;
+      });
+    }
+
+    if (totalPages > 1) {
+      description += `\n📄 Page ${page + 1}/${totalPages}`;
+    }
+
+    embed.setDescription(description);
+  }
+
+  // ========== COMPOSANTS ==========
   const components = [];
 
-  // Row 1: Filtres catégorie
-  const categoryOptions = [
-    { label: 'Toutes catégories', value: 'all', emoji: '📦', default: selectedCategory === 'all' },
-    { label: 'Super Bonus', value: 'super_bonus', emoji: '⭐', default: selectedCategory === 'super_bonus' },
-    { label: 'Collection', value: 'collection', emoji: '🎨', default: selectedCategory === 'collection' },
-    { label: 'Missions', value: 'mission', emoji: '📋', default: selectedCategory === 'mission' },
-    { label: 'Pièges', value: 'trap', emoji: '💥', default: selectedCategory === 'trap' }
-  ];
+  // Row 1: Onglets de mode (Vue d'ensemble, Mes Badges, Progression, Découverte)
+  const modeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_badges_mode:overview')
+      .setLabel('Résumé')
+      .setEmoji('📊')
+      .setStyle(mode === 'overview' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('profile_badges_mode:unlocked')
+      .setLabel('Mes Badges')
+      .setEmoji('✅')
+      .setStyle(mode === 'unlocked' ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('profile_badges_mode:progress')
+      .setLabel('En cours')
+      .setEmoji('📈')
+      .setStyle(mode === 'progress' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('profile_badges_mode:discover')
+      .setLabel('À découvrir')
+      .setEmoji('🔍')
+      .setStyle(mode === 'discover' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+  );
+  components.push(modeRow);
 
-  const categorySelect = new StringSelectMenuBuilder()
-    .setCustomId('profile_badges_category')
-    .setPlaceholder('Filtrer par catégorie')
-    .addOptions(categoryOptions);
+  // Row 2: Filtres catégorie (pour les modes unlocked, progress ou discover)
+  if (mode === 'unlocked' || mode === 'progress' || mode === 'discover') {
+    const categoryOptions = [
+      { label: 'Toutes catégories', value: 'all', emoji: '📦', default: selectedCategory === 'all' },
+      { label: 'Super Bonus', value: 'super_bonus', emoji: '⭐', default: selectedCategory === 'super_bonus' },
+      { label: 'Collection', value: 'collection', emoji: '🎨', default: selectedCategory === 'collection' },
+      { label: 'Rareté', value: 'rarity', emoji: '💎', default: selectedCategory === 'rarity' },
+      { label: 'Évolution', value: 'evolution', emoji: '📈', default: selectedCategory === 'evolution' },
+      { label: 'Missions', value: 'mission', emoji: '📋', default: selectedCategory === 'mission' },
+      { label: 'Pièges', value: 'trap', emoji: '💥', default: selectedCategory === 'trap' },
+      { label: 'Mystery Box', value: 'mystery_box', emoji: '🎁', default: selectedCategory === 'mystery_box' },
+      { label: 'Engagement', value: 'engagement', emoji: '📅', default: selectedCategory === 'engagement' },
+      { label: 'Économie', value: 'economy', emoji: '💰', default: selectedCategory === 'economy' },
+      { label: 'Ancienneté', value: 'seniority', emoji: '⏰', default: selectedCategory === 'seniority' },
+      { label: 'Social', value: 'social', emoji: '👥', default: selectedCategory === 'social' },
+      { label: 'Chance', value: 'luck', emoji: '🍀', default: selectedCategory === 'luck' },
+      { label: 'Mint', value: 'mint', emoji: '✨', default: selectedCategory === 'mint' },
+      { label: 'Thème', value: 'theme', emoji: '🎭', default: selectedCategory === 'theme' },
+      { label: 'Crafting', value: 'crafting', emoji: '🔧', default: selectedCategory === 'crafting' }
+    ];
 
-  components.push(new ActionRowBuilder().addComponents(categorySelect));
+    const categorySelect = new StringSelectMenuBuilder()
+      .setCustomId(`profile_badges_category:${mode}`)
+      .setPlaceholder('Filtrer par catégorie')
+      .addOptions(categoryOptions);
 
-  // Row 2: Filtres rareté
-  const rarityOptions = [
-    { label: 'Toutes raretés', value: 'all', emoji: '🌟', default: selectedRarity === 'all' },
-    { label: 'Mythique', value: 'mythic', emoji: '🔴', default: selectedRarity === 'mythic' },
-    { label: 'Légendaire', value: 'legendary', emoji: '🟠', default: selectedRarity === 'legendary' },
-    { label: 'Épique', value: 'epic', emoji: '🟣', default: selectedRarity === 'epic' },
-    { label: 'Rare', value: 'rare', emoji: '🔵', default: selectedRarity === 'rare' }
-  ];
+    components.push(new ActionRowBuilder().addComponents(categorySelect));
+  }
 
-  const raritySelect = new StringSelectMenuBuilder()
-    .setCustomId('profile_badges_rarity')
-    .setPlaceholder('Filtrer par rareté')
-    .addOptions(rarityOptions);
+  // Row 3: Navigation pagination (si nécessaire)
+  let badgesToShow = [];
+  let itemsPerPageForNav = 6;
 
-  components.push(new ActionRowBuilder().addComponents(raritySelect));
+  if (mode === 'unlocked') {
+    const filteredUnlocked = selectedCategory === 'all'
+      ? unlockedBadges
+      : unlockedBadges.filter(b => b.category === selectedCategory);
+    badgesToShow = filteredUnlocked;
+    itemsPerPageForNav = 6;
+  } else if (mode === 'progress') {
+    badgesToShow = [...inProgressBadges, ...notStartedBadges];
+    itemsPerPageForNav = 6;
+  } else if (mode === 'discover') {
+    badgesToShow = notStartedBadges;
+    itemsPerPageForNav = 5;
+  }
 
-  // Row 3: Navigation
-  const navRow = new ActionRowBuilder();
+  const totalPages = Math.ceil(badgesToShow.length / itemsPerPageForNav) || 1;
 
-  if (unlockedBadges.length > 5) {
-    const totalPages = Math.ceil(unlockedBadges.length / 5);
-
-    navRow.addComponents(
+  if (totalPages > 1) {
+    const navRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`profile_badges_prev:${page}`)
-        .setLabel('◀️ Précédent')
+        .setCustomId(`profile_badges_page:${mode}:${selectedCategory}:${Math.max(0, page - 1)}`)
+        .setLabel('◀️')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page === 0)
-    );
-
-    navRow.addComponents(
+        .setDisabled(page === 0),
       new ButtonBuilder()
-        .setCustomId(`profile_badges_next:${page}`)
-        .setLabel('Suivant ▶️')
+        .setCustomId('profile_badges_pageinfo')
+        .setLabel(`${page + 1}/${totalPages}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`profile_badges_page:${mode}:${selectedCategory}:${Math.min(totalPages - 1, page + 1)}`)
+        .setLabel('▶️')
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(page >= totalPages - 1)
     );
+    components.push(navRow);
   }
 
-  navRow.addComponents(
+  // Row finale: Actions avec Retour au profil
+  const actionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('profile_overview')
+      .setLabel('Retour au profil')
+      .setEmoji('🏠')
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId('profile_badges_leaderboard')
       .setLabel('Classement')
       .setEmoji('🏆')
-      .setStyle(ButtonStyle.Success)
-  );
-
-  navRow.addComponents(
+      .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId('profile_refresh')
       .setLabel('Actualiser')
       .setEmoji('🔄')
       .setStyle(ButtonStyle.Primary)
   );
-
-  components.push(navRow);
+  components.push(actionRow);
 
   return {
     embeds: [embed],
-    components
+    components,
+    files  // Inclure l'image de profil avec frame
   };
+}
+
+/**
+ * Helper: Nom d'affichage des catégories
+ */
+function getCategoryDisplayName(category) {
+  const names = {
+    super_bonus: '⭐ Super Bonus',
+    collection: '🎨 Collection',
+    mission: '📋 Missions',
+    trap: '💥 Pièges',
+    mystery_box: '🎁 Mystery Box',
+    engagement: '📅 Engagement',
+    crafting: '🔧 Crafting',
+    rarity: '💎 Raretés',
+    social: '👥 Social',
+    special: '🌟 Spéciaux'
+  };
+  return names[category] || category;
+}
+
+/**
+ * Helper: Indice court pour un badge (affiché dans la progression)
+ */
+function getBadgeHint(badge) {
+  const hints = {
+    // Super Bonus
+    'vision_divine': 'Utilise le bonus Vision Divine',
+    'jackpot_x2': 'Utilise le bonus Jackpot x2',
+    'legendary_magnet': 'Utilise le bonus Aimant Légendaire',
+    'trap_block': 'Bloque des pièges avec Bouclier Anti-Piège',
+
+    // Collection
+    'collectible_count': 'Collecte des items',
+
+    // Missions
+    'mission_complete': 'Complete des missions',
+
+    // Mystery Box
+    'mystery_box_open': 'Ouvre des mystery boxes',
+
+    // Pièges
+    'trap_survive': 'Survie aux pièges',
+    'trap_triggered': 'Déclenche des pièges',
+
+    // Engagement
+    'daily_claim_streak': 'Réclame tes récompenses quotidiennes',
+
+    // Crafting
+    'craft_count': 'Fabrique des items'
+  };
+
+  return hints[badge.condition_type] || badge.description;
+}
+
+/**
+ * Helper: Instructions détaillées pour obtenir un badge
+ */
+function getBadgeHowTo(badge) {
+  const howTo = {
+    // Super Bonus détaillés
+    'vision_divine': `Utilise le bonus **Vision Divine** ${badge.condition_value || '?'} fois pour révéler le contenu des mystery boxes avant de les ouvrir.`,
+    'jackpot_x2': `Active le bonus **Jackpot x2** ${badge.condition_value || '?'} fois pour doubler tes gains.`,
+    'legendary_magnet': `Utilise l'**Aimant Légendaire** ${badge.condition_value || '?'} fois pour augmenter tes chances d'obtenir des légendaires.`,
+    'trap_block': `Bloque ${badge.condition_value || '?'} pièges avec le **Bouclier Anti-Piège**.`,
+
+    // Collection
+    'collectible_count': `Collecte ${badge.condition_value || '?'} items uniques dans ta collection.`,
+
+    // Missions
+    'mission_complete': `Complete ${badge.condition_value || '?'} missions avec succès.`,
+
+    // Mystery Box
+    'mystery_box_open': `Ouvre ${badge.condition_value || '?'} mystery boxes.`,
+
+    // Pièges
+    'trap_survive': `Survie à ${badge.condition_value || '?'} pièges sans perdre de collectibles.`,
+    'trap_triggered': `Déclenche ${badge.condition_value || '?'} pièges (volontairement ou non).`,
+
+    // Engagement
+    'daily_claim_streak': `Maintiens un streak de ${badge.condition_value || '?'} jours consécutifs en réclamant tes récompenses quotidiennes.`,
+
+    // Crafting
+    'craft_count': `Fabrique ${badge.condition_value || '?'} items via le système de crafting.`
+  };
+
+  return howTo[badge.condition_type] || `${badge.description} (${badge.condition_value || '?'} requis)`;
 }
 
 /**

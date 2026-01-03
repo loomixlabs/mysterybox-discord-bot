@@ -7,7 +7,166 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
-<!-- Prochaines modifications ici -->
+### ✨ Added
+
+- **[Leaderboard Complet]**: Refonte complète du système de classement avec pagination (2026-01-03)
+  - **11 types de classement** disponibles:
+    - 🏆 Collection - Progression dans la collection actuelle
+    - 💎 Chasseurs Légendaires - Nombre de légendaires obtenus
+    - 💜 Chasseurs Épiques - Nombre d'épiques obtenus
+    - 🍀 Les Chanceux (NOUVEAU) - Meilleur ratio légendaires/total
+    - ⚡ Speedrunners (NOUVEAU) - Collection complétée le plus vite
+    - 🎯 Précision Missions (NOUVEAU) - Taux de réussite missions
+    - 🔥 Streaks - Jours consécutifs de connexion
+    - 📦 Mystery Boxes - Boxes ouvertes
+    - ✅ Missions - Missions complétées
+    - 🎖️ Badges - Collection de badges
+    - 🛡️ Survivants / 💀 Victimes / 🃏 Maîtres Joker / ⭐ Vétérans
+  - **Pagination**: 10 joueurs par page avec navigation par boutons
+  - **Select menu**: Navigation fluide entre les types de classement
+  - **Corrections critiques**:
+    - `mystery_boxes` utilise maintenant `give_logs` (non `collections`)
+    - `streak` utilise `current_claim_streak` (non `current_login_streak`)
+  - Fichier modifié: `commands/player/leaderboard.js` (refonte complète)
+
+- **[Super Bonus Joker - Leveling]**: Amélioration majeure du système Joker avec support leveling (2026-01-03)
+  - **3 modes d'action**:
+    1. Nouveau collectible → Mint # attribué
+    2. Récupération collectible perdu → Niveau et mint conservés
+    3. Fusion (doublon) → +100 XP, level up possible, récompense Loomix
+  - **`getCollectiblesForJoker()`**: Récupère tous les collectibles avec état de possession ET niveau
+  - **`consumeJokerBonus()`**: Retourne {success, isLevelUp, newLevel, loomixReward, wasDuplicate, wasRecovered, mintNumber}
+  - **Embeds visuels adaptés**: 3 variantes selon l'action avec barre de progression XP
+  - **Menu sélection intelligent**: Filtre les collectibles niveau max, affiche le niveau actuel
+  - Fichier modifié: `handlers/superBonusHandler.js` (lignes 1366-2084)
+
+- **[Badges ENGAGEMENT]**: Système complet de badges basés sur les streaks (2026-01-03)
+  - **5 badges progressifs**:
+    - ENGAGEMENT_ACTIF (3 jours)
+    - ENGAGEMENT_ASSIDU (7 jours)
+    - ENGAGEMENT_DEVOU (14 jours)
+    - ENGAGEMENT_MARATHONIEN (30 jours)
+    - ENGAGEMENT_ETERNEL (90 jours)
+  - **Tracking automatique**: Hook `onDailyClaim()` dans badgeHandler
+  - **Scripts rétroactifs**: Recalcul des streaks et attribution des badges manquants
+  - Fichiers créés: `scripts/seed-engagement-badges.js`, `scripts/retroactive-engagement-badges.js`
+
+- **[Badges SENIORITY]**: Badges d'ancienneté pour récompenser la fidélité (2026-01-03)
+  - **4 badges progressifs**: 7j, 30j, 180j, 365j depuis la création du compte
+  - **Tracking automatique**: Hook `onPlayerActivity()` dans badgeHandler
+  - Scripts: `scripts/retroactive-seniority-badges.js`
+
+- **[Affichage Mint dans Level Up]**: Le numéro de mint s'affiche maintenant sur les images d'évolution (2026-01-03)
+  - **Overlay coloré selon la rareté**: #1 Or, #2-10 Bleu, #11-50 Blanc, #51-100 Gris
+  - **Présent sur les deux images**: Avant et après level up
+  - Fichier modifié: `utils/imageGenerator.js` (lignes 231-236, 369-387, 516-530)
+
+- **[Système d'Équité]**: Nouveau système pour équilibrer les chances entre joueurs rapides et lents
+  - **Concept**: Les joueurs avec une collection plus complète ont un délai avant de pouvoir ouvrir les mystery boxes, donnant une chance aux joueurs avec moins de collectibles
+  - **Configuration admin**: Nouvelle section "⚖️ Équité" dans le panneau admin (Paramètres)
+    - Toggle activer/désactiver le système
+    - Toggle afficher/masquer le compte à rebours Discord
+    - Paliers personnalisables (format `min-max:delay` en secondes)
+    - Sélecteur multi-rôles pour les exemptions
+  - **Logique d'équité**: Le délai est basé sur le timestamp de création de la mystery box, pas sur le premier clic
+  - **Compte à rebours Discord**: Utilise le format `<t:UNIX:R>` pour un affichage dynamique ("dans 5 secondes", "il y a 2 secondes")
+  - **Paliers par défaut**:
+    - 0-25%: Immédiat (pas de délai)
+    - 26-50%: 5 secondes
+    - 51-75%: 10 secondes
+    - 76-99%: 12 secondes
+    - 100%: 15 secondes
+  - **Fichiers créés**:
+    - `handlers/fairnessConfigHandler.js`: Handler complet pour la configuration
+    - `scripts/create-fairness-table.js`: Script de création de la table
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`: Ajout bouton Équité + routing
+    - `handlers/modalHandler.js`: Routing modal paliers
+    - `handlers/mysteryBoxHandler.js`: Intégration logique d'équité
+    - `events/interactionCreate.js`: Routing RoleSelectMenu
+    - `utils/database-pg.js`: Fonctions `getFairnessConfig`, `upsertFairnessConfig`, `toggleFairnessEnabled`, `toggleFairnessCountdown`, `updateFairnessSteps`, `updateFairnessExemptRoles`, `calculateFairnessDelay`, `getPlayerProgressionPercent`, `checkFairnessForPlayer`
+  - **Table créée**: `fairness_config` avec colonnes `guild_id`, `enabled`, `show_countdown`, `exempt_roles` (TEXT[]), `steps` (JSONB)
+
+- **[Collectibles Admin Panel Improvements]**: Améliorations majeures du panneau admin des collectibles
+  - **Pagination**: Ajout d'un système de pagination (20 items/page) pour éviter l'erreur Discord "max 25 options dans SelectMenu"
+  - **Édition des collectibles**: Nouveau flow d'édition avec 3 options:
+    - ✏️ **Modifier**: Modal pour éditer nom, rareté et message de révélation
+    - 🖼️ **Changer Image**: Thread temporaire (2 min) pour uploader une nouvelle image
+    - 🗑️ **Supprimer**: Confirmation avant suppression
+  - **Vue détaillée**: Affichage complet des infos du collectible avec image preview
+  - **Audit logging**: Nouvelle fonction `logCollectibleEdited` pour tracer les modifications
+  - Fichiers modifiés:
+    - `handlers/adminPanelHandler.js`: showCollectiblesMenu avec pagination, handleCollectibleSelection avec vue détaillée, showEditCollectibleModal, handleEditCollectibleImage avec thread, handleEditCollectibleModalSubmit, handleThreadCancelEditImage
+    - `handlers/modalHandler.js`: Route pour `modal_edit_collectible_*`
+    - `utils/auditLogger.js`: Fonction `logCollectibleEdited`
+
+### 🐛 Fixed
+
+- **[Super Bonus Temporary Deactivation]**: Correction de la désactivation temporaire des super bonus (2026-01-03)
+  - **Problème**: Les bonus Vision Divine, Bouclier Anti-Piège et Jackpot x2 continuaient d'agir même après désactivation via le bouton "Désactiver" dans /profile → Mes Bonus
+  - **Cause racine**: Les fonctions `hasRevealBonus()`, `hasTrapShield()`, et `getRewardMultiplier()` ne vérifiaient pas si `activated_at` était NULL (état "en pause")
+  - **Mécanisme**: La désactivation mettait correctement `activated_at = NULL` pour permettre la réactivation, mais les fonctions de vérification ignoraient ce flag
+  - **Solution**: Ajout de la condition `bonus.activated_at !== null` dans les 3 fonctions de vérification
+  - Fichier modifié: `handlers/superBonusHandler.js` (lignes 66, 116, 161)
+
+- **[Badges DM Buttons]**: Correction des boutons dans les notifications DM de badges (2026-01-03)
+  - **Problème**: Les boutons "Voir mes badges" et "Voir ma progression" dans les DM ne fonctionnaient pas
+  - **Erreur**: `Bouton non géré: view_my_badges:guildId` et `view_badge_progress:guildId`
+  - **Solution**: Ajout du routing complet pour les deux boutons avec récupération du player depuis le guildId et appel correct à `showBadges()`
+  - Fichier modifié: `events/interactionCreate.js` (lignes 130-174)
+
+- **[Profile Badges View - Loomix Query]**: Correction de l'affichage des badges dans /profile (2026-01-03)
+  - **Erreur**: `column "loomix_balance" does not exist`
+  - **Cause racine**: La requête cherchait `loomix_balance` dans la table `players` alors qu'elle est stockée dans `player_currency`
+  - **Solution**: Modification avec LEFT JOIN vers `player_currency` où `currency_type = 'loomix'`
+  - Fichier modifié: `views/profileView.js` (lignes 1044-1056)
+
+- **[Profile Badges View - Traps Query]**: Correction de la requête de données de pièges (2026-01-03)
+  - **Erreur**: `column "blocked" does not exist` dans la table `trap_triggered`
+  - **Cause racine**: La colonne `blocked` n'existe pas dans `trap_triggered`, seul `traps_blocked` existe dans `players`
+  - **Solution**: Utilisation de sous-requêtes: COUNT depuis `trap_triggered` + `traps_blocked` depuis `players`
+  - Fichier modifié: `views/profileView.js` (lignes 1084-1091)
+
+- **[Badges ENGAGEMENT - Streak Global]**: Correction majeure du calcul du streak global pour les badges d'engagement
+  - **Problème**: Le streak global (`current_claim_streak`) restait à 1 malgré des claims consécutifs, causant l'échec de l'attribution des badges ENGAGEMENT_ASSIDU (7j), ENGAGEMENT_DEVOU (14j), etc.
+  - **Cause racine**: La comparaison `last_daily_claim === yesterdayStr` échouait car `last_daily_claim` était NULL pour les joueurs historiques. Le code dépendait d'une valeur qui n'avait jamais été initialisée.
+  - **Solution**: Remplacement de la logique par un calcul direct depuis `daily_claim_logs` avec une requête CTE qui compte les jours consécutifs en arrière depuis hier
+  - **Amélioration**: Le streak global persiste maintenant correctement entre les thèmes (changement de thème ne casse plus le streak)
+  - **Script rétroactif**: `scripts/retroactive-recalculate-global-streaks.js` pour recalculer tous les streaks depuis les logs
+  - **Script rétroactif**: `scripts/retroactive-engagement-badges.js` pour attribuer les badges manquants
+  - **Résultat**: 55 badges ENGAGEMENT_ACTIF, 17 badges ENGAGEMENT_ASSIDU attribués
+  - Fichier modifié: `utils/database-pg.js` (lignes 3658-3694)
+
+- **[Read-Only Channel Permissions]**: Correction des permissions dans les threads de mission pour les channels en lecture seule
+  - **Problème**: Les joueurs voyaient "lecture seule" dans les threads de mission créés dans des channels protégés, même après ajout de permissions
+  - **Cause racine**: Le code ne vérifiait que `SendMessages` mais pas `SendMessagesInThreads` - les deux sont nécessaires pour écrire dans un thread
+  - **Solution**: Vérification des deux permissions (`SendMessages` ET `SendMessagesInThreads`) et ajout des deux sur le channel parent si manquantes
+  - **Note technique**: Les threads Discord héritent leurs permissions du channel parent, ils n'ont pas leurs propres `permissionOverwrites`
+  - Fichier modifié: `handlers/mysteryBoxHandler.js` (lignes 1208-1238)
+
+- **[Mission Evolution Announcements]**: Correction des annonces d'évolution manquantes pour les missions
+  - **Problème**: Quand un joueur gagnait un doublon via une mission, l'annonce de fusion/level up n'apparaissait pas dans le canal d'annonces
+  - **Cause racine**: Les fonctions `announceCollectibleLevelUp` et `announceCollectibleMaxLevel` n'étaient pas appelées dans missionHandler
+  - **Solution**: Ajout des appels d'annonces d'évolution dans les deux fonctions de complétion de mission (`completeMission` et `approveMission`)
+  - Fichier modifié: `handlers/missionHandler.js` (lignes 1672-1704, 1923-1955)
+
+- **[Accélérateur de Cooldown Display Bug]**: Correction du bug d'affichage de l'Accélérateur de Cooldown dans le profil
+  - **Problème**: Certains joueurs avaient leur bonus Accélérateur de Cooldown affiché dans "BONUS ACTIFS" au lieu de "BONUS À ACTIVER", rendant le bouton d'utilisation invisible
+  - **Cause racine**: Des bonus cooldown avec `activated_at` défini par erreur étaient classés comme "automatiques" au lieu de "manuels"
+  - **Solution**: Modification de la logique de séparation des bonus pour que les bonus `cooldown` soient TOUJOURS affichés comme manuels, peu importe la valeur de `activated_at`
+  - **Nettoyage**: Reset de `activated_at = NULL` pour les 4 bonus cooldown corrompus sur le VPS
+  - Fichier modifié: `views/profileView.js` (lignes 819-832)
+
+- **[Campaign Resume Bug]**: Correction du bug de reprise de campagne en pause
+  - **Problème**: La reprise d'une campagne mise en pause ne fonctionnait pas - la campagne restait bloquée
+  - **Cause racine**: La fonction `resumeCampaign` mettait le statut à `'active'` au lieu de `'running'`, et ne relançait pas les timers/cron
+  - **Solution**:
+    1. Correction du statut: `'active'` → `'running'` pour correspondre aux vérifications du système
+    2. Passage du client Discord pour relancer automatiquement les timers burst ou tâches cron schedule
+    3. Appel des fonctions `resumeBurstCampaign` ou `resumeScheduleCampaign` pour recréer les planificateurs
+  - Fichiers modifiés:
+    - `handlers/campaignHandler.js` (lignes 539-573) - Refonte de resumeCampaign
+    - `handlers/campaignAdminHandler.js` (lignes 442-456) - Passage du client Discord
 
 ## [2.1.0] - 2025-12-28
 

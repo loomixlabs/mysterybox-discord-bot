@@ -50,7 +50,8 @@ function getProfileState(userId) {
       inventoryFilter: 'all',
       badgesPage: 0,
       badgesCategory: 'all',
-      badgesRarity: 'all'
+      badgesRarity: 'all',
+      badgesMode: 'overview' // Nouveau: mode du menu badges (overview, progress, discover)
     });
   }
   return profileState.get(userId);
@@ -155,14 +156,20 @@ async function handleProfileInteraction(interaction) {
       await profileColorHandler.resetToAutoColor(interaction);
     } else if (customId === 'profile_badges') {
       await handleBadges(interaction, player, theme, state);
-    } else if (customId === 'profile_badges_category') {
+    } else if (customId.startsWith('profile_badges_mode:')) {
+      // Nouveau: Changement de mode (overview, progress, discover)
+      const mode = customId.split(':')[1];
+      await handleBadgesModeChange(interaction, player, theme, state, mode);
+    } else if (customId.startsWith('profile_badges_category:')) {
+      // Nouveau: Filtre catégorie avec mode
       await handleBadgesCategory(interaction, player, theme, state);
-    } else if (customId === 'profile_badges_rarity') {
-      await handleBadgesRarity(interaction, player, theme, state);
-    } else if (customId.startsWith('profile_badges_prev:')) {
-      await handleBadgesPagination(interaction, player, theme, state, 'prev');
-    } else if (customId.startsWith('profile_badges_next:')) {
-      await handleBadgesPagination(interaction, player, theme, state, 'next');
+    } else if (customId.startsWith('profile_badges_page:')) {
+      // Nouveau: Pagination avec mode et catégorie
+      const parts = customId.split(':');
+      const mode = parts[1];
+      const category = parts[2];
+      const page = parseInt(parts[3], 10);
+      await handleBadgesPageChange(interaction, player, theme, state, mode, category, page);
     } else if (customId === 'profile_badges_leaderboard') {
       await handleBadgesLeaderboard(interaction, player, theme, state);
     } else if (customId === 'profile_badges_refresh') {
@@ -294,19 +301,22 @@ async function handleActivateBonus(interaction, player, theme, state) {
 
       console.log(`🃏 [JOKER] ${interaction.user.tag} utilise le MysteryBox Joker (${effectiveCharges} charge(s) restante(s))`);
 
-      // Récupérer les collectibles manquants
-      const missingCollectibles = await superBonusHandler.getMissingCollectibles(guildId, interaction.user.id);
+      // Récupérer TOUS les collectibles avec leur état (pour le système de leveling)
+      const jokerData = await superBonusHandler.getCollectiblesForJoker(guildId, interaction.user.id);
+      const selectableCollectibles = jokerData.collectibles.filter(c => c.canSelect);
 
-      if (missingCollectibles.length === 0) {
+      // Vérifier s'il reste des collectibles sélectionnables
+      if (selectableCollectibles.length === 0) {
+        // Tous les collectibles sont possédés ET au niveau max
         return interaction.editReply({
-          content: '🎉 **Félicitations !** Tu possèdes déjà tous les collectibles du thème actif !\n\nLe MysteryBox Joker n\'a pas été consommé.',
+          content: '🏆 **Collection parfaite !** Tous tes collectibles sont au niveau maximum !\n\nLe MysteryBox Joker n\'a pas été consommé.',
           components: []
         });
       }
 
       // Afficher l'interface de sélection avec le GIF personnalisé
-      const embed = superBonusHandler.createJokerSelectionEmbed(missingCollectibles, interaction.user.username);
-      const components = superBonusHandler.createJokerSelectMenu(missingCollectibles, 0);
+      const embed = superBonusHandler.createJokerSelectionEmbed(jokerData.collectibles, interaction.user.username, jokerData.stats);
+      const components = superBonusHandler.createJokerSelectMenu(jokerData.collectibles, 0);
 
       // Créer l'attachment pour le GIF personnalisé
       const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
@@ -733,6 +743,15 @@ async function handleShare(interaction, player, theme, progress) {
       embeds: []
     });
 
+    // 🏆 BADGE TRACKING - Flex Used
+    try {
+      const badgeHandler = require('./badgeHandler');
+      await badgeHandler.onFlexUsed(guildId, player.id, interaction.client);
+      console.log(`🏆 [BADGES] Flex badge tracking appelé pour player ${player.id}`);
+    } catch (error) {
+      console.error('🔴 [BADGES] Erreur tracking flex:', error);
+    }
+
     // Remettre le profil après 2 secondes
     setTimeout(async () => {
       try {
@@ -824,20 +843,42 @@ async function handleInventoryPagination(interaction, player, theme, progress, s
 }
 
 /**
- * 🏆 Handler: Vue Badges
+ * 🏆 Handler: Vue Badges (Refonte v2 - 3 modes)
  */
 async function handleBadges(interaction, player, theme, state) {
   state.currentView = 'badges';
   state.badgesPage = 0; // Reset à la première page
+  state.badgesMode = state.badgesMode || 'overview'; // Conserver le mode ou défaut
   saveProfileState(interaction.user.id, state);
 
   const content = await showBadges(
     interaction,
     player,
     theme,
-    interaction.guildId,  // BUG 16 FIX: Pass guildId explicitly
+    interaction.guildId,
+    state.badgesMode,
     state.badgesCategory,
-    state.badgesRarity,
+    state.badgesPage
+  );
+
+  await interaction.editReply(content);
+}
+
+/**
+ * 🎯 Handler: Changement de mode badges (overview, progress, discover)
+ */
+async function handleBadgesModeChange(interaction, player, theme, state, mode) {
+  state.badgesMode = mode;
+  state.badgesPage = 0; // Reset pagination au changement de mode
+  saveProfileState(interaction.user.id, state);
+
+  const content = await showBadges(
+    interaction,
+    player,
+    theme,
+    interaction.guildId,
+    state.badgesMode,
+    state.badgesCategory,
     state.badgesPage
   );
 
@@ -858,9 +899,9 @@ async function handleBadgesCategory(interaction, player, theme, state) {
     interaction,
     player,
     theme,
-    interaction.guildId,  // BUG 16 FIX: Pass guildId explicitly
+    interaction.guildId,
+    state.badgesMode,
     state.badgesCategory,
-    state.badgesRarity,
     state.badgesPage
   );
 
@@ -868,61 +909,21 @@ async function handleBadgesCategory(interaction, player, theme, state) {
 }
 
 /**
- * 🌟 Handler: Filtre rareté badges (SelectMenu)
+ * 📄 Handler: Changement de page badges
  */
-async function handleBadgesRarity(interaction, player, theme, state) {
-  const selectedRarity = interaction.values[0];
-
-  state.badgesRarity = selectedRarity;
-  state.badgesPage = 0; // Reset à la première page
+async function handleBadgesPageChange(interaction, player, theme, state, mode, category, page) {
+  state.badgesMode = mode;
+  state.badgesCategory = category;
+  state.badgesPage = page;
   saveProfileState(interaction.user.id, state);
 
   const content = await showBadges(
     interaction,
     player,
     theme,
-    interaction.guildId,  // BUG 16 FIX: Pass guildId explicitly
+    interaction.guildId,
+    state.badgesMode,
     state.badgesCategory,
-    state.badgesRarity,
-    state.badgesPage
-  );
-
-  await interaction.editReply(content);
-}
-
-/**
- * 📄 Handler: Pagination badges
- */
-async function handleBadgesPagination(interaction, player, theme, state, action) {
-  const guildId = interaction.guildId;
-
-  // Récupérer le nombre total de badges filtrés
-  const filters = {};
-  if (state.badgesCategory !== 'all') filters.category = state.badgesCategory;
-  if (state.badgesRarity !== 'all') filters.rarity = state.badgesRarity;
-
-  const unlockedBadges = await db.getPlayerBadges(guildId, player.id, filters);
-
-  const itemsPerPage = 5;
-  const totalPages = Math.ceil(unlockedBadges.length / itemsPerPage) || 1;
-  let newPage = state.badgesPage;
-
-  if (action === 'prev') {
-    newPage = Math.max(0, state.badgesPage - 1);
-  } else if (action === 'next') {
-    newPage = Math.min(totalPages - 1, state.badgesPage + 1);
-  }
-
-  state.badgesPage = newPage;
-  saveProfileState(interaction.user.id, state);
-
-  const content = await showBadges(
-    interaction,
-    player,
-    theme,
-    guildId,  // BUG 16 FIX: Pass guildId explicitly (already defined in line 618)
-    state.badgesCategory,
-    state.badgesRarity,
     state.badgesPage
   );
 
@@ -1157,8 +1158,15 @@ async function handleJokerCollectibleSelect(interaction) {
       case 'already_owned':
         errorMessage = '❌ Tu possèdes déjà ce collectible !';
         break;
+      case 'max_level_reached':
+        errorMessage = '🔒 Ce collectible est déjà au niveau maximum !\n\n' +
+          '💡 *Choisis un autre collectible pour utiliser ton Joker.*';
+        break;
       case 'player_not_found':
         errorMessage = '❌ Joueur non trouvé.';
+        break;
+      case 'database_error':
+        errorMessage = '❌ Une erreur est survenue. Réessaie plus tard.';
         break;
     }
 
@@ -1170,17 +1178,33 @@ async function handleJokerCollectibleSelect(interaction) {
   }
 
   // Succès ! Afficher le collectible gagné avec l'UI légendaire
-  const { collectible, player } = result;
-  const successEmbed = superBonusHandler.createJokerSuccessEmbed(interaction.user.username, collectible);
+  const { collectible, player, isNew, wasDuplicate, wasRecovered, isLevelUp } = result;
+
+  // Passer result pour afficher les infos de fusion/récupération/nouveau
+  const successEmbed = superBonusHandler.createJokerSuccessEmbed(interaction.user.username, collectible, result);
 
   // Créer l'attachment pour le GIF de succès
   const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
   const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
 
-  // 🔄 MISE À JOUR PROGRESSION - Correction bug: la progression n'était pas mise à jour
+  // 🔄 MISE À JOUR PROGRESSION
+  // - Nouveau collectible: incrémenter la progression
+  // - Récupération d'un perdu: incrémenter la progression (recompter dans la collection)
+  // - Fusion (doublon): NE PAS incrémenter (le collectible est déjà compté)
   try {
-    const progress = await db.incrementProgress(guildId, player.id, collectible.theme_id);
-    console.log(`🃏 [JOKER] Progression mise à jour: ${progress.collected_count} collectibles`);
+    let progress = null;
+
+    if (isNew || wasRecovered) {
+      progress = await db.incrementProgress(guildId, player.id, collectible.theme_id);
+      console.log(`🃏 [JOKER] Progression mise à jour: ${progress.collected_count} collectibles (${isNew ? 'nouveau' : 'récupéré'})`);
+    } else if (wasDuplicate) {
+      // Pour les fusions, on récupère juste la progression actuelle sans incrémenter
+      progress = await db.queryOne(`
+        SELECT collected_count, is_completed FROM player_progress
+        WHERE guild_id = $1 AND player_id = $2 AND theme_id = $3
+      `, [guildId, player.id, collectible.theme_id]);
+      console.log(`🃏 [JOKER] Fusion - progression inchangée: ${progress?.collected_count || 0} collectibles`);
+    }
 
     // Récupérer le nombre total de collectibles requis pour ce thème
     const themeStats = await db.queryOne(`
@@ -1190,10 +1214,12 @@ async function handleJokerCollectibleSelect(interaction) {
     `, [guildId, collectible.theme_id]);
 
     const requiredItems = parseInt(themeStats?.total_items || 0);
-    console.log(`🃏 [JOKER] Vérification complétion: ${progress.collected_count}/${requiredItems}`);
+    const collectedCount = progress?.collected_count || 0;
+    const isCompleted = progress?.is_completed || false;
+    console.log(`🃏 [JOKER] Vérification complétion: ${collectedCount}/${requiredItems}`);
 
-    // Vérifier si collection complète
-    if (progress.collected_count >= requiredItems && !progress.is_completed) {
+    // Vérifier si collection complète (seulement pour nouveau ou récupéré, pas fusion)
+    if ((isNew || wasRecovered) && collectedCount >= requiredItems && !isCompleted) {
       console.log(`🎉 [JOKER] Collection COMPLÈTE pour ${interaction.user.tag} !`);
 
       // Marquer comme complété
@@ -1280,9 +1306,71 @@ async function handleJokerCollectibleSelect(interaction) {
   delete state.pendingJokerBonusId;
   saveProfileState(userId, state);
 
-  // Envoyer l'annonce publique pour l'UTILISATION du Joker (avec le collectible choisi)
+  // Envoyer les annonces publiques selon le type d'action
   try {
     const announcements = require('../utils/announcements');
+
+    // ========== GÉNÉRATION D'IMAGE AVEC FRAME ET MINT (même logique que mysteryBoxHandler) ==========
+    let generatedImageBuffer = null;
+
+    // Mapping niveau → type de frame
+    const levelToFrameRarity = {
+      1: null,      // Pas de frame
+      2: 'rare',
+      3: 'epic',
+      4: 'legendary'
+    };
+
+    try {
+      const currentLevel = result.newLevel || 1;
+      const oldLevel = result.oldLevel || 1;
+      const frameRarityForLevel = levelToFrameRarity[currentLevel];
+
+      if (isLevelUp && oldLevel !== currentLevel) {
+        // Level up: générer image de transition avant/après
+        const oldFrameRarity = levelToFrameRarity[oldLevel];
+        const newFrameRarity = levelToFrameRarity[currentLevel];
+
+        const [oldFrameUrl, newFrameUrl] = await Promise.all([
+          oldFrameRarity ? db.getCollectibleFrameUrl(guildId, collectible.theme_id, oldFrameRarity) : null,
+          newFrameRarity ? db.getCollectibleFrameUrl(guildId, collectible.theme_id, newFrameRarity) : null
+        ]);
+
+        generatedImageBuffer = await imageGenerator.generateLevelUpImage(
+          collectible.image_url,
+          {
+            oldFrameUrl,
+            newFrameUrl,
+            oldRarity: oldFrameRarity,
+            newRarity: newFrameRarity,
+            oldLevel,
+            newLevel: currentLevel,
+            mintNumber: result.mintNumber
+          }
+        );
+      } else {
+        // Nouveau collectible, fusion simple ou restauré : générer image avec frame/mint
+        const frameUrl = frameRarityForLevel
+          ? await db.getCollectibleFrameUrl(guildId, collectible.theme_id, frameRarityForLevel)
+          : null;
+
+        generatedImageBuffer = await imageGenerator.generateCollectibleWithFrame(
+          collectible.image_url,
+          frameUrl,
+          frameRarityForLevel,
+          {
+            level: currentLevel,
+            mintNumber: result.mintNumber,
+            useCache: true
+          }
+        );
+      }
+    } catch (imgError) {
+      console.error('⚠️ [JOKER IMAGE] Erreur génération image:', imgError.message);
+      // Continuer sans image générée
+    }
+
+    // Annonce de base: Joker utilisé
     await announcements.announceJokerUsed(
       interaction.client,
       guildId,
@@ -1291,8 +1379,51 @@ async function handleJokerCollectibleSelect(interaction) {
       collectible.rarity,
       jokerGifPath
     );
+
+    // Annonces spécifiques selon le résultat (avec image générée)
+    if (wasRecovered) {
+      // Collectible récupéré (était perdu à cause d'un piège)
+      await announcements.announceCollectibleRestored(
+        interaction.client,
+        guildId,
+        interaction.user.username,
+        collectible.name,
+        result.newLevel || 1,
+        result.currentXp || 0,
+        result.mintNumber,
+        generatedImageBuffer  // Image générée avec frame/étoiles/mint
+      );
+    } else if (wasDuplicate && isLevelUp) {
+      // Fusion avec level up !
+      const MAX_LEVEL = 4;
+      if (result.newLevel >= MAX_LEVEL) {
+        // Niveau MAX atteint
+        await announcements.announceCollectibleMaxLevel(
+          interaction.client,
+          guildId,
+          interaction.user.username,
+          collectible.name,
+          result.newLevel,
+          result.mintNumber,
+          generatedImageBuffer  // Image générée avec frame/étoiles/mint
+        );
+      } else {
+        // Level up normal
+        await announcements.announceCollectibleLevelUp(
+          interaction.client,
+          guildId,
+          interaction.user.username,
+          collectible.name,
+          result.oldLevel || 1,
+          result.newLevel || 2,
+          result.currentXp || 0,
+          result.xpToNextLevel || 0,
+          generatedImageBuffer  // Image générée avec frame/étoiles/mint
+        );
+      }
+    }
   } catch (announceError) {
-    console.error('⚠️ Erreur envoi annonce joker utilisé:', announceError);
+    console.error('⚠️ Erreur envoi annonces joker:', announceError);
   }
 
   return interaction.editReply({
@@ -1311,20 +1442,21 @@ async function handleJokerPagination(interaction, page) {
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
 
-  // Récupérer les collectibles manquants (re-fetch pour avoir les données à jour)
-  const missingCollectibles = await superBonusHandler.getMissingCollectibles(guildId, userId);
+  // Récupérer TOUS les collectibles avec leur état (pour le système de leveling)
+  const jokerData = await superBonusHandler.getCollectiblesForJoker(guildId, userId);
+  const selectableCollectibles = jokerData.collectibles.filter(c => c.canSelect);
 
-  if (missingCollectibles.length === 0) {
+  if (selectableCollectibles.length === 0) {
     return interaction.editReply({
-      content: '🎉 Tu possèdes déjà tous les collectibles !',
+      content: '🏆 **Collection parfaite !** Tous tes collectibles sont au niveau maximum !',
       embeds: [],
       components: []
     });
   }
 
   // Mettre à jour l'interface avec la nouvelle page
-  const embed = superBonusHandler.createJokerSelectionEmbed(missingCollectibles, interaction.user.username);
-  const components = superBonusHandler.createJokerSelectMenu(missingCollectibles, page);
+  const embed = superBonusHandler.createJokerSelectionEmbed(jokerData.collectibles, interaction.user.username, jokerData.stats);
+  const components = superBonusHandler.createJokerSelectMenu(jokerData.collectibles, page);
 
   // Ajouter le GIF personnalisé
   const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
@@ -1419,6 +1551,17 @@ async function handleFavoriteSelect(interaction, player, theme, state) {
   // Recharger la vue favoris
   const content = await showFavorites(interaction, player, theme, null);
   await interaction.editReply(content);
+
+  // 🏆 BADGE TRACKING - Favorites Set
+  try {
+    const badgeHandler = require('./badgeHandler');
+    const favorites = await db.getPlayerFavorites(interaction.guildId, player.id);
+    const favoritesCount = favorites.filter(f => f.collectible_id !== null).length;
+    await badgeHandler.onFavoritesSet(interaction.guildId, player.id, favoritesCount, interaction.client);
+    console.log(`🏆 [BADGES] Favorites badge tracking appelé pour player ${player.id} (count: ${favoritesCount})`);
+  } catch (error) {
+    console.error('🔴 [BADGES] Erreur tracking favorites:', error);
+  }
 }
 
 /**

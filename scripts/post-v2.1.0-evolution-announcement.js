@@ -10,9 +10,10 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
-// Configuration des canaux d'annonce (à remplir)
+// Configuration des canaux d'annonce
 const ANNOUNCEMENT_CHANNELS = [
-  // { guildId: 'ID_SERVEUR', channelId: 'ID_CANAL' },
+  { guildId: '1182395170273099806', channelId: '1339571870755717120' },
+  { guildId: '1248028543389143070', channelId: '1248176835490091110' },
 ];
 
 async function sendAnnouncement(channel) {

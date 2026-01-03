@@ -3646,7 +3646,53 @@ class DatabaseWrapper {
     const newBestStreak = Math.max(streak.best, newStreak);
     const newTotalClaims = streak.total + 1;
 
-    // Mettre à jour le claim_streak_by_theme JSONB
+    // Mettre à jour le claim_streak_by_theme JSONB ET le streak global
+    // Le streak global est utilisé pour les badges Engagement (persiste entre les thèmes)
+    // IMPORTANT: Calculer le streak global depuis daily_claim_logs pour plus de fiabilité
+
+    // 1. Récupérer les données actuelles du joueur
+    const playerData = await this.queryOne(`
+      SELECT best_claim_streak FROM players WHERE guild_id = $1 AND id = $2
+    `, [guildId, playerId]);
+
+    // 2. Calculer le streak global en comptant les jours consécutifs en arrière depuis hier
+    // On regarde tous les thèmes car le streak global persiste entre les thèmes
+    const globalStreakResult = await this.queryOne(`
+      WITH claim_dates AS (
+        SELECT DISTINCT claim_date::date as claim_day
+        FROM daily_claim_logs
+        WHERE guild_id = $1 AND player_id = $2
+        ORDER BY claim_day DESC
+      ),
+      numbered AS (
+        SELECT claim_day,
+               ROW_NUMBER() OVER (ORDER BY claim_day DESC) as rn,
+               ($3::date - claim_day)::int as days_ago
+        FROM claim_dates
+      ),
+      consecutive AS (
+        SELECT claim_day, rn, days_ago
+        FROM numbered
+        WHERE days_ago = rn  -- Jours consécutifs à partir d'hier
+      )
+      SELECT COUNT(*) as streak FROM consecutive
+    `, [guildId, playerId, yesterdayStr]);
+
+    // +1 pour inclure le claim d'aujourd'hui
+    let globalNewStreak = (parseInt(globalStreakResult?.streak) || 0) + 1;
+
+    // 3. Compter le total des claims
+    const totalClaimsResult = await this.queryOne(`
+      SELECT COUNT(DISTINCT claim_date) as total FROM daily_claim_logs
+      WHERE guild_id = $1 AND player_id = $2
+    `, [guildId, playerId]);
+    // +1 car le claim d'aujourd'hui n'est pas encore dans les logs
+    const globalTotalClaims = (parseInt(totalClaimsResult?.total) || 0) + 1;
+
+    const globalBestStreak = Math.max(playerData?.best_claim_streak || 0, globalNewStreak);
+
+    console.log(`📅 [DAILY] Global streak calculated: ${globalNewStreak} (best: ${globalBestStreak}, total: ${globalTotalClaims})`);
+
     await this.query(`
       UPDATE players SET
         claim_streak_by_theme = COALESCE(claim_streak_by_theme, '{}')::jsonb ||
@@ -3656,9 +3702,13 @@ class DatabaseWrapper {
             'last_claim', $6::text,
             'total', $7::int
           )),
+        current_claim_streak = $8,
+        best_claim_streak = $9,
+        last_daily_claim = $6::date,
+        total_daily_claims = $10,
         updated_at = NOW()
       WHERE guild_id = $1 AND id = $2
-    `, [guildId, playerId, themeId.toString(), newStreak, newBestStreak, today, newTotalClaims]);
+    `, [guildId, playerId, themeId.toString(), newStreak, newBestStreak, today, newTotalClaims, globalNewStreak, globalBestStreak, globalTotalClaims]);
 
     // Logger le claim avec theme_id
     await this.query(`
@@ -3678,7 +3728,7 @@ class DatabaseWrapper {
       reward.detail || null
     ]);
 
-    console.log(`✅ [DAILY] Claim recorded: Theme ${themeId}, Day ${claimDay}, Streak ${newStreak}, Reward: ${reward.type}`);
+    console.log(`✅ [DAILY] Claim recorded: Theme ${themeId}, Day ${claimDay}, Streak ${newStreak} (global: ${globalNewStreak}), Reward: ${reward.type}`);
 
     return {
       success: true,
@@ -3687,7 +3737,10 @@ class DatabaseWrapper {
       streak: newStreak,
       bestStreak: newBestStreak,
       totalClaims: newTotalClaims,
-      reward
+      reward,
+      // Streak global pour les badges Engagement
+      globalStreak: globalNewStreak,
+      globalBestStreak: globalBestStreak
     };
   }
 
@@ -5358,6 +5411,225 @@ class DatabaseWrapper {
       `DELETE FROM player_equipped_frame WHERE discord_id = $1 AND guild_id = $2`,
       [discordId, guildValue]
     );
+  }
+
+  // ==========================================
+  // FAIRNESS CONFIG (Système d'équité)
+  // ==========================================
+
+  /**
+   * Récupère la configuration d'équité pour un serveur
+   */
+  async getFairnessConfig(guildId) {
+    return this.queryOne(
+      `SELECT * FROM fairness_config WHERE guild_id = $1`,
+      [guildId]
+    );
+  }
+
+  /**
+   * Crée ou met à jour la configuration d'équité
+   */
+  async upsertFairnessConfig(guildId, config = {}) {
+    const { enabled, show_countdown, exempt_roles, steps } = config;
+
+    // Convertir exempt_roles en format PostgreSQL array si fourni
+    const exemptRolesParam = exempt_roles ? exempt_roles : null;
+    const stepsParam = steps ? JSON.stringify(steps) : null;
+
+    return this.queryOne(
+      `INSERT INTO fairness_config (guild_id, enabled, show_countdown, exempt_roles, steps)
+       VALUES (
+         $1,
+         COALESCE($2, false),
+         COALESCE($3, true),
+         COALESCE($4::text[], '{}'::text[]),
+         COALESCE($5::jsonb, '[{"min": 0, "max": 25, "delay": 0}, {"min": 26, "max": 50, "delay": 5}, {"min": 51, "max": 75, "delay": 10}, {"min": 76, "max": 99, "delay": 12}, {"min": 100, "max": 100, "delay": 15}]'::jsonb)
+       )
+       ON CONFLICT (guild_id) DO UPDATE SET
+         enabled = COALESCE($2, fairness_config.enabled),
+         show_countdown = COALESCE($3, fairness_config.show_countdown),
+         exempt_roles = COALESCE($4::text[], fairness_config.exempt_roles),
+         steps = COALESCE($5::jsonb, fairness_config.steps),
+         updated_at = NOW()
+       RETURNING *`,
+      [guildId, enabled, show_countdown, exemptRolesParam, stepsParam]
+    );
+  }
+
+  /**
+   * Active ou désactive le système d'équité
+   */
+  async toggleFairnessEnabled(guildId) {
+    // S'assurer que la config existe
+    await this.upsertFairnessConfig(guildId, {});
+
+    return this.queryOne(
+      `UPDATE fairness_config
+       SET enabled = NOT enabled, updated_at = NOW()
+       WHERE guild_id = $1
+       RETURNING *`,
+      [guildId]
+    );
+  }
+
+  /**
+   * Active ou désactive l'affichage du compte à rebours
+   */
+  async toggleFairnessCountdown(guildId) {
+    // S'assurer que la config existe
+    await this.upsertFairnessConfig(guildId, {});
+
+    return this.queryOne(
+      `UPDATE fairness_config
+       SET show_countdown = NOT show_countdown, updated_at = NOW()
+       WHERE guild_id = $1
+       RETURNING *`,
+      [guildId]
+    );
+  }
+
+  /**
+   * Met à jour les paliers d'équité
+   */
+  async updateFairnessSteps(guildId, steps) {
+    // S'assurer que la config existe
+    await this.upsertFairnessConfig(guildId, {});
+
+    return this.queryOne(
+      `UPDATE fairness_config
+       SET steps = $2::jsonb, updated_at = NOW()
+       WHERE guild_id = $1
+       RETURNING *`,
+      [guildId, JSON.stringify(steps)]
+    );
+  }
+
+  /**
+   * Met à jour les rôles exemptés
+   */
+  async updateFairnessExemptRoles(guildId, roleIds) {
+    // S'assurer que la config existe
+    await this.upsertFairnessConfig(guildId, {});
+
+    return this.queryOne(
+      `UPDATE fairness_config
+       SET exempt_roles = $2::text[], updated_at = NOW()
+       WHERE guild_id = $1
+       RETURNING *`,
+      [guildId, roleIds || []]
+    );
+  }
+
+  /**
+   * Calcule le délai pour un joueur selon sa progression
+   * @returns {number} Délai en secondes
+   */
+  async calculateFairnessDelay(guildId, progressionPercent, memberRoles = []) {
+    const config = await this.getFairnessConfig(guildId);
+
+    // Pas de config ou système désactivé
+    if (!config || !config.enabled) {
+      return 0;
+    }
+
+    // Vérifier si le membre a un rôle exempté
+    if (config.exempt_roles && config.exempt_roles.length > 0) {
+      const hasExemptRole = memberRoles.some(roleId => config.exempt_roles.includes(roleId));
+      if (hasExemptRole) {
+        return 0;
+      }
+    }
+
+    // Trouver le palier correspondant
+    const steps = config.steps || [];
+    for (const step of steps) {
+      if (progressionPercent >= step.min && progressionPercent <= step.max) {
+        return step.delay;
+      }
+    }
+
+    return 0;
+  }
+
+  /**
+   * Calcule le pourcentage de progression d'un joueur pour un thème
+   * @returns {number} Pourcentage de 0 à 100
+   */
+  async getPlayerProgressionPercent(guildId, playerId, themeId) {
+    guildId = this._getGuildId(guildId);
+
+    // Compter le nombre total de collectibles du thème
+    const totalResult = await this.queryOne(
+      `SELECT COUNT(*) as total FROM collectibles WHERE guild_id = $1 AND theme_id = $2`,
+      [guildId, themeId]
+    );
+    const totalCollectibles = parseInt(totalResult?.total || 0);
+
+    if (totalCollectibles === 0) {
+      return 0;
+    }
+
+    // Compter les collectibles possédés par le joueur (non perdus)
+    const collectedResult = await this.queryOne(
+      `SELECT COUNT(DISTINCT collectible_id) as collected
+       FROM collections
+       WHERE guild_id = $1 AND player_id = $2 AND lost_at IS NULL
+         AND collectible_id IN (SELECT id FROM collectibles WHERE guild_id = $1 AND theme_id = $3)`,
+      [guildId, playerId, themeId]
+    );
+    const collected = parseInt(collectedResult?.collected || 0);
+
+    return Math.round((collected / totalCollectibles) * 100);
+  }
+
+  /**
+   * Vérifie l'équité pour un joueur et retourne le résultat complet
+   * @returns {Object} { delay, showCountdown, canOpen, openAt }
+   */
+  async checkFairnessForPlayer(guildId, playerId, themeId, memberRoles = []) {
+    const config = await this.getFairnessConfig(guildId);
+
+    // Pas de config ou système désactivé
+    if (!config || !config.enabled) {
+      return { delay: 0, showCountdown: false, canOpen: true, openAt: null };
+    }
+
+    // Vérifier si le membre a un rôle exempté
+    if (config.exempt_roles && config.exempt_roles.length > 0) {
+      const hasExemptRole = memberRoles.some(roleId => config.exempt_roles.includes(roleId));
+      if (hasExemptRole) {
+        return { delay: 0, showCountdown: false, canOpen: true, openAt: null };
+      }
+    }
+
+    // Calculer la progression
+    const progressionPercent = await this.getPlayerProgressionPercent(guildId, playerId, themeId);
+
+    // Trouver le palier correspondant
+    const steps = config.steps || [];
+    let delay = 0;
+    for (const step of steps) {
+      if (progressionPercent >= step.min && progressionPercent <= step.max) {
+        delay = step.delay;
+        break;
+      }
+    }
+
+    if (delay === 0) {
+      return { delay: 0, showCountdown: config.show_countdown, canOpen: true, openAt: null };
+    }
+
+    // Calculer le timestamp d'ouverture
+    const openAt = Math.floor(Date.now() / 1000) + delay;
+
+    return {
+      delay,
+      showCountdown: config.show_countdown,
+      canOpen: false,
+      openAt,
+      progressionPercent
+    };
   }
 }
 
