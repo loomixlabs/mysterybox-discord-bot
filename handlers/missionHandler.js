@@ -325,6 +325,21 @@ class MissionHandler {
         await this.validateEmojiPuzzle(interaction, mission, player, progress);
         break;
 
+      case 'unscramble':
+        console.log('✅ Matched unscramble case');
+        await this.validateUnscramble(interaction, mission, player, progress);
+        break;
+
+      case 'hangman':
+        console.log('✅ Matched hangman case');
+        await this.validateHangman(interaction, mission, player, progress);
+        break;
+
+      case 'wordle':
+        console.log('✅ Matched wordle case');
+        await this.validateWordle(interaction, mission, player, progress);
+        break;
+
       default:
         // Type inconnu, demander validation manuelle
         console.log('⚠️ Went to default case - calling handleManualValidation');
@@ -1437,6 +1452,1939 @@ class MissionHandler {
         await interaction.channel.setArchived(true);
       } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
     }, 5000);
+  }
+
+  // ============================================================================
+  // UNSCRAMBLE - Remettre les lettres dans l'ordre
+  // ============================================================================
+
+  /**
+   * Mélange les lettres d'un mot de façon aléatoire
+   * S'assure que le résultat est différent du mot original
+   * @param {string} word - Mot à mélanger
+   * @returns {string} - Mot mélangé (en majuscules)
+   */
+  shuffleWord(word) {
+    const letters = word.toUpperCase().split('');
+    const original = letters.join('');
+
+    // Mélanger jusqu'à obtenir un résultat différent (max 50 tentatives)
+    let shuffled = '';
+    let attempts = 0;
+
+    do {
+      // Fisher-Yates shuffle
+      for (let i = letters.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [letters[i], letters[j]] = [letters[j], letters[i]];
+      }
+      shuffled = letters.join('');
+      attempts++;
+    } while (shuffled === original && attempts < 50);
+
+    return shuffled;
+  }
+
+  /**
+   * Génère l'affichage visuel des lettres mélangées (style ASCII box)
+   * @param {string} shuffledWord - Mot mélangé
+   * @returns {string} - Affichage formaté
+   */
+  generateUnscrambleDisplay(shuffledWord) {
+    const letters = shuffledWord.split('');
+    const letterWidth = 3; // Largeur par lettre
+    const totalWidth = letters.length * (letterWidth + 1) + 1;
+
+    // Ligne du haut
+    let display = '```\n';
+    display += '╔' + letters.map(() => '═══').join('╦') + '╗\n';
+
+    // Lettres
+    display += '║' + letters.map(l => ` ${l} `).join('║') + '║\n';
+
+    // Ligne du bas
+    display += '╚' + letters.map(() => '═══').join('╩') + '╝\n';
+    display += '```';
+
+    return display;
+  }
+
+  /**
+   * Compare la réponse utilisateur avec la réponse attendue (strict, sans tolérance)
+   * @param {string} userAnswer - Réponse du joueur
+   * @param {string} correctAnswer - Réponse correcte
+   * @returns {boolean} - true si correct
+   */
+  validateUnscrambleAnswer(userAnswer, correctAnswer) {
+    // Normaliser : minuscules, supprimer accents, trim
+    const normalize = (str) => {
+      return str
+        .toLowerCase()
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, ''); // Supprimer accents
+    };
+
+    return normalize(userAnswer) === normalize(correctAnswer);
+  }
+
+  /**
+   * Validation UNSCRAMBLE - Remettre les lettres dans l'ordre
+   * Utilise quiz_questions : question_text = mot original, le code mélange à l'affichage
+   * Configuration : max_attempts (essais), timeout (temps total)
+   */
+  async validateUnscramble(interaction, mission, player, progress) {
+    const guildId = interaction.guildId;
+
+    // Récupérer un mot pour cette mission
+    const wordData = await db.getRandomQuizQuestionByMission(
+      guildId,
+      mission.id,
+      mission.theme_id
+    );
+
+    if (!wordData) {
+      console.log(`❌ [Unscramble] Aucun mot configuré pour mission ${mission.id}`);
+      await interaction.followUp({
+        content: '❌ **Erreur:** Aucun mot n\'est configuré pour cette mission.\nContacte un administrateur.'
+      });
+      return;
+    }
+
+    const originalWord = wordData.correct_answer || wordData.question_text;
+    const hint = wordData.hint;
+    const difficulty = wordData.difficulty || 'medium';
+
+    // Mélanger les lettres
+    const shuffledWord = this.shuffleWord(originalWord);
+
+    // Configuration
+    const timeoutSeconds = mission.timeout || 60;
+    const maxAttempts = mission.max_attempts || 3;
+
+    // Labels de difficulté
+    const difficultyLabels = {
+      'easy': '🟢 Facile',
+      'medium': '🟡 Moyen',
+      'hard': '🔴 Difficile'
+    };
+    const difficultyLabel = difficultyLabels[difficulty] || '🟡 Moyen';
+
+    console.log(`🔤 [Unscramble] Démarrage: "${originalWord}" → "${shuffledWord}" (${maxAttempts} essais, ${timeoutSeconds}s)`);
+
+    // Initialiser le game_state
+    await db.query(
+      `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify({
+        originalWord,
+        shuffledWord,
+        attempts: 0,
+        maxAttempts
+      }), progress.id]
+    );
+
+    // Embed d'introduction avec les règles
+    const rulesEmbed = new EmbedBuilder()
+      .setTitle('🔤 UNSCRAMBLE - Lettres Mélangées')
+      .setDescription(
+        `**Objectif :** Remets les lettres dans le bon ordre pour former le mot !\n\n` +
+        `Les lettres sont mélangées aléatoirement. Tu dois retrouver le mot original.\n\n` +
+        `**Comment jouer :**\n` +
+        `📝 Tape ta réponse directement dans ce thread\n` +
+        `🔄 Tu peux réessayer si tu te trompes\n` +
+        `⚠️ Les accents sont ignorés (é = e)`
+      )
+      .setColor('#3498DB')
+      .addFields(
+        { name: '⏱️ Temps', value: `${timeoutSeconds} secondes`, inline: true },
+        { name: '🎯 Essais', value: `${maxAttempts} maximum`, inline: true },
+        { name: '📊 Difficulté', value: difficultyLabel, inline: true }
+      )
+      .setFooter({ text: 'Le mot apparaît dans 3 secondes...' });
+
+    await interaction.followUp({ embeds: [rulesEmbed] });
+    await this.sleep(3000);
+
+    // Générer l'affichage des lettres mélangées
+    const letterDisplay = this.generateUnscrambleDisplay(shuffledWord);
+
+    // Embed du jeu
+    const gameEmbed = new EmbedBuilder()
+      .setTitle('🔤 Remets les lettres dans l\'ordre !')
+      .setDescription(letterDisplay)
+      .setColor('#9B59B6')
+      .addFields(
+        { name: '📏 Nombre de lettres', value: `${originalWord.length} lettres`, inline: true },
+        { name: '🎯 Essais restants', value: `${maxAttempts}/${maxAttempts}`, inline: true }
+      );
+
+    if (hint) {
+      gameEmbed.addFields({ name: '💡 Indice', value: hint, inline: false });
+    }
+
+    gameEmbed.setFooter({ text: '📝 Tape ta réponse dans le chat !' });
+
+    const gameMessage = await interaction.channel.send({ embeds: [gameEmbed] });
+
+    // Variables de tracking
+    let attemptCount = 0;
+    let missionCompleted = false;
+
+    // Créer le collecteur de messages
+    const filter = m => m.author.id === interaction.user.id;
+    const collector = interaction.channel.createMessageCollector({
+      filter,
+      time: timeoutSeconds * 1000
+    });
+
+    collector.on('collect', async msg => {
+      if (missionCompleted) return;
+
+      attemptCount++;
+      const userAnswer = msg.content.trim();
+
+      console.log(`🔤 [Unscramble] Essai #${attemptCount}: "${userAnswer}" (attendu: "${originalWord}")`);
+
+      // Validation stricte (pas de tolérance Levenshtein)
+      const isCorrect = this.validateUnscrambleAnswer(userAnswer, originalWord);
+
+      if (isCorrect) {
+        // ✅ Bonne réponse !
+        await msg.react('🎉');
+        missionCompleted = true;
+        collector.stop('success');
+
+        console.log(`✅ [Unscramble] Succès en ${attemptCount} essai(s) !`);
+
+        // Mettre à jour game_state
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            originalWord,
+            shuffledWord,
+            attempts: attemptCount,
+            maxAttempts,
+            success: true
+          }), progress.id]
+        );
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('🎉 Bravo !')
+          .setDescription(
+            `Tu as trouvé le mot en **${attemptCount} essai${attemptCount > 1 ? 's' : ''}** !\n\n` +
+            `${shuffledWord} → **${originalWord.toUpperCase()}**`
+          )
+          .setColor('#2ECC71');
+
+        await interaction.channel.send({ embeds: [successEmbed] });
+        await this.completeMission(interaction, mission, player, progress, msg.url);
+
+      } else {
+        // ❌ Mauvaise réponse
+        await msg.react('❌');
+
+        if (attemptCount >= maxAttempts) {
+          // Tous les essais épuisés
+          collector.stop('max_attempts');
+
+          await db.query(
+            `UPDATE mission_progress SET game_state = $1, status = 'failed', updated_at = NOW() WHERE id = $2`,
+            [JSON.stringify({
+              originalWord,
+              shuffledWord,
+              attempts: attemptCount,
+              maxAttempts,
+              success: false,
+              reason: 'max_attempts'
+            }), progress.id]
+          );
+
+          const failEmbed = new EmbedBuilder()
+            .setTitle('❌ Mission Échouée')
+            .setDescription(
+              `Tu as épuisé tes **${maxAttempts} essais**.\n\n` +
+              `La bonne réponse était : **${originalWord.toUpperCase()}**\n\n` +
+              `${shuffledWord} → ${originalWord.toUpperCase()}`
+            )
+            .setColor('#E74C3C')
+            .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+
+          await interaction.channel.send({ embeds: [failEmbed] });
+
+          await announcements.announceMissionFailed(
+            interaction.client,
+            guildId,
+            interaction.user.username,
+            mission.name,
+            `${maxAttempts} essais épuisés`
+          );
+
+          // Fermer le thread
+          setTimeout(async () => {
+            try {
+              await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+              await interaction.channel.setArchived(true);
+            } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+          }, 5000);
+
+        } else {
+          // Il reste des essais
+          const remainingAttempts = maxAttempts - attemptCount;
+
+          await interaction.channel.send(
+            `❌ **Ce n'est pas ça !**\n` +
+            `🎯 Essais restants : **${remainingAttempts}/${maxAttempts}**\n\n` +
+            `💡 Réessaye !`
+          );
+        }
+      }
+    });
+
+    collector.on('end', async (collected, reason) => {
+      if (reason === 'success' || reason === 'max_attempts') {
+        return; // Déjà géré
+      }
+
+      // Timeout
+      console.log(`⏰ [Unscramble] Timeout - ${attemptCount} essais effectués`);
+
+      await db.query(
+        `UPDATE mission_progress SET status = 'failed', game_state = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify({
+          originalWord,
+          shuffledWord,
+          attempts: attemptCount,
+          maxAttempts,
+          success: false,
+          reason: 'timeout'
+        }), progress.id]
+      );
+
+      const timeoutEmbed = new EmbedBuilder()
+        .setTitle('⏰ Temps écoulé !')
+        .setDescription(
+          `Tu n'as pas trouvé le mot à temps.\n\n` +
+          `La bonne réponse était : **${originalWord.toUpperCase()}**\n\n` +
+          `${shuffledWord} → ${originalWord.toUpperCase()}`
+        )
+        .setColor('#E74C3C')
+        .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+
+      await interaction.channel.send({ embeds: [timeoutEmbed] });
+
+      await announcements.announceMissionFailed(
+        interaction.client,
+        guildId,
+        interaction.user.username,
+        mission.name,
+        'Temps écoulé'
+      );
+
+      setTimeout(async () => {
+        try {
+          await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+          await interaction.channel.setArchived(true);
+        } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+      }, 5000);
+    });
+  }
+
+  // ============================================
+  // VALIDATION HANGMAN (PENDU) - VERSION INTERACTIVE
+  // ============================================
+
+  /**
+   * Valider une mission de type Hangman (Pendu)
+   * Version impressionnante avec:
+   * - Clavier AZERTY interactif (boutons Discord)
+   * - Art emoji avec expressions faciales
+   * - Barre de vie avec cœurs
+   * - Étoiles selon performance
+   * - Double input: boutons ET texte
+   */
+  async validateHangman(interaction, mission, player, progress) {
+    const guildId = interaction.guildId;
+    const timeout = (mission.timeout || 120) * 1000; // 2 minutes par défaut
+    const maxErrors = 6; // FIXE: 6 erreurs pour cohérence visuelle (6 parties du corps)
+
+    // Récupérer un mot aléatoire
+    const theme = await db.getActiveTheme(guildId);
+    const words = await db.queryAll(
+      `SELECT * FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3`,
+      [guildId, mission.id, theme.id]
+    );
+
+    if (words.length === 0) {
+      return interaction.channel.send('❌ Aucun mot configuré pour cette mission.');
+    }
+
+    const wordData = words[Math.floor(Math.random() * words.length)];
+    const secretWord = wordData.correct_answer.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const hint = wordData.hint;
+
+    // Vérifier si on doit révéler la première lettre
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try {
+        validationData = JSON.parse(validationData);
+      } catch (e) {
+        validationData = {};
+      }
+    }
+    validationData = validationData || {};
+    const showFirstLetter = validationData.show_first_letter || false;
+
+    // État du jeu
+    let guessedLetters = new Set();
+    let wrongLetters = new Set();
+    let errorCount = 0;
+    let gameEnded = false;
+    let gameMessage = null;
+
+    // Si l'option est activée, révéler la première lettre du mot
+    if (showFirstLetter) {
+      // Trouver la première lettre alphabétique du mot
+      for (const char of secretWord) {
+        if (/[A-Z]/.test(char)) {
+          guessedLetters.add(char);
+          console.log(`🔤 [Hangman] Première lettre révélée: ${char}`);
+          break;
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════
+    // 🎨 ART EMOJI AVEC EXPRESSIONS FACIALES
+    // ═══════════════════════════════════════════
+    const drawHangmanEmoji = (errors) => {
+      // Expressions faciales qui évoluent avec les erreurs
+      const faces = ['😊', '😐', '😰', '😨', '😱', '😵', '💀'];
+      const face = faces[Math.min(errors, 6)];
+
+      const stages = [
+        // Stage 0: Potence vide
+        `\`\`\`
+    ╔═══════╗
+    ║       ┃
+    ║       ┃
+    ║       ┃
+    ║       ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``,
+        // Stage 1: Tête
+        `\`\`\`
+    ╔═══════╗
+    ║   ${face}   ┃
+    ║       ┃
+    ║       ┃
+    ║       ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``,
+        // Stage 2: Corps
+        `\`\`\`
+    ╔═══════╗
+    ║   ${face}   ┃
+    ║   │   ┃
+    ║   │   ┃
+    ║       ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``,
+        // Stage 3: Bras gauche
+        `\`\`\`
+    ╔═══════╗
+    ║   ${face}   ┃
+    ║  /│   ┃
+    ║   │   ┃
+    ║       ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``,
+        // Stage 4: Bras droit
+        `\`\`\`
+    ╔═══════╗
+    ║   ${face}   ┃
+    ║  /│\\  ┃
+    ║   │   ┃
+    ║       ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``,
+        // Stage 5: Jambe gauche
+        `\`\`\`
+    ╔═══════╗
+    ║   ${face}   ┃
+    ║  /│\\  ┃
+    ║   │   ┃
+    ║  /    ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``,
+        // Stage 6: Pendu complet
+        `\`\`\`
+    ╔═══════╗
+    ║   💀   ┃
+    ║  /│\\  ┃
+    ║   │   ┃
+    ║  / \\  ┃
+    ║       ┃
+════╩═══════╩════
+\`\`\``
+      ];
+      return stages[Math.min(errors, 6)];
+    };
+
+    // ═══════════════════════════════════════════
+    // ❤️ BARRE DE VIE AVEC CŒURS
+    // ═══════════════════════════════════════════
+    const getHealthBar = () => {
+      const hearts = maxErrors - errorCount;
+      const deadHearts = errorCount;
+      return '❤️'.repeat(hearts) + '🖤'.repeat(deadHearts);
+    };
+
+    // ═══════════════════════════════════════════
+    // ⭐ SYSTÈME D'ÉTOILES (VICTOIRE)
+    // ═══════════════════════════════════════════
+    const getStarRating = () => {
+      if (errorCount === 0) return '⭐⭐⭐ PARFAIT !';
+      if (errorCount <= 2) return '⭐⭐ Excellent !';
+      if (errorCount <= 4) return '⭐ Bien joué !';
+      return 'De justesse !';
+    };
+
+    // ═══════════════════════════════════════════
+    // 📝 MOT MASQUÉ STYLISÉ
+    // ═══════════════════════════════════════════
+    const getMaskedWord = () => {
+      return secretWord.split('').map(char => {
+        if (char === ' ') return '   '; // Espace entre mots
+        if (!/[A-Z]/.test(char)) return char; // Garder ponctuation
+        if (guessedLetters.has(char)) {
+          return `**${char}**`; // Lettre trouvée en gras
+        }
+        return '▢'; // Case vide stylisée
+      }).join(' ');
+    };
+
+    // ═══════════════════════════════════════════
+    // ⌨️ CLAVIER AZERTY INTERACTIF
+    // ═══════════════════════════════════════════
+    const createKeyboard = () => {
+      // Clavier alphabétique en 5 rangées (max 5 boutons par rangée Discord)
+      // 26 lettres = 5 rangées de 5 + 1 de 1
+      const rows = [
+        ['A', 'B', 'C', 'D', 'E'],
+        ['F', 'G', 'H', 'I', 'J'],
+        ['K', 'L', 'M', 'N', 'O'],
+        ['P', 'Q', 'R', 'S', 'T'],
+        ['U', 'V', 'W', 'X', 'Y']
+      ];
+      // Note: Z sera accessible uniquement par texte (rare dans les mots français)
+
+      const components = rows.map((row, rowIndex) => {
+        const actionRow = new ActionRowBuilder();
+        row.forEach(letter => {
+          const isCorrect = guessedLetters.has(letter);
+          const isWrong = wrongLetters.has(letter);
+          const isUsed = isCorrect || isWrong;
+
+          let style = ButtonStyle.Secondary; // Gris par défaut
+          let emoji = null;
+
+          if (isCorrect) {
+            style = ButtonStyle.Success; // Vert
+            emoji = '✓';
+          } else if (isWrong) {
+            style = ButtonStyle.Danger; // Rouge
+            emoji = '✗';
+          }
+
+          const button = new ButtonBuilder()
+            .setCustomId(`hangman_letter_${letter}_${progress.id}`)
+            .setLabel(letter)
+            .setStyle(style)
+            .setDisabled(isUsed || gameEnded);
+
+          actionRow.addComponents(button);
+        });
+        return actionRow;
+      });
+
+      return components;
+    };
+
+    // ═══════════════════════════════════════════
+    // 🎮 EMBED DU JEU
+    // ═══════════════════════════════════════════
+    const createGameEmbed = (statusMessage = null) => {
+      let color = '#3498DB'; // Bleu par défaut
+      if (errorCount >= 5) color = '#E74C3C'; // Rouge critique
+      else if (errorCount >= 3) color = '#F39C12'; // Orange attention
+      else if (errorCount >= 1) color = '#F1C40F'; // Jaune léger
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎮 LE PENDU')
+        .setColor(color)
+        .setDescription(
+          drawHangmanEmoji(errorCount) + '\n\n' +
+          `**${getHealthBar()}**\n\n` +
+          `📝 **Mot à deviner:**\n` +
+          `┌─────────────────────────────┐\n` +
+          `│  ${getMaskedWord()}  │\n` +
+          `└─────────────────────────────┘\n\n` +
+          (statusMessage ? `${statusMessage}\n\n` : '') +
+          (wrongLetters.size > 0 ? `❌ **Erreurs:** ${[...wrongLetters].join(' • ')}\n` : '')
+        );
+
+      if (hint) {
+        embed.addFields({ name: '💡 Indice', value: hint, inline: false });
+      }
+
+      embed.setFooter({
+        text: `⏱️ ${Math.round(timeout/1000)}s • 📱 Clique ou tape une lettre (Z au clavier) • 📖 Tape le mot entier pour deviner`
+      });
+
+      return embed;
+    };
+
+    // ═══════════════════════════════════════════
+    // 🎊 EMBEDS DE FIN
+    // ═══════════════════════════════════════════
+    const createVictoryEmbed = () => {
+      return new EmbedBuilder()
+        .setTitle('🎉 VICTOIRE !')
+        .setColor('#2ECC71')
+        .setDescription(
+          drawHangmanEmoji(errorCount) + '\n\n' +
+          `${getStarRating()}\n\n` +
+          `📝 **Le mot était:**\n` +
+          `╔═══════════════════════════════╗\n` +
+          `║  ✨ **${secretWord}** ✨  ║\n` +
+          `╚═══════════════════════════════╝\n\n` +
+          `❤️ **Vies restantes:** ${'❤️'.repeat(maxErrors - errorCount)}\n` +
+          `⚔️ **Erreurs:** ${errorCount}/${maxErrors}`
+        )
+        .setThumbnail('https://em-content.zobj.net/source/apple/354/party-popper_1f389.png');
+    };
+
+    const createDefeatEmbed = () => {
+      return new EmbedBuilder()
+        .setTitle('☠️ PENDU !')
+        .setColor('#E74C3C')
+        .setDescription(
+          drawHangmanEmoji(6) + '\n\n' +
+          `💔 **Le mot était:**\n` +
+          `╔═══════════════════════════════╗\n` +
+          `║  📖 **${secretWord}**  ║\n` +
+          `╚═══════════════════════════════╝\n\n` +
+          `Tu pourras retenter ta chance sur une prochaine mission !`
+        )
+        .setFooter({ text: 'Le thread se ferme dans 5 secondes...' })
+        .setThumbnail('https://em-content.zobj.net/source/apple/354/skull_1f480.png');
+    };
+
+    const createTimeoutEmbed = () => {
+      return new EmbedBuilder()
+        .setTitle('⏰ TEMPS ÉCOULÉ !')
+        .setColor('#9B59B6')
+        .setDescription(
+          drawHangmanEmoji(errorCount) + '\n\n' +
+          `📖 **Le mot était:** **${secretWord}**\n\n` +
+          `Tu avais trouvé ${guessedLetters.size} lettre(s) correcte(s).`
+        )
+        .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+    };
+
+    // ═══════════════════════════════════════════
+    // 🔄 MISE À JOUR DU JEU
+    // ═══════════════════════════════════════════
+    const updateGame = async (statusMessage = null) => {
+      if (!gameMessage || gameEnded) return;
+      try {
+        await gameMessage.edit({
+          embeds: [createGameEmbed(statusMessage)],
+          components: createKeyboard()
+        });
+      } catch (e) {
+        console.warn('⚠️ [Hangman] Impossible de mettre à jour le message:', e.message);
+      }
+    };
+
+    // Vérifier si le mot est complet
+    const checkWin = () => {
+      return secretWord.split('').every(char => {
+        if (!/[A-Z]/.test(char)) return true;
+        return guessedLetters.has(char);
+      });
+    };
+
+    // ═══════════════════════════════════════════
+    // 🎬 DÉMARRAGE DU JEU
+    // ═══════════════════════════════════════════
+    console.log(`🎮 [Hangman] Démarrage: "${secretWord}" (6 erreurs max, ${timeout/1000}s)`);
+
+    // Envoyer le message de jeu initial
+    gameMessage = await interaction.channel.send({
+      embeds: [createGameEmbed('🎮 **Clique sur une lettre ou tape-la !**')],
+      components: createKeyboard()
+    });
+
+    // ═══════════════════════════════════════════
+    // 🎯 COLLECTEUR DE BOUTONS
+    // ═══════════════════════════════════════════
+    const buttonFilter = (i) => {
+      return i.customId.startsWith('hangman_letter_') &&
+             i.customId.endsWith(`_${progress.id}`) &&
+             i.user.id === interaction.user.id;
+    };
+
+    const buttonCollector = gameMessage.createMessageComponentCollector({
+      filter: buttonFilter,
+      time: timeout
+    });
+
+    // ═══════════════════════════════════════════
+    // 📝 COLLECTEUR DE MESSAGES (TEXTE)
+    // ═══════════════════════════════════════════
+    const messageFilter = m => m.author.id === interaction.user.id;
+    const messageCollector = interaction.channel.createMessageCollector({
+      filter: messageFilter,
+      time: timeout
+    });
+
+    // ═══════════════════════════════════════════
+    // 🔤 TRAITEMENT D'UNE LETTRE
+    // ═══════════════════════════════════════════
+    const processLetter = async (letter, source = 'button') => {
+      if (gameEnded) return;
+
+      // Lettre déjà proposée ?
+      if (guessedLetters.has(letter) || wrongLetters.has(letter)) {
+        await updateGame(`⚠️ Lettre **${letter}** déjà utilisée !`);
+        return;
+      }
+
+      // Lettre correcte ?
+      if (secretWord.includes(letter)) {
+        guessedLetters.add(letter);
+        console.log(`🎮 [Hangman] ✓ Lettre correcte: ${letter} (${source})`);
+
+        if (checkWin()) {
+          gameEnded = true;
+          buttonCollector.stop('success');
+          messageCollector.stop('success');
+          return;
+        }
+
+        await updateGame(`✅ Bonne lettre : **${letter}** !`);
+      } else {
+        wrongLetters.add(letter);
+        errorCount++;
+        console.log(`🎮 [Hangman] ✗ Lettre incorrecte: ${letter} (${source}) - Erreurs: ${errorCount}/6`);
+
+        if (errorCount >= maxErrors) {
+          gameEnded = true;
+          buttonCollector.stop('hanged');
+          messageCollector.stop('hanged');
+          return;
+        }
+
+        await updateGame(`❌ Mauvaise lettre : **${letter}** !`);
+      }
+    };
+
+    // ═══════════════════════════════════════════
+    // 📖 TRAITEMENT DU MOT ENTIER
+    // ═══════════════════════════════════════════
+    const processFullWord = async (attempt) => {
+      if (gameEnded) return;
+
+      if (attempt === secretWord) {
+        // Victoire !
+        guessedLetters = new Set(secretWord.split('').filter(c => /[A-Z]/.test(c)));
+        gameEnded = true;
+        buttonCollector.stop('success');
+        messageCollector.stop('success');
+      } else {
+        // Pénalité : +2 erreurs
+        errorCount = Math.min(errorCount + 2, maxErrors);
+        console.log(`🎮 [Hangman] ✗ Mot incorrect: "${attempt}" (pénalité +2, erreurs: ${errorCount}/6)`);
+
+        if (errorCount >= maxErrors) {
+          gameEnded = true;
+          buttonCollector.stop('hanged');
+          messageCollector.stop('hanged');
+          return;
+        }
+
+        await updateGame(`❌ **"${attempt}"** incorrect ! (+2 erreurs)`);
+      }
+    };
+
+    // ═══════════════════════════════════════════
+    // 🖱️ HANDLER BOUTONS
+    // ═══════════════════════════════════════════
+    buttonCollector.on('collect', async (buttonInteraction) => {
+      try {
+        await buttonInteraction.deferUpdate();
+
+        // Extraire la lettre du customId: hangman_letter_X_progressId
+        const parts = buttonInteraction.customId.split('_');
+        const letter = parts[2];
+
+        await processLetter(letter, 'button');
+      } catch (error) {
+        console.error('🔴 [Hangman] Erreur bouton:', error.message);
+      }
+    });
+
+    // ═══════════════════════════════════════════
+    // ⌨️ HANDLER MESSAGES TEXTE
+    // ═══════════════════════════════════════════
+    messageCollector.on('collect', async (message) => {
+      const input = message.content.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+      // Supprimer le message pour garder le thread propre
+      try { await message.delete(); } catch (e) {}
+
+      if (input.length === 1 && /[A-Z]/.test(input)) {
+        // Lettre unique
+        await processLetter(input, 'text');
+      } else if (input.length > 1 && /^[A-Z\s]+$/.test(input)) {
+        // Tentative de mot entier
+        await processFullWord(input.replace(/\s+/g, ' '));
+      }
+    });
+
+    // ═══════════════════════════════════════════
+    // 🏁 FIN DU JEU
+    // ═══════════════════════════════════════════
+    buttonCollector.on('end', async (collected, reason) => {
+      gameEnded = true;
+
+      // Désactiver le clavier
+      try {
+        const disabledKeyboard = createKeyboard().map(row => {
+          row.components.forEach(btn => btn.setDisabled(true));
+          return row;
+        });
+        await gameMessage.edit({ components: disabledKeyboard });
+      } catch (e) {}
+
+      // ═══════════════════════════════════════════
+      // 🎉 VICTOIRE
+      // ═══════════════════════════════════════════
+      if (reason === 'success') {
+        console.log(`✅ [Hangman] Victoire ! ${errorCount} erreur(s)`);
+
+        // Sauvegarder le game_state (le status sera mis à jour par completeMission)
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            secretWord,
+            guessedLetters: [...guessedLetters],
+            wrongLetters: [...wrongLetters],
+            errorCount,
+            maxErrors,
+            success: true
+          }), progress.id]
+        );
+
+        await interaction.channel.send({ embeds: [createVictoryEmbed()] });
+
+        // Utiliser completeMission qui gère : status, récompense, annonce, badges, archivage
+        await this.completeMission(interaction, mission, player, progress, null);
+      }
+      // ═══════════════════════════════════════════
+      // ☠️ DÉFAITE
+      // ═══════════════════════════════════════════
+      else if (reason === 'hanged') {
+        console.log(`❌ [Hangman] Pendu ! ${errorCount} erreurs`);
+
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, status = 'failed', updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            secretWord,
+            guessedLetters: [...guessedLetters],
+            wrongLetters: [...wrongLetters],
+            errorCount,
+            maxErrors,
+            success: false,
+            reason: 'hanged'
+          }), progress.id]
+        );
+
+        await interaction.channel.send({ embeds: [createDefeatEmbed()] });
+
+        await announcements.announceMissionFailed(
+          interaction.client,
+          guildId,
+          interaction.user.username,
+          mission.name,
+          'Pendu !'
+        );
+
+        setTimeout(async () => {
+          try {
+            await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+            await interaction.channel.setArchived(true);
+          } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+        }, 5000);
+      }
+      // ═══════════════════════════════════════════
+      // ⏰ TIMEOUT
+      // ═══════════════════════════════════════════
+      else {
+        console.log(`⏰ [Hangman] Timeout`);
+
+        await db.query(
+          `UPDATE mission_progress SET status = 'failed', game_state = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            secretWord,
+            guessedLetters: [...guessedLetters],
+            wrongLetters: [...wrongLetters],
+            errorCount,
+            maxErrors,
+            success: false,
+            reason: 'timeout'
+          }), progress.id]
+        );
+
+        await interaction.channel.send({ embeds: [createTimeoutEmbed()] });
+
+        await announcements.announceMissionFailed(
+          interaction.client,
+          guildId,
+          interaction.user.username,
+          mission.name,
+          'Temps écoulé'
+        );
+
+        setTimeout(async () => {
+          try {
+            await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+            await interaction.channel.setArchived(true);
+          } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+        }, 5000);
+      }
+    });
+  }
+
+  // ============================================
+  // GESTION DES MOTS UNSCRAMBLE (ADMIN PANEL)
+  // ============================================
+
+  /**
+   * Afficher la liste des mots pour une mission Unscramble
+   */
+  async handleUnscrambleWordsManagement(interaction, page = 0) {
+    await interaction.deferUpdate();
+
+    // Extraire missionId - format: mission_unscramble_words_123 ou mission_unscramble_page_123_0
+    const customIdParts = interaction.customId.split('_');
+    let missionId;
+    if (interaction.customId.includes('_page_')) {
+      missionId = parseInt(customIdParts[3]);
+    } else {
+      missionId = parseInt(customIdParts.pop());
+    }
+
+    const guildId = interaction.guildId;
+
+    // Utiliser la méthode helper
+    return this._displayUnscrambleWordsList(interaction, guildId, missionId, page);
+  }
+
+  /**
+   * Helper interne: Affiche la liste des mots (appelable sans deferUpdate)
+   * @private
+   */
+  async _displayUnscrambleWordsList(interaction, guildId, missionId, page = 0) {
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({
+        content: '❌ Aucun thème actif.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const mission = await db.getMissionById(guildId, missionId);
+    if (!mission) {
+      return interaction.editReply({
+        content: '❌ Mission introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Récupérer les mots (stockés dans quiz_questions)
+    const words = await db.queryAll(
+      `SELECT * FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+       ORDER BY created_at DESC`,
+      [guildId, missionId, theme.id]
+    );
+
+    const itemsPerPage = 10;
+    const totalPages = Math.ceil(words.length / itemsPerPage) || 1;
+    const currentPage = Math.min(page, totalPages - 1);
+    const startIdx = currentPage * itemsPerPage;
+    const pageWords = words.slice(startIdx, startIdx + itemsPerPage);
+
+    // Créer l'embed
+    const embed = new EmbedBuilder()
+      .setTitle(`🔀 Mots à Mélanger - ${mission.name}`)
+      .setDescription(
+        `**${words.length}** mot(s) configuré(s)\n\n` +
+        `⏱️ Temps total: **${mission.timeout || 60}s**\n` +
+        `🎯 Essais max: **${mission.max_attempts || 3}**\n\n` +
+        `💡 Les lettres seront mélangées aléatoirement à chaque partie !`
+      )
+      .setColor('#E67E22');
+
+    if (pageWords.length > 0) {
+      const wordsList = pageWords.map((w, idx) => {
+        const diffEmoji = w.difficulty === 'easy' ? '🟢' : w.difficulty === 'hard' ? '🔴' : '🟡';
+        const hintText = w.hint ? ` (💡 ${w.hint})` : '';
+        const wordLength = w.correct_answer ? `[${w.correct_answer.length} lettres]` : '';
+        return `${diffEmoji} **${w.correct_answer?.toUpperCase() || '?'}** ${wordLength}${hintText}`;
+      }).join('\n');
+
+      embed.addFields({
+        name: `📋 Mots (Page ${currentPage + 1}/${totalPages})`,
+        value: wordsList
+      });
+    } else {
+      embed.addFields({
+        name: '📋 Mots',
+        value: '*Aucun mot configuré. Clique sur "➕ Ajouter" pour en créer un.*'
+      });
+    }
+
+    // Boutons principaux
+    const buttons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_unscramble_add_${missionId}`)
+        .setLabel('➕ Ajouter')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`mission_unscramble_delete_${missionId}`)
+        .setLabel('🗑️ Supprimer')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(words.length === 0)
+    );
+
+    // Pagination et retour
+    const pagination = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_unscramble_page_${missionId}_${currentPage - 1}`)
+        .setLabel('◀️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0),
+      new ButtonBuilder()
+        .setCustomId(`mission_unscramble_page_${missionId}_${currentPage + 1}`)
+        .setLabel('▶️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage >= totalPages - 1),
+      new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [buttons, pagination]
+    });
+  }
+
+  /**
+   * Démarrer le flow d'ajout d'un mot Unscramble (via messages, pas modal)
+   */
+  async handleUnscrambleWordAdd(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.followUp({ content: '❌ Aucun thème actif.', flags: 64 });
+    }
+
+    const mission = await db.getMissionById(guildId, missionId);
+    if (!mission) {
+      return interaction.followUp({ content: '❌ Mission introuvable.', flags: 64 });
+    }
+
+    // Étape 1: Demander le mot
+    const step1Embed = new EmbedBuilder()
+      .setTitle('🔀 Ajouter un Mot - Étape 1/3')
+      .setDescription(
+        '**Envoie le mot** que les joueurs devront deviner.\n\n' +
+        '💡 **Conseils:**\n' +
+        '• Choisis un mot de 5-15 lettres\n' +
+        '• Évite les mots trop courts (< 4 lettres)\n' +
+        '• Évite les mots trop longs (> 20 lettres)\n\n' +
+        '⏱️ Tu as 2 minutes pour répondre.'
+      )
+      .setColor('#E67E22')
+      .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+    await interaction.editReply({
+      content: '',
+      embeds: [step1Embed],
+      components: []
+    });
+
+    const filter = m => m.author.id === interaction.user.id;
+
+    try {
+      // Collecter le mot
+      const wordCollector = await interaction.channel.awaitMessages({
+        filter,
+        max: 1,
+        time: 120000,
+        errors: ['time']
+      });
+
+      const wordInput = wordCollector.first().content.trim();
+
+      // Supprimer le message de l'utilisateur
+      try { await wordCollector.first().delete(); } catch (e) { /* ignore */ }
+
+      if (wordInput.toLowerCase() === 'annuler') {
+        return this.handleUnscrambleWordsManagement(
+          { ...interaction, customId: `mission_unscramble_words_${missionId}` }, 0
+        );
+      }
+
+      // Validation du mot
+      const word = wordInput.replace(/[^a-zA-ZÀ-ÿ]/g, ''); // Garder uniquement les lettres
+      if (word.length < 3) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Mot trop court')
+            .setDescription('Le mot doit contenir au moins 3 lettres.')
+            .setColor('#E74C3C')
+          ]
+        });
+        await this.sleep(2000);
+        return this.handleUnscrambleWordsManagement(
+          { ...interaction, customId: `mission_unscramble_words_${missionId}` }, 0
+        );
+      }
+
+      if (word.length > 25) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Mot trop long')
+            .setDescription('Le mot ne doit pas dépasser 25 lettres.')
+            .setColor('#E74C3C')
+          ]
+        });
+        await this.sleep(2000);
+        return this.handleUnscrambleWordsManagement(
+          { ...interaction, customId: `mission_unscramble_words_${missionId}` }, 0
+        );
+      }
+
+      // Étape 2: Demander un indice (optionnel)
+      const step2Embed = new EmbedBuilder()
+        .setTitle('🔀 Ajouter un Mot - Étape 2/3')
+        .setDescription(
+          `✅ Mot enregistré : **${word.toUpperCase()}** (${word.length} lettres)\n\n` +
+          '**Envoie un indice** pour aider les joueurs (optionnel).\n\n' +
+          '💡 Ex: "Animal de la savane", "Film Disney", etc.\n\n' +
+          '⏱️ Tu as 2 minutes. Tape **"aucun"** pour ne pas mettre d\'indice.'
+        )
+        .setColor('#E67E22')
+        .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+      await interaction.editReply({
+        content: '',
+        embeds: [step2Embed],
+        components: []
+      });
+
+      const hintCollector = await interaction.channel.awaitMessages({
+        filter,
+        max: 1,
+        time: 120000,
+        errors: ['time']
+      });
+
+      const hintInput = hintCollector.first().content.trim();
+      try { await hintCollector.first().delete(); } catch (e) { /* ignore */ }
+
+      if (hintInput.toLowerCase() === 'annuler') {
+        return this.handleUnscrambleWordsManagement(
+          { ...interaction, customId: `mission_unscramble_words_${missionId}` }, 0
+        );
+      }
+
+      const hint = hintInput.toLowerCase() === 'aucun' ? null : hintInput.substring(0, 100);
+
+      // Étape 3: Choisir la difficulté
+      const step3Embed = new EmbedBuilder()
+        .setTitle('🔀 Ajouter un Mot - Étape 3/3')
+        .setDescription(
+          `✅ Mot : **${word.toUpperCase()}** (${word.length} lettres)\n` +
+          `💡 Indice : ${hint || '*Aucun*'}\n\n` +
+          '**Choisis la difficulté :**'
+        )
+        .setColor('#E67E22');
+
+      const difficultyButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`unscramble_diff_easy_${missionId}`)
+          .setLabel('🟢 Facile')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`unscramble_diff_medium_${missionId}`)
+          .setLabel('🟡 Moyen')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`unscramble_diff_hard_${missionId}`)
+          .setLabel('🔴 Difficile')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await interaction.editReply({
+        content: '',
+        embeds: [step3Embed],
+        components: [difficultyButtons]
+      });
+
+      // Collecter le choix de difficulté
+      const diffCollector = interaction.channel.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id && i.customId.startsWith('unscramble_diff_'),
+        time: 60000,
+        max: 1
+      });
+
+      diffCollector.on('collect', async (i) => {
+        await i.deferUpdate();
+
+        const difficulty = i.customId.includes('_easy_') ? 'easy' :
+                          i.customId.includes('_hard_') ? 'hard' : 'medium';
+
+        // Sauvegarder le mot dans quiz_questions
+        await db.query(
+          `INSERT INTO quiz_questions (guild_id, theme_id, mission_id, question_text, correct_answer, hint, difficulty)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [guildId, theme.id, missionId, word, word, hint, difficulty]
+        );
+
+        // Mettre à jour validation_data avec le nouveau compte
+        const wordsCount = await db.queryOne(
+          `SELECT COUNT(*) as count FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2`,
+          [guildId, missionId]
+        );
+
+        await db.query(
+          `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+          [JSON.stringify({ words_count: parseInt(wordsCount.count) }), missionId, guildId]
+        );
+
+        const diffEmoji = difficulty === 'easy' ? '🟢' : difficulty === 'hard' ? '🔴' : '🟡';
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Mot ajouté !')
+          .setDescription(
+            `**${word.toUpperCase()}** a été ajouté à la mission.\n\n` +
+            `${diffEmoji} Difficulté: **${difficulty === 'easy' ? 'Facile' : difficulty === 'hard' ? 'Difficile' : 'Moyen'}**\n` +
+            `💡 Indice: ${hint || '*Aucun*'}`
+          )
+          .setColor('#2ECC71');
+
+        await i.editReply({
+          embeds: [successEmbed],
+          components: []
+        });
+
+        // Retourner à la liste après 2 secondes
+        await this.sleep(2000);
+        return this._displayUnscrambleWordsList(i, guildId, missionId, 0);
+      });
+
+      diffCollector.on('end', async (collected, reason) => {
+        if (reason === 'time' && collected.size === 0) {
+          await interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setTitle('⏱️ Temps écoulé')
+              .setDescription('La création du mot a été annulée.')
+              .setColor('#E74C3C')
+            ],
+            components: []
+          });
+          await this.sleep(2000);
+          return this._displayUnscrambleWordsList(interaction, guildId, missionId, 0);
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'ajout du mot unscramble:', error);
+      await interaction.editReply({
+        embeds: [new EmbedBuilder()
+          .setTitle('⏱️ Temps écoulé')
+          .setDescription('La création du mot a été annulée.')
+          .setColor('#E74C3C')
+        ],
+        components: []
+      });
+      await this.sleep(2000);
+      return this._displayUnscrambleWordsList(interaction, guildId, missionId, 0);
+    }
+  }
+
+  /**
+   * Afficher le select menu pour supprimer un mot Unscramble
+   */
+  async handleUnscrambleWordDeleteSelect(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({ content: '❌ Aucun thème actif.', embeds: [], components: [] });
+    }
+
+    // Récupérer les mots
+    const words = await db.queryAll(
+      `SELECT id, correct_answer, hint, difficulty FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+       ORDER BY created_at DESC
+       LIMIT 25`,
+      [guildId, missionId, theme.id]
+    );
+
+    if (words.length === 0) {
+      return interaction.editReply({
+        content: '❌ Aucun mot à supprimer.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Créer le select menu
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`select_unscramble_delete_${missionId}`)
+      .setPlaceholder('Sélectionne un mot à supprimer')
+      .addOptions(words.map(w => {
+        const diffEmoji = w.difficulty === 'easy' ? '🟢' : w.difficulty === 'hard' ? '🔴' : '🟡';
+        return {
+          label: w.correct_answer?.toUpperCase() || '???',
+          value: w.id.toString(),
+          description: w.hint ? `${diffEmoji} ${w.hint.substring(0, 50)}` : `${diffEmoji} Aucun indice`
+        };
+      }));
+
+    const embed = new EmbedBuilder()
+      .setTitle('🗑️ Supprimer un mot')
+      .setDescription('Sélectionne le mot que tu veux supprimer.')
+      .setColor('#E74C3C');
+
+    const cancelButton = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_unscramble_words_${missionId}`)
+        .setLabel('🔙 Annuler')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        cancelButton
+      ]
+    });
+  }
+
+  /**
+   * Supprimer un mot Unscramble (après sélection dans le select menu)
+   */
+  async handleUnscrambleWordDelete(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    const wordId = parseInt(interaction.values[0]);
+    const guildId = interaction.guildId;
+
+    // Extraire missionId du customId: select_unscramble_delete_123
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    // Récupérer le mot avant de le supprimer pour le log
+    const word = await db.queryOne(
+      'SELECT correct_answer FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [wordId, guildId]
+    );
+
+    // Supprimer le mot
+    await db.query(
+      'DELETE FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [wordId, guildId]
+    );
+
+    console.log(`🗑️ [Unscramble] Mot "${word?.correct_answer}" #${wordId} supprimé`);
+
+    // Mettre à jour le compteur dans validation_data
+    const wordsCount = await db.queryOne(
+      `SELECT COUNT(*) as count FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2`,
+      [guildId, missionId]
+    );
+
+    await db.query(
+      `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+      [JSON.stringify({ words_count: parseInt(wordsCount.count) }), missionId, guildId]
+    );
+
+    await interaction.editReply({
+      content: `✅ Mot **${word?.correct_answer?.toUpperCase() || ''}** supprimé !`,
+      flags: 64
+    });
+
+    // Retourner à la liste des mots en mettant à jour le message original
+    const messageInteraction = {
+      editReply: interaction.message.edit.bind(interaction.message),
+      guildId: guildId
+    };
+
+    return this._displayUnscrambleWordsList(messageInteraction, guildId, missionId, 0);
+  }
+
+  // ============================================
+  // GESTION DES MOTS HANGMAN (ADMIN PANEL)
+  // ============================================
+
+  /**
+   * Afficher la liste des mots pour une mission Hangman
+   */
+  async handleHangmanWordsManagement(interaction, page = 0) {
+    await interaction.deferUpdate();
+
+    // Extraire missionId - format: mission_hangman_words_123 ou mission_hangman_page_123_0
+    const customIdParts = interaction.customId.split('_');
+    let missionId;
+    if (interaction.customId.includes('_page_')) {
+      missionId = parseInt(customIdParts[3]);
+    } else {
+      missionId = parseInt(customIdParts.pop());
+    }
+
+    const guildId = interaction.guildId;
+
+    // Utiliser la méthode helper
+    return this._displayHangmanWordsList(interaction, guildId, missionId, page);
+  }
+
+  /**
+   * Helper interne: Affiche la liste des mots hangman (appelable sans deferUpdate)
+   * @private
+   */
+  async _displayHangmanWordsList(interaction, guildId, missionId, page = 0) {
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({
+        content: '❌ Aucun thème actif.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const mission = await db.getMissionById(guildId, missionId);
+    if (!mission) {
+      return interaction.editReply({
+        content: '❌ Mission introuvable.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Récupérer les mots (stockés dans quiz_questions)
+    const words = await db.getQuizQuestionsByMission(guildId, missionId);
+
+    const perPage = 10;
+    const totalPages = Math.max(1, Math.ceil(words.length / perPage));
+    const currentPage = Math.min(page, totalPages - 1);
+    const pageWords = words.slice(currentPage * perPage, (currentPage + 1) * perPage);
+
+    // Créer l'embed
+    const embed = new EmbedBuilder()
+      .setTitle(`☠️ Mots du Pendu - ${mission.name}`)
+      .setColor('#9B59B6')
+      .setDescription(
+        `📊 **${words.length}** mot${words.length > 1 ? 's' : ''} configuré${words.length > 1 ? 's' : ''}\n\n` +
+        (pageWords.length > 0
+          ? pageWords.map((w, i) => {
+              const diffEmoji = w.difficulty === 'easy' ? '🟢' : w.difficulty === 'hard' ? '🔴' : '🟡';
+              const hint = w.hint ? ` | *${w.hint.substring(0, 30)}${w.hint.length > 30 ? '...' : ''}*` : '';
+              return `${diffEmoji} **${w.correct_answer?.toUpperCase() || '???'}** (${w.correct_answer?.length || 0} lettres)${hint}`;
+            }).join('\n')
+          : '*Aucun mot configuré. Utilise le bouton pour en ajouter !*')
+      )
+      .setFooter({ text: `Page ${currentPage + 1}/${totalPages} | 6 erreurs = pendu !` });
+
+    // Boutons de gestion
+    const buttons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_hangman_add_${missionId}`)
+        .setLabel('➕ Ajouter')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`mission_hangman_delete_${missionId}`)
+        .setLabel('🗑️ Supprimer')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(words.length === 0)
+    );
+
+    // Pagination
+    const pagination = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_hangman_page_${missionId}_${currentPage - 1}`)
+        .setLabel('◀️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0),
+      new ButtonBuilder()
+        .setCustomId(`mission_hangman_page_${missionId}_${currentPage + 1}`)
+        .setLabel('▶️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage >= totalPages - 1),
+      new ButtonBuilder()
+        .setCustomId(`admin_missions`)
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [buttons, pagination]
+    });
+  }
+
+  /**
+   * Ajouter un mot à une mission Hangman (avec boutons de difficulté comme Unscramble)
+   */
+  async handleHangmanWordAdd(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({ content: '❌ Aucun thème actif.', embeds: [], components: [] });
+    }
+
+    // Embed instruction - Étape 1
+    const instructionEmbed = new EmbedBuilder()
+      .setTitle('☠️ Ajouter un Mot au Pendu - Étape 1/3')
+      .setDescription(
+        '**Envoie le mot** à deviner dans le chat.\n\n' +
+        '📝 **Règles:**\n' +
+        '• Le mot sera automatiquement mis en majuscules\n' +
+        '• Les accents seront retirés\n' +
+        '• Un mot de **5-15 lettres** est idéal\n' +
+        '• Tu peux mettre plusieurs mots (phrase)\n\n' +
+        '⏱️ Tu as 2 minutes. Tape **"annuler"** pour annuler.'
+      )
+      .setColor('#9B59B6');
+
+    await interaction.editReply({
+      content: '',
+      embeds: [instructionEmbed],
+      components: []
+    });
+
+    try {
+      // Collecter le mot
+      const filter = m => m.author.id === interaction.user.id;
+      const collected = await interaction.channel.awaitMessages({
+        filter,
+        max: 1,
+        time: 120000,
+        errors: ['time']
+      });
+
+      const wordInput = collected.first().content.trim();
+      try { await collected.first().delete(); } catch (e) {}
+
+      if (wordInput.toLowerCase() === 'annuler') {
+        return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+      }
+
+      // Normaliser le mot
+      const word = wordInput.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      // Vérifier que le mot contient au moins une lettre
+      if (!/[A-Z]/.test(word)) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Mot invalide')
+            .setDescription('Le mot doit contenir au moins une lettre.')
+            .setColor('#E74C3C')
+          ]
+        });
+        await this.sleep(2000);
+        return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+      }
+
+      // Vérifier si le mot n'est pas trop long
+      if (word.length > 30) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Mot trop long')
+            .setDescription('Le mot ne doit pas dépasser 30 caractères.')
+            .setColor('#E74C3C')
+          ]
+        });
+        await this.sleep(2000);
+        return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+      }
+
+      // Vérifier si le mot existe déjà
+      const existingWord = await db.queryOne(
+        `SELECT id FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2 AND UPPER(correct_answer) = $3`,
+        [guildId, missionId, word]
+      );
+
+      if (existingWord) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Mot déjà existant')
+            .setDescription(`Le mot **${word}** existe déjà dans cette mission.`)
+            .setColor('#E74C3C')
+          ]
+        });
+        await this.sleep(2000);
+        return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+      }
+
+      // Étape 2: Demander un indice (optionnel)
+      const step2Embed = new EmbedBuilder()
+        .setTitle('☠️ Ajouter un Mot au Pendu - Étape 2/3')
+        .setDescription(
+          `✅ Mot enregistré : **${word}** (${word.replace(/[^A-Z]/g, '').length} lettres)\n\n` +
+          '**Envoie un indice** pour aider les joueurs (optionnel).\n\n' +
+          '💡 Ex: "Personnage principal", "Animal magique", etc.\n\n' +
+          '⏱️ Tu as 2 minutes. Tape **"aucun"** pour ne pas mettre d\'indice.'
+        )
+        .setColor('#9B59B6')
+        .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+      await interaction.editReply({
+        content: '',
+        embeds: [step2Embed],
+        components: []
+      });
+
+      const hintCollector = await interaction.channel.awaitMessages({
+        filter,
+        max: 1,
+        time: 120000,
+        errors: ['time']
+      });
+
+      const hintInput = hintCollector.first().content.trim();
+      try { await hintCollector.first().delete(); } catch (e) {}
+
+      if (hintInput.toLowerCase() === 'annuler') {
+        return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+      }
+
+      const hint = hintInput.toLowerCase() === 'aucun' ? null : hintInput.substring(0, 100);
+
+      // Étape 3: Choisir la difficulté avec des boutons
+      const step3Embed = new EmbedBuilder()
+        .setTitle('☠️ Ajouter un Mot au Pendu - Étape 3/3')
+        .setDescription(
+          `✅ Mot : **${word}** (${word.replace(/[^A-Z]/g, '').length} lettres)\n` +
+          `💡 Indice : ${hint || '*Aucun*'}\n\n` +
+          '**Choisis la difficulté :**'
+        )
+        .setColor('#9B59B6');
+
+      const difficultyButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`hangman_diff_easy_${missionId}`)
+          .setLabel('🟢 Facile')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`hangman_diff_medium_${missionId}`)
+          .setLabel('🟡 Moyen')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`hangman_diff_hard_${missionId}`)
+          .setLabel('🔴 Difficile')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await interaction.editReply({
+        content: '',
+        embeds: [step3Embed],
+        components: [difficultyButtons]
+      });
+
+      // Collecter le choix de difficulté
+      const diffCollector = interaction.channel.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id && i.customId.startsWith('hangman_diff_'),
+        time: 60000,
+        max: 1
+      });
+
+      diffCollector.on('collect', async (i) => {
+        await i.deferUpdate();
+
+        const difficulty = i.customId.includes('_easy_') ? 'easy' :
+                          i.customId.includes('_hard_') ? 'hard' : 'medium';
+
+        // Sauvegarder le mot dans quiz_questions
+        await db.query(
+          `INSERT INTO quiz_questions (guild_id, theme_id, mission_id, question_text, correct_answer, hint, difficulty)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [guildId, theme.id, missionId, `Devine le mot: ${word}`, word, hint, difficulty]
+        );
+
+        // Mettre à jour validation_data avec le nouveau compte
+        const wordsCount = await db.queryOne(
+          `SELECT COUNT(*) as count FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2`,
+          [guildId, missionId]
+        );
+
+        await db.query(
+          `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+          [JSON.stringify({ words_count: parseInt(wordsCount.count) }), missionId, guildId]
+        );
+
+        const diffEmoji = difficulty === 'easy' ? '🟢' : difficulty === 'hard' ? '🔴' : '🟡';
+        console.log(`☠️ [Hangman] Mot ajouté: "${word}" [${difficulty}]`);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Mot ajouté !')
+          .setDescription(
+            `**${word}** a été ajouté à la mission.\n\n` +
+            `${diffEmoji} Difficulté: **${difficulty === 'easy' ? 'Facile' : difficulty === 'hard' ? 'Difficile' : 'Moyen'}**\n` +
+            `💡 Indice: ${hint || '*Aucun*'}`
+          )
+          .setColor('#2ECC71');
+
+        await i.editReply({
+          embeds: [successEmbed],
+          components: []
+        });
+
+        // Retourner à la liste après 2 secondes
+        await this.sleep(2000);
+        return this._displayHangmanWordsList(i, guildId, missionId, 0);
+      });
+
+      diffCollector.on('end', async (collected, reason) => {
+        if (reason === 'time' && collected.size === 0) {
+          await interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setTitle('⏱️ Temps écoulé')
+              .setDescription('La création du mot a été annulée.')
+              .setColor('#E74C3C')
+            ],
+            components: []
+          });
+          await this.sleep(2000);
+          return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'ajout du mot hangman:', error);
+      await interaction.editReply({
+        embeds: [new EmbedBuilder()
+          .setTitle('⏱️ Temps écoulé')
+          .setDescription('La création du mot a été annulée.')
+          .setColor('#E74C3C')
+        ],
+        components: []
+      });
+      await this.sleep(2000);
+      return this._displayHangmanWordsList(interaction, guildId, missionId, 0);
+    }
+  }
+
+  /**
+   * Afficher le select menu pour supprimer un mot Hangman
+   */
+  async handleHangmanWordDeleteSelect(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({ content: '❌ Aucun thème actif.', embeds: [], components: [] });
+    }
+
+    // Récupérer les mots
+    const words = await db.queryAll(
+      `SELECT id, correct_answer, hint, difficulty FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+       ORDER BY created_at DESC
+       LIMIT 25`,
+      [guildId, missionId, theme.id]
+    );
+
+    if (words.length === 0) {
+      return interaction.editReply({
+        content: '❌ Aucun mot à supprimer.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    // Créer le select menu
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`select_hangman_delete_${missionId}`)
+      .setPlaceholder('Sélectionne un mot à supprimer')
+      .addOptions(words.map(w => {
+        const diffEmoji = w.difficulty === 'easy' ? '🟢' : w.difficulty === 'hard' ? '🔴' : '🟡';
+        return {
+          label: w.correct_answer?.toUpperCase() || '???',
+          value: w.id.toString(),
+          description: w.hint ? `${diffEmoji} ${w.hint.substring(0, 50)}` : `${diffEmoji} Aucun indice`
+        };
+      }));
+
+    const embed = new EmbedBuilder()
+      .setTitle('🗑️ Supprimer un mot du Pendu')
+      .setDescription('Sélectionne le mot que tu veux supprimer.')
+      .setColor('#E74C3C');
+
+    const cancelButton = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_hangman_words_${missionId}`)
+        .setLabel('🔙 Annuler')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        cancelButton
+      ]
+    });
+  }
+
+  /**
+   * Supprimer un mot Hangman (après sélection dans le select menu)
+   */
+  async handleHangmanWordDelete(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    const wordId = parseInt(interaction.values[0]);
+    const guildId = interaction.guildId;
+
+    // Extraire missionId du customId: select_hangman_delete_123
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    // Récupérer le mot avant de le supprimer pour le log
+    const word = await db.queryOne(
+      'SELECT correct_answer FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [wordId, guildId]
+    );
+
+    // Supprimer le mot
+    await db.query(
+      'DELETE FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [wordId, guildId]
+    );
+
+    console.log(`🗑️ [Hangman] Mot "${word?.correct_answer}" #${wordId} supprimé`);
+
+    // Mettre à jour le compteur dans validation_data
+    const wordsCount = await db.queryOne(
+      `SELECT COUNT(*) as count FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2`,
+      [guildId, missionId]
+    );
+
+    await db.query(
+      `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+      [JSON.stringify({ words_count: parseInt(wordsCount.count) }), missionId, guildId]
+    );
+
+    await interaction.editReply({
+      content: `✅ Mot **${word?.correct_answer?.toUpperCase() || ''}** supprimé !`,
+      flags: 64
+    });
+
+    // Retourner à la liste des mots en mettant à jour le message original
+    const messageInteraction = {
+      editReply: interaction.message.edit.bind(interaction.message),
+      guildId: guildId
+    };
+
+    return this._displayHangmanWordsList(messageInteraction, guildId, missionId, 0);
+  }
+
+  /**
+   * Toggle l'option "première lettre révélée" pour une mission Hangman
+   */
+  async handleHangmanFirstLetterToggle(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    // Récupérer la mission
+    const mission = await db.queryOne(
+      'SELECT * FROM missions WHERE id = $1 AND guild_id = $2',
+      [missionId, guildId]
+    );
+
+    if (!mission) {
+      return interaction.editReply({ content: '❌ Mission introuvable.', embeds: [], components: [] });
+    }
+
+    // Parser validation_data
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try {
+        validationData = JSON.parse(validationData);
+      } catch (e) {
+        validationData = {};
+      }
+    }
+    validationData = validationData || {};
+
+    // Toggle l'option
+    const newValue = !validationData.show_first_letter;
+    validationData.show_first_letter = newValue;
+
+    // Mettre à jour en base
+    await db.query(
+      `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+      [JSON.stringify(validationData), missionId, guildId]
+    );
+
+    console.log(`🔤 [Hangman] Mission #${missionId} - 1ère lettre: ${newValue ? 'révélée' : 'cachée'}`);
+
+    // Rafraîchir la vue de la mission via adminPanelHandler.handleMissionSelection
+    // On crée un objet interaction modifié avec le customId attendu
+    const adminPanelHandler = require('./adminPanelHandler');
+    const modifiedInteraction = Object.create(interaction);
+    modifiedInteraction.customId = `select_mission_${missionId}`;
+    modifiedInteraction.values = null; // Pas de select menu
+    modifiedInteraction.deferUpdate = async () => {}; // Déjà fait
+    return adminPanelHandler.handleMissionSelection(modifiedInteraction);
   }
 
   /**
@@ -4600,6 +6548,1573 @@ class MissionHandler {
     };
 
     return this.handleEmojiPuzzleManagement(fakeInteraction, 0);
+  }
+
+  // ╔════════════════════════════════════════════════════════════════════════════╗
+  // ║                                                                            ║
+  // ║   🟩🟨⬛ WORDLE - LE JEU ULTIME DE DÉDUCTION                             ║
+  // ║   Interface graphique premium avec clavier AZERTY interactif              ║
+  // ║                                                                            ║
+  // ╚════════════════════════════════════════════════════════════════════════════╝
+
+  /**
+   * Valider une mission de type Wordle
+   * 🎮 Version premium avec:
+   * - Grille visuelle 6x5 avec animations d'état
+   * - Clavier AZERTY interactif avec couleurs dynamiques
+   * - Système d'étoiles basé sur le nombre d'essais
+   * - Support saisie au clavier ET boutons
+   * - Option première lettre révélée
+   */
+  async validateWordle(interaction, mission, player, progress) {
+    const guildId = interaction.guildId;
+    const timeout = (mission.timeout || 180) * 1000; // 3 minutes par défaut
+
+    // Récupérer la config depuis validation_data
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+    }
+    validationData = validationData || {};
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 📚 RÉCUPÉRATION DU MOT SECRET
+    // ═══════════════════════════════════════════════════════════════════════
+    const theme = await db.getActiveTheme(guildId);
+    const words = await db.queryAll(
+      `SELECT * FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3`,
+      [guildId, mission.id, theme.id]
+    );
+
+    if (words.length === 0) {
+      return interaction.channel.send({
+        embeds: [new EmbedBuilder()
+          .setTitle('❌ Erreur de configuration')
+          .setDescription('Aucun mot configuré pour cette mission Wordle.\nUn administrateur doit ajouter des mots.')
+          .setColor('#E74C3C')
+        ]
+      });
+    }
+
+    const wordData = words[Math.floor(Math.random() * words.length)];
+    const secretWord = wordData.correct_answer.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const hint = wordData.hint;
+    const wordDifficulty = wordData.difficulty || 'easy'; // easy, medium, hard
+
+    // Déterminer la longueur attendue et le nombre d'essais selon la difficulté du mot
+    // Facile = 5 lettres (8 essais), Moyen = 6 lettres (6 essais), Difficile = 7 lettres (4 essais)
+    const wordLength = wordDifficulty === 'easy' ? 5 : wordDifficulty === 'hard' ? 7 : 6;
+    const difficultyKey = `${wordDifficulty}_attempts`;
+    // Défauts logiques selon difficulté: easy=8, medium=6, hard=4
+    const defaultAttempts = wordDifficulty === 'easy' ? 8 : wordDifficulty === 'hard' ? 4 : 6;
+    const maxAttempts = Math.min(10, Math.max(3, parseInt(validationData[difficultyKey]) || defaultAttempts));
+    const diffEmoji = wordDifficulty === 'easy' ? '🟢' : wordDifficulty === 'hard' ? '🔴' : '🟡';
+    const diffLabel = wordDifficulty === 'easy' ? 'Facile' : wordDifficulty === 'hard' ? 'Difficile' : 'Moyen';
+
+    // Vérifier que le mot a la bonne longueur
+    if (secretWord.replace(/[^A-Z]/g, '').length !== wordLength) {
+      console.warn(`⚠️ [Wordle] Mot "${secretWord}" n'a pas ${wordLength} lettres (difficulté: ${wordDifficulty}) !`);
+      return interaction.channel.send({
+        embeds: [new EmbedBuilder()
+          .setTitle('❌ Erreur de configuration')
+          .setDescription(`Le mot sélectionné ne fait pas ${wordLength} lettres.\nContactez un administrateur.`)
+          .setColor('#E74C3C')
+        ]
+      });
+    }
+
+    // Vérifier option première lettre révélée
+    const showFirstLetter = validationData.show_first_letter || false;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎮 ÉTAT DU JEU
+    // ═══════════════════════════════════════════════════════════════════════
+    const attempts = []; // Historique des tentatives: [{word: 'TRACE', result: ['🟩','🟨','⬛','⬛','🟩']}]
+    let currentInput = showFirstLetter ? secretWord[0] : ''; // Saisie en cours
+    let gameEnded = false;
+    let gameMessage = null;
+
+    // État du clavier: 'unused' | 'correct' | 'present' | 'absent'
+    const keyboardState = {};
+    'AZERTYUIOPQSDFGHJKLMWXCVBN'.split('').forEach(l => keyboardState[l] = 'unused');
+
+    // Si première lettre révélée, la marquer comme correcte
+    if (showFirstLetter) {
+      keyboardState[secretWord[0]] = 'correct';
+    }
+
+    console.log(`🟩 [Wordle] Démarrage: "${secretWord}" (${diffLabel}, ${wordLength} lettres, ${maxAttempts} essais, ${timeout/1000}s)`);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎨 GÉNÉRATION DE LA GRILLE PREMIUM
+    // ═══════════════════════════════════════════════════════════════════════
+    const createGrid = () => {
+      const grid = [];
+
+      // Ligne de titre avec effet visuel
+      grid.push('```ansi');
+      grid.push('\u001b[1;37m╔═══════════════════════╗\u001b[0m');
+      grid.push('\u001b[1;37m║\u001b[0m   \u001b[1;32m🟩\u001b[0m \u001b[1;33mW O R D L E\u001b[0m \u001b[1;32m🟩\u001b[0m   \u001b[1;37m║\u001b[0m');
+      grid.push('\u001b[1;37m╠═══════════════════════╣\u001b[0m');
+
+      // Afficher les tentatives passées
+      for (let i = 0; i < maxAttempts; i++) {
+        if (i < attempts.length) {
+          // Tentative déjà faite
+          const attempt = attempts[i];
+          const letters = attempt.word.split('').map((letter, idx) => {
+            const result = attempt.result[idx];
+            if (result === '🟩') return `\u001b[1;42;37m ${letter} \u001b[0m`; // Vert fond
+            if (result === '🟨') return `\u001b[1;43;30m ${letter} \u001b[0m`; // Jaune fond
+            return `\u001b[1;40;37m ${letter} \u001b[0m`; // Gris fond
+          }).join('');
+          grid.push(`\u001b[1;37m║\u001b[0m ${letters} \u001b[1;37m║\u001b[0m`);
+        } else if (i === attempts.length) {
+          // Ligne de saisie actuelle
+          const inputDisplay = currentInput.padEnd(wordLength, '_').split('').map((char, idx) => {
+            if (char === '_') return `\u001b[1;34m ▢ \u001b[0m`; // Case vide bleue
+            // Si première lettre révélée, afficher en vert
+            if (idx === 0 && showFirstLetter) return `\u001b[1;42;37m ${char} \u001b[0m`;
+            return `\u001b[1;47;30m ${char} \u001b[0m`; // Lettre en cours (blanc)
+          }).join('');
+          grid.push(`\u001b[1;37m║\u001b[0m ${inputDisplay} \u001b[1;37m║\u001b[0m ◀ \u001b[1;36mTon essai\u001b[0m`);
+        } else {
+          // Lignes futures vides
+          const emptyRow = Array(wordLength).fill('\u001b[1;34m ▢ \u001b[0m').join('');
+          grid.push(`\u001b[1;37m║\u001b[0m ${emptyRow} \u001b[1;37m║\u001b[0m`);
+        }
+      }
+
+      grid.push('\u001b[1;37m╚═══════════════════════╝\u001b[0m');
+      grid.push('```');
+
+      return grid.join('\n');
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎨 VERSION CLEAN - AFFICHAGE ALIGNÉ AVEC ESPACES
+    // ═══════════════════════════════════════════════════════════════════════
+    const createGridEmoji = () => {
+      const lines = [];
+
+      // Difficulté badge
+      const diffBadge = wordLength === 5 ? '🟢 FACILE' :
+                        wordLength === 6 ? '🟡 MOYEN' : '🔴 DIFFICILE';
+
+      // Header simple
+      lines.push('');
+      lines.push(`✨ **W O R D L E** ✨`);
+      lines.push(diffBadge);
+      lines.push('');
+
+      // Grille de jeu - UNE SEULE LIGNE par tentative (cases avec lettres dedans)
+      for (let i = 0; i < maxAttempts; i++) {
+        if (i < attempts.length) {
+          // Tentative passée - combiner case et lettre
+          const attempt = attempts[i];
+          const isWinningRow = attempt.result.every(r => r === '🟩');
+
+          // Cases avec espaces larges entre elles
+          const boxes = attempt.result.join('   ');
+
+          // Lettres avec point simple et flèche
+          const letters = attempt.word.split('').join(' . ');
+
+          if (isWinningRow) {
+            lines.push(`🏆  ${boxes}`);
+            lines.push(`    * ${letters}`);
+          } else {
+            lines.push(`      ${boxes}`);
+            lines.push(`    * ${letters}`);
+          }
+          lines.push('');
+
+        } else if (i === attempts.length) {
+          // Ligne de saisie actuelle
+          const inputChars = currentInput.padEnd(wordLength, ' ').split('');
+
+          const boxes = inputChars.map((char, idx) => {
+            if (char === ' ') return '⬜';
+            if (idx === 0 && showFirstLetter) return '🟩';
+            return '🔷';
+          }).join('   ');
+
+          const letters = inputChars.map(char => char === ' ' ? '_' : char).join(' . ');
+
+          lines.push(`▶     ${boxes}`);
+          lines.push(`    * ${letters}`);
+          lines.push('');
+
+        } else {
+          // Lignes futures vides
+          const emptyBoxes = Array(wordLength).fill('⬜').join('   ');
+          const emptyLetters = Array(wordLength).fill('_').join(' . ');
+
+          lines.push(`      ${emptyBoxes}`);
+          lines.push(`    * ${emptyLetters}`);
+          lines.push('');
+        }
+      }
+
+      return lines.join('\n');
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🌟 BARRE DE VIE PREMIUM
+    // ═══════════════════════════════════════════════════════════════════════
+    const getHealthBar = () => {
+      const remaining = maxAttempts - attempts.length;
+      const total = maxAttempts;
+
+      // Barre visuelle avec dégradé
+      let bar = '';
+      for (let i = 0; i < total; i++) {
+        if (i < remaining) {
+          // Essais restants - couleur selon nombre
+          if (remaining >= 4) bar += '🟩';
+          else if (remaining >= 2) bar += '🟨';
+          else bar += '🟥';
+        } else {
+          bar += '⬛';
+        }
+      }
+
+      // Texte descriptif
+      const urgencyText = remaining <= 1 ? '⚠️ **DERNIER ESSAI !**' :
+                         remaining <= 2 ? '😰 *Plus que 2 essais...*' :
+                         remaining <= 3 ? '🤔 *Réfléchis bien...*' : '';
+
+      return `${bar} **${remaining}/${total}**\n${urgencyText}`;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ⌨️ CLAVIER ALPHABÉTIQUE INTERACTIF (5 rangées max, 5 boutons max)
+    // ═══════════════════════════════════════════════════════════════════════
+    const createKeyboard = () => {
+      // Layout alphabétique (même structure que le Pendu)
+      // 23 lettres (A-W) sur boutons + X, Y, Z accessibles par chat
+      const letterRows = [
+        ['A', 'B', 'C', 'D', 'E'],
+        ['F', 'G', 'H', 'I', 'J'],
+        ['K', 'L', 'M', 'N', 'O'],
+        ['P', 'Q', 'R', 'S', 'T']
+      ];
+
+      const components = [];
+
+      // 4 premières rangées de lettres (A-T)
+      letterRows.forEach(row => {
+        const actionRow = new ActionRowBuilder();
+        row.forEach(letter => {
+          const state = keyboardState[letter];
+          let style = ButtonStyle.Secondary;
+          let disabled = gameEnded;
+
+          if (state === 'correct') style = ButtonStyle.Success;
+          else if (state === 'present') style = ButtonStyle.Primary; // Bleu pour "présent"
+          else if (state === 'absent') {
+            style = ButtonStyle.Secondary;
+            disabled = true; // Désactiver les lettres absentes
+          }
+
+          actionRow.addComponents(
+            new ButtonBuilder()
+              .setCustomId(`wordle_key_${letter}_${progress.id}`)
+              .setLabel(letter)
+              .setStyle(style)
+              .setDisabled(disabled)
+          );
+        });
+        components.push(actionRow);
+      });
+
+      // 5ème rangée: U, V, W + boutons d'action (X, Y, Z par chat)
+      const actionRow5 = new ActionRowBuilder();
+      ['U', 'V', 'W'].forEach(letter => {
+        const state = keyboardState[letter];
+        let style = ButtonStyle.Secondary;
+        let disabled = gameEnded;
+
+        if (state === 'correct') style = ButtonStyle.Success;
+        else if (state === 'present') style = ButtonStyle.Primary;
+        else if (state === 'absent') {
+          style = ButtonStyle.Secondary;
+          disabled = true;
+        }
+
+        actionRow5.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`wordle_key_${letter}_${progress.id}`)
+            .setLabel(letter)
+            .setStyle(style)
+            .setDisabled(disabled)
+        );
+      });
+
+      // Bouton Supprimer (⌫)
+      actionRow5.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`wordle_delete_${progress.id}`)
+          .setLabel('⌫')
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(gameEnded || currentInput.length === 0 || (showFirstLetter && currentInput.length === 1))
+      );
+
+      // Bouton Valider (✓)
+      actionRow5.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`wordle_submit_${progress.id}`)
+          .setLabel('✓')
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(gameEnded || currentInput.length !== wordLength)
+      );
+
+      components.push(actionRow5);
+
+      return components;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎯 VÉRIFICATION D'UN MOT
+    // ═══════════════════════════════════════════════════════════════════════
+    const checkWord = (guessWord) => {
+      const guess = guessWord.toUpperCase();
+      const secret = secretWord.split('');
+      const result = Array(wordLength).fill('⬛');
+      const secretCopy = [...secret];
+
+      // Premier passage: trouver les lettres à la bonne position (🟩)
+      for (let i = 0; i < wordLength; i++) {
+        if (guess[i] === secret[i]) {
+          result[i] = '🟩';
+          secretCopy[i] = null; // Marquer comme utilisé
+          keyboardState[guess[i]] = 'correct';
+        }
+      }
+
+      // Deuxième passage: trouver les lettres présentes ailleurs (🟨)
+      for (let i = 0; i < wordLength; i++) {
+        if (result[i] === '🟩') continue;
+
+        const letterIndex = secretCopy.indexOf(guess[i]);
+        if (letterIndex !== -1) {
+          result[i] = '🟨';
+          secretCopy[letterIndex] = null;
+          if (keyboardState[guess[i]] !== 'correct') {
+            keyboardState[guess[i]] = 'present';
+          }
+        } else {
+          // Lettre absente
+          if (keyboardState[guess[i]] === 'unused') {
+            keyboardState[guess[i]] = 'absent';
+          }
+        }
+      }
+
+      return result;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ⭐ SYSTÈME D'ÉTOILES
+    // ═══════════════════════════════════════════════════════════════════════
+    const getStarRating = (attemptCount) => {
+      if (attemptCount === 1) return '⭐⭐⭐⭐⭐ GÉNIE !';
+      if (attemptCount === 2) return '⭐⭐⭐⭐ EXTRAORDINAIRE !';
+      if (attemptCount === 3) return '⭐⭐⭐ EXCELLENT !';
+      if (attemptCount === 4) return '⭐⭐ TRÈS BIEN !';
+      if (attemptCount === 5) return '⭐ BIEN JOUÉ !';
+      return '😅 DE JUSTESSE !';
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 📊 STATISTIQUES DE FIN
+    // ═══════════════════════════════════════════════════════════════════════
+    const getStatsBlock = (success, attemptCount) => {
+      const bars = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
+      let stats = '';
+
+      for (let i = 0; i < maxAttempts; i++) {
+        const isCurrentAttempt = success && attemptCount === i + 1;
+        const bar = isCurrentAttempt ? '🟩'.repeat(8) : '⬜'.repeat(8);
+        stats += `${bars[i]} ${bar}\n`;
+      }
+
+      return stats;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎮 CRÉATION DE L'EMBED PRINCIPAL - VERSION PREMIUM
+    // ═══════════════════════════════════════════════════════════════════════
+    const createGameEmbed = (statusMessage = null) => {
+      const remainingAttempts = maxAttempts - attempts.length;
+
+      // Gradient de couleur dynamique selon l'urgence
+      let color = '#3498DB'; // Bleu par défaut
+      let moodEmoji = '🎯';
+
+      if (remainingAttempts <= 1) {
+        color = '#E74C3C'; // Rouge critique
+        moodEmoji = '😱';
+      } else if (remainingAttempts <= 2) {
+        color = '#E67E22'; // Orange
+        moodEmoji = '😰';
+      } else if (remainingAttempts <= 3) {
+        color = '#F1C40F'; // Jaune
+        moodEmoji = '🤔';
+      } else if (remainingAttempts <= 4) {
+        color = '#2ECC71'; // Vert
+        moodEmoji = '😊';
+      }
+
+      // Légende des couleurs
+      const legend = `\n> 🟩 = Bonne lettre, bonne place\n> 🟨 = Bonne lettre, mauvaise place\n> ⬛ = Lettre absente`;
+
+      const embed = new EmbedBuilder()
+        .setTitle(`${moodEmoji} W O R D L E ${moodEmoji}`)
+        .setColor(color)
+        .setDescription(
+          createGridEmoji() + '\n' +
+          `\n${getHealthBar()}\n` +
+          (statusMessage ? `\n${statusMessage}\n` : '') +
+          (hint ? `\n💡 **Indice:** ||${hint}||\n` : '') +
+          legend
+        )
+        .addFields(
+          {
+            name: `${diffEmoji} ${diffLabel}`,
+            value: `**${wordLength} lettres** • ${maxAttempts} essais`,
+            inline: true
+          },
+          {
+            name: '⌨️ Comment jouer',
+            value: `• Clique sur les lettres du clavier\n• Ou tape un mot de ${wordLength} lettres dans le chat\n• *(X, Y, Z au clavier uniquement)*`,
+            inline: true
+          }
+        );
+
+      const timeLeft = Math.round(timeout / 1000);
+      embed.setFooter({
+        text: `⏱️ ${timeLeft}s • Essai ${attempts.length + 1}/${maxAttempts} • Lettres trouvées: ${Object.values(keyboardState).filter(s => s === 'correct').length}`
+      });
+
+      // Image de fond thématique
+      embed.setThumbnail('https://em-content.zobj.net/source/apple/391/green-square_1f7e9.png');
+
+      return embed;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎊 EMBED DE VICTOIRE - VERSION SPECTACULAIRE
+    // ═══════════════════════════════════════════════════════════════════════
+    const createVictoryEmbed = () => {
+      const attemptCount = attempts.length;
+      const rating = getStarRating(attemptCount);
+
+      // Grille finale avec les lettres révélées
+      let finalGrid = attempts.map((a, idx) => {
+        const isWinning = idx === attempts.length - 1;
+        const prefix = isWinning ? '🏆' : '　';
+        return `${prefix} ${a.result.join('')} ${a.word.split('').map(l => `**${l}**`).join(' ')}`;
+      }).join('\n');
+
+      // Effets visuels selon performance
+      let celebrationBanner;
+      let titleEmoji;
+      if (attemptCount === 1) {
+        celebrationBanner = '🌟✨🌟✨🌟✨🌟✨🌟✨🌟✨🌟';
+        titleEmoji = '👑';
+      } else if (attemptCount <= 2) {
+        celebrationBanner = '🎆🎇🎆🎇🎆🎇🎆🎇🎆';
+        titleEmoji = '🏆';
+      } else if (attemptCount <= 4) {
+        celebrationBanner = '🎉🎊🎉🎊🎉🎊🎉🎊🎉';
+        titleEmoji = '🎉';
+      } else {
+        celebrationBanner = '✅🟩✅🟩✅🟩✅🟩✅';
+        titleEmoji = '✅';
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(`${titleEmoji} VICTOIRE ! ${titleEmoji}`)
+        .setColor(attemptCount <= 2 ? '#FFD700' : attemptCount <= 4 ? '#2ECC71' : '#27AE60')
+        .setDescription(
+          `${celebrationBanner}\n\n` +
+          `## ${rating}\n\n` +
+          `🎯 **Le mot était:**\n` +
+          `\`\`\`fix\n${secretWord}\n\`\`\`\n` +
+          `**📜 Ton parcours:**\n${finalGrid}\n\n` +
+          `📊 **Distribution:**\n${getStatsBlock(true, attemptCount)}\n` +
+          `${celebrationBanner}`
+        )
+        .addFields(
+          { name: '🎯 Performance', value: `${attemptCount}/${maxAttempts} essais`, inline: true },
+          { name: '💯 Score', value: `${Math.round((1 - (attemptCount - 1) / maxAttempts) * 100)}%`, inline: true }
+        )
+        .setThumbnail('https://em-content.zobj.net/source/apple/391/trophy_1f3c6.png')
+        .setFooter({ text: '🎮 Wordle • Félicitations !' });
+
+      return embed;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 💀 EMBED DE DÉFAITE - VERSION DRAMATIQUE
+    // ═══════════════════════════════════════════════════════════════════════
+    const createDefeatEmbed = () => {
+      // Grille finale avec les lettres révélées
+      let finalGrid = attempts.map(a => {
+        return `　 ${a.result.join('')} ${a.word.split('').map(l => `**${l}**`).join(' ')}`;
+      }).join('\n');
+
+      // Révélation dramatique du mot
+      const secretReveal = secretWord.split('').map(l => `🟩**${l}**`).join(' ');
+
+      const embed = new EmbedBuilder()
+        .setTitle('💀 GAME OVER 💀')
+        .setColor('#8B0000')
+        .setDescription(
+          `⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛\n\n` +
+          `😔 **Si proche et pourtant si loin...**\n\n` +
+          `🔮 **Le mot secret était:**\n` +
+          `\`\`\`diff\n- ${secretWord}\n\`\`\`\n` +
+          `${secretReveal}\n\n` +
+          `**📜 Tes tentatives:**\n${finalGrid}\n\n` +
+          `📊 **Distribution:**\n${getStatsBlock(false, 0)}\n` +
+          `⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛`
+        )
+        .addFields(
+          { name: '🎯 Tentatives', value: `${attempts.length}/${maxAttempts}`, inline: true },
+          { name: '📝 Conseil', value: 'Commence par des mots avec beaucoup de voyelles !', inline: true }
+        )
+        .setThumbnail('https://em-content.zobj.net/source/apple/391/skull_1f480.png')
+        .setFooter({ text: '🎮 Wordle • Réessaye, tu peux y arriver !' });
+
+      return embed;
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 📤 ENVOI DU MESSAGE INITIAL
+    // ═══════════════════════════════════════════════════════════════════════
+    gameMessage = await interaction.channel.send({
+      embeds: [createGameEmbed()],
+      components: createKeyboard()
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🎮 COLLECTEURS D'INTERACTIONS
+    // ═══════════════════════════════════════════════════════════════════════
+    const buttonFilter = i =>
+      i.user.id === interaction.user.id &&
+      (i.customId.startsWith('wordle_key_') ||
+       i.customId.startsWith('wordle_delete_') ||
+       i.customId.startsWith('wordle_submit_'));
+
+    const messageFilter = m =>
+      m.author.id === interaction.user.id;
+
+    const buttonCollector = interaction.channel.createMessageComponentCollector({
+      filter: buttonFilter,
+      time: timeout
+    });
+
+    const messageCollector = interaction.channel.createMessageCollector({
+      filter: messageFilter,
+      time: timeout
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ⌨️ GESTION DES BOUTONS
+    // ═══════════════════════════════════════════════════════════════════════
+    buttonCollector.on('collect', async (i) => {
+      if (gameEnded) {
+        await i.deferUpdate().catch(() => {});
+        return;
+      }
+
+      const customId = i.customId;
+
+      // Bouton lettre
+      if (customId.startsWith('wordle_key_')) {
+        const letter = customId.split('_')[2];
+
+        // Ne pas dépasser 5 lettres
+        if (currentInput.length < wordLength) {
+          currentInput += letter;
+          console.log(`⌨️ [Wordle] Lettre ajoutée: ${letter} → "${currentInput}"`);
+        }
+
+        await i.update({
+          embeds: [createGameEmbed()],
+          components: createKeyboard()
+        }).catch(() => {});
+      }
+
+      // Bouton supprimer
+      else if (customId.startsWith('wordle_delete_')) {
+        // Si première lettre révélée, ne pas supprimer la première lettre
+        const minLength = showFirstLetter ? 1 : 0;
+        if (currentInput.length > minLength) {
+          currentInput = currentInput.slice(0, -1);
+          console.log(`⌫ [Wordle] Lettre supprimée → "${currentInput}"`);
+        }
+
+        await i.update({
+          embeds: [createGameEmbed()],
+          components: createKeyboard()
+        }).catch(() => {});
+      }
+
+      // Bouton valider
+      else if (customId.startsWith('wordle_submit_')) {
+        await processSubmission(i);
+      }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 📝 GESTION DES MESSAGES TEXTE
+    // ═══════════════════════════════════════════════════════════════════════
+    messageCollector.on('collect', async (message) => {
+      if (gameEnded) return;
+
+      const input = message.content.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+      // Supprimer le message
+      try { await message.delete(); } catch (e) {}
+
+      // Une seule lettre: ajouter à la saisie
+      if (input.length === 1 && /^[A-Z]$/.test(input)) {
+        if (currentInput.length < wordLength) {
+          currentInput += input;
+          console.log(`📝 [Wordle] Lettre tapée: ${input} → "${currentInput}"`);
+
+          await gameMessage.edit({
+            embeds: [createGameEmbed()],
+            components: createKeyboard()
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      // Mot de 5 lettres: soumettre directement
+      if (input.length === wordLength && /^[A-Z]+$/.test(input)) {
+        currentInput = input;
+        await processSubmission(null);
+      }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ✅ TRAITEMENT DE LA SOUMISSION
+    // ═══════════════════════════════════════════════════════════════════════
+    const processSubmission = async (buttonInteraction) => {
+      if (currentInput.length !== wordLength) {
+        if (buttonInteraction) {
+          await buttonInteraction.update({
+            embeds: [createGameEmbed(`⚠️ Le mot doit faire ${wordLength} lettres !`)],
+            components: createKeyboard()
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      // Vérifier le mot
+      const guess = currentInput;
+      const result = checkWord(guess);
+
+      attempts.push({ word: guess, result });
+      console.log(`🎯 [Wordle] Tentative ${attempts.length}: "${guess}" → ${result.join('')}`);
+
+      // Victoire ?
+      if (result.every(r => r === '🟩')) {
+        gameEnded = true;
+        buttonCollector.stop('victory');
+        messageCollector.stop('victory');
+        return;
+      }
+
+      // Défaite ?
+      if (attempts.length >= maxAttempts) {
+        gameEnded = true;
+        buttonCollector.stop('defeat');
+        messageCollector.stop('defeat');
+        return;
+      }
+
+      // Continuer - reset saisie (garder première lettre si option activée)
+      currentInput = showFirstLetter ? secretWord[0] : '';
+
+      if (buttonInteraction) {
+        await buttonInteraction.update({
+          embeds: [createGameEmbed()],
+          components: createKeyboard()
+        }).catch(() => {});
+      } else {
+        await gameMessage.edit({
+          embeds: [createGameEmbed()],
+          components: createKeyboard()
+        }).catch(() => {});
+      }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 🏁 GESTION DE FIN DE PARTIE
+    // ═══════════════════════════════════════════════════════════════════════
+    const handleGameEnd = async (reason) => {
+      gameEnded = true;
+
+      // Désactiver le clavier
+      try {
+        await gameMessage.edit({
+          embeds: [gameMessage.embeds[0]],
+          components: []
+        });
+      } catch (e) {}
+
+      if (reason === 'victory') {
+        console.log(`✅ [Wordle] Victoire en ${attempts.length} essai(s) !`);
+
+        // Sauvegarder le game_state (le status sera mis à jour par completeMission)
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            secretWord,
+            attempts: attempts.map(a => ({ word: a.word, result: a.result })),
+            success: true,
+            attemptCount: attempts.length
+          }), progress.id]
+        );
+
+        await interaction.channel.send({ embeds: [createVictoryEmbed()] });
+
+        // Utiliser completeMission qui gère : status, récompense, annonce, badges, archivage
+        await this.completeMission(interaction, mission, player, progress, null);
+
+      } else if (reason === 'defeat') {
+        console.log(`❌ [Wordle] Défaite - le mot était "${secretWord}"`);
+
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, status = 'failed', updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            secretWord,
+            attempts: attempts.map(a => ({ word: a.word, result: a.result })),
+            success: false,
+            reason: 'out_of_attempts'
+          }), progress.id]
+        );
+
+        await interaction.channel.send({ embeds: [createDefeatEmbed()] });
+
+        await announcements.announceMissionFailed(
+          interaction.client,
+          guildId,
+          interaction.user.username,
+          mission.name,
+          'Plus d\'essais'
+        );
+
+        setTimeout(async () => {
+          try {
+            await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+            await interaction.channel.setArchived(true);
+          } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+        }, 5000);
+
+      } else {
+        // Timeout
+        console.log(`⏰ [Wordle] Timeout après ${attempts.length} essai(s)`);
+
+        await db.query(
+          `UPDATE mission_progress SET game_state = $1, status = 'failed', updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify({
+            secretWord,
+            attempts: attempts.map(a => ({ word: a.word, result: a.result })),
+            success: false,
+            reason: 'timeout'
+          }), progress.id]
+        );
+
+        const timeoutEmbed = new EmbedBuilder()
+          .setTitle('⏰ Temps écoulé !')
+          .setColor('#E74C3C')
+          .setDescription(
+            `Le mot était: **${secretWord}**\n\n` +
+            `Tu avais fait ${attempts.length} essai${attempts.length > 1 ? 's' : ''}.`
+          )
+          .setFooter({ text: 'Le thread se ferme dans 5 secondes...' });
+
+        await interaction.channel.send({ embeds: [timeoutEmbed] });
+
+        await announcements.announceMissionFailed(
+          interaction.client,
+          guildId,
+          interaction.user.username,
+          mission.name,
+          'Temps écoulé'
+        );
+
+        setTimeout(async () => {
+          try {
+            await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+            await interaction.channel.setArchived(true);
+          } catch (error) { console.warn('⚠️ Impossible d\'archiver le thread'); }
+        }, 5000);
+      }
+    };
+
+    buttonCollector.on('end', (_, reason) => {
+      if (reason !== 'victory' && reason !== 'defeat') {
+        messageCollector.stop(reason);
+      }
+      handleGameEnd(reason);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🔧 ADMIN PANEL WORDLE - GESTION DES MOTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Afficher la liste des mots Wordle configurés
+   */
+  async handleWordleWordsManagement(interaction, page = 0) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    return this._displayWordleWordsList(interaction, guildId, missionId, page);
+  }
+
+  /**
+   * Afficher la liste paginée des mots Wordle
+   */
+  async _displayWordleWordsList(interaction, guildId, missionId, page = 0) {
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({ content: '❌ Aucun thème actif.', embeds: [], components: [] });
+    }
+
+    // Récupérer les mots
+    const allWords = await db.queryAll(
+      `SELECT * FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3 ORDER BY created_at DESC`,
+      [guildId, missionId, theme.id]
+    );
+
+    const itemsPerPage = 10;
+    const totalPages = Math.max(1, Math.ceil(allWords.length / itemsPerPage));
+    const currentPage = Math.min(page, totalPages - 1);
+    const pageWords = allWords.slice(currentPage * itemsPerPage, (currentPage + 1) * itemsPerPage);
+
+    // Construire l'embed
+    let wordsList = pageWords.length > 0
+      ? pageWords.map((w, idx) => {
+          const wordUpper = w.correct_answer?.toUpperCase() || '???';
+          const hintPart = w.hint ? ` - *${w.hint.substring(0, 30)}*` : '';
+          return `\`${currentPage * itemsPerPage + idx + 1}.\` **${wordUpper}**${hintPart}`;
+        }).join('\n')
+      : '*Aucun mot configuré*';
+
+    const embed = new EmbedBuilder()
+      .setTitle('🟩 Mots Wordle')
+      .setDescription(
+        `📊 **${allWords.length}** mot(s) configuré(s)\n` +
+        `📝 *Les mots doivent faire exactement 5 lettres*\n\n` +
+        wordsList
+      )
+      .setColor('#2ECC71')
+      .setFooter({ text: `Page ${currentPage + 1}/${totalPages} • Thème: ${theme.name}` });
+
+    // Boutons de navigation et actions
+    const navRow = new ActionRowBuilder();
+
+    // Bouton page précédente
+    navRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_words_page_${missionId}_${currentPage - 1}`)
+        .setLabel('◀')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0)
+    );
+
+    // Bouton ajouter
+    navRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_word_add_${missionId}`)
+        .setLabel('➕ Ajouter')
+        .setStyle(ButtonStyle.Success)
+    );
+
+    // Bouton supprimer
+    navRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_word_delete_select_${missionId}`)
+        .setLabel('🗑️ Supprimer')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(allWords.length === 0)
+    );
+
+    // Bouton page suivante
+    navRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_words_page_${missionId}_${currentPage + 1}`)
+        .setLabel('▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage >= totalPages - 1)
+    );
+
+    // Bouton retour
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('🔙 Retour à la mission')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [navRow, backRow]
+    });
+  }
+
+  /**
+   * Navigation entre les pages de la liste des mots Wordle
+   */
+  async handleWordleWordsPage(interaction) {
+    await interaction.deferUpdate();
+
+    // customId: wordle_words_page_123_0
+    const parts = interaction.customId.split('_');
+    const page = parseInt(parts.pop());
+    const missionId = parseInt(parts.pop());
+    const guildId = interaction.guildId;
+
+    return this._displayWordleWordsList(interaction, guildId, missionId, page);
+  }
+
+  /**
+   * Ajouter un mot Wordle - Flow interactif
+   * Étape 1: Choisir la difficulté (détermine la longueur du mot)
+   *   - Facile = 5 lettres
+   *   - Moyen = 6 lettres
+   *   - Difficile = 7 lettres
+   * Étape 2: Saisir le mot (selon la longueur de la difficulté)
+   * Étape 3: Saisir un indice (optionnel)
+   */
+  async handleWordleWordAdd(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({ content: '❌ Aucun thème actif.', embeds: [], components: [] });
+    }
+
+    // Récupérer la config des essais par difficulté
+    const mission = await db.queryOne(
+      `SELECT validation_data FROM missions WHERE id = $1 AND guild_id = $2`,
+      [missionId, guildId]
+    );
+    let validationData = mission?.validation_data || {};
+    if (typeof validationData === 'string') {
+      try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+    }
+
+    // Défauts logiques: plus c'est difficile, moins d'essais
+    const easyAttempts = validationData.easy_attempts || 8;    // Facile = 8 essais
+    const mediumAttempts = validationData.medium_attempts || 6; // Moyen = 6 essais
+    const hardAttempts = validationData.hard_attempts || 4;    // Difficile = 4 essais
+
+    // Étape 1: Choisir la difficulté
+    const step1Embed = new EmbedBuilder()
+      .setTitle('🟩 Ajouter un Mot Wordle - Étape 1/3')
+      .setDescription(
+        '**Choisis la difficulté du mot :**\n\n' +
+        `🟢 **Facile** = **5 lettres** (${easyAttempts} essais)\n` +
+        `🟡 **Moyen** = **6 lettres** (${mediumAttempts} essais)\n` +
+        `🔴 **Difficile** = **7 lettres** (${hardAttempts} essais)\n\n` +
+        '💡 La difficulté détermine le nombre de lettres que le mot doit avoir.'
+      )
+      .setColor('#2ECC71')
+      .setFooter({ text: 'Clique sur un bouton pour choisir' });
+
+    const difficultyButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_diff_easy_${missionId}`)
+        .setLabel('🟢 Facile (5 lettres)')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`wordle_diff_medium_${missionId}`)
+        .setLabel('🟡 Moyen (6 lettres)')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`wordle_diff_hard_${missionId}`)
+        .setLabel('🔴 Difficile (7 lettres)')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    const cancelRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_add_cancel_${missionId}`)
+        .setLabel('❌ Annuler')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.editReply({
+      content: '',
+      embeds: [step1Embed],
+      components: [difficultyButtons, cancelRow]
+    });
+
+    // Collecter le choix de difficulté
+    const diffCollector = interaction.channel.createMessageComponentCollector({
+      filter: i => i.user.id === interaction.user.id &&
+        (i.customId.startsWith('wordle_diff_') || i.customId.startsWith('wordle_add_cancel_')),
+      time: 60000,
+      max: 1
+    });
+
+    diffCollector.on('collect', async (diffInteraction) => {
+      await diffInteraction.deferUpdate();
+
+      // Annulation
+      if (diffInteraction.customId.startsWith('wordle_add_cancel_')) {
+        return this._displayWordleWordsList(diffInteraction, guildId, missionId, 0);
+      }
+
+      const difficulty = diffInteraction.customId.includes('_easy_') ? 'easy' :
+                        diffInteraction.customId.includes('_hard_') ? 'hard' : 'medium';
+
+      // Longueur du mot selon la difficulté
+      const wordLength = difficulty === 'easy' ? 5 : difficulty === 'hard' ? 7 : 6;
+      const diffEmoji = difficulty === 'easy' ? '🟢' : difficulty === 'hard' ? '🔴' : '🟡';
+      const diffLabel = difficulty === 'easy' ? 'Facile' : difficulty === 'hard' ? 'Difficile' : 'Moyen';
+
+      // Étape 2: Demander le mot avec la bonne longueur
+      const step2Embed = new EmbedBuilder()
+        .setTitle('🟩 Ajouter un Mot Wordle - Étape 2/3')
+        .setDescription(
+          `${diffEmoji} Difficulté : **${diffLabel}**\n\n` +
+          `**Envoie le mot à ajouter** (exactement **${wordLength} lettres**)\n\n` +
+          `💡 Ex: ${wordLength === 5 ? '`PIANO`, `MAGIE`, `LIVRE`' :
+                   wordLength === 6 ? '`BALLON`, `CHEVAL`, `JARDIN`' :
+                   '`CHATEAU`, `PORTAIL`, `GRIFFON`'}\n\n` +
+          '⏱️ Tu as 2 minutes pour répondre.'
+        )
+        .setColor('#F39C12')
+        .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+      await interaction.editReply({
+        content: '',
+        embeds: [step2Embed],
+        components: []
+      });
+
+      const filter = m => m.author.id === interaction.user.id;
+
+      try {
+        const wordCollected = await interaction.channel.awaitMessages({
+          filter,
+          max: 1,
+          time: 120000,
+          errors: ['time']
+        });
+
+        const wordInput = wordCollected.first().content.trim();
+        try { await wordCollected.first().delete(); } catch (e) {}
+
+        if (wordInput.toLowerCase() === 'annuler') {
+          return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+        }
+
+        // Normaliser et valider le mot
+        const word = wordInput.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const cleanWord = word.replace(/[^A-Z]/g, '');
+
+        // Vérifier la longueur selon la difficulté
+        if (cleanWord.length !== wordLength) {
+          await interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setTitle('❌ Mot invalide')
+              .setDescription(
+                `${diffEmoji} **${diffLabel}** nécessite exactement **${wordLength} lettres**.\n\n` +
+                `"${word}" a **${cleanWord.length}** lettre(s).`
+              )
+              .setColor('#E74C3C')
+            ]
+          });
+          await this.sleep(2000);
+          return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+        }
+
+        // Vérifier si le mot existe déjà
+        const existingWord = await db.queryOne(
+          `SELECT id FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3 AND UPPER(correct_answer) = $4`,
+          [guildId, missionId, theme.id, cleanWord]
+        );
+
+        if (existingWord) {
+          await interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setTitle('❌ Mot déjà existant')
+              .setDescription(`Le mot **${cleanWord}** existe déjà dans cette mission.`)
+              .setColor('#E74C3C')
+            ]
+          });
+          await this.sleep(2000);
+          return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+        }
+
+        // Étape 3: Demander un indice
+        const step3Embed = new EmbedBuilder()
+          .setTitle('🟩 Ajouter un Mot Wordle - Étape 3/3')
+          .setDescription(
+            `${diffEmoji} Difficulté : **${diffLabel}**\n` +
+            `✅ Mot : **${cleanWord}** (${wordLength} lettres)\n\n` +
+            '**Envoie un indice** pour aider les joueurs (optionnel).\n\n' +
+            '💡 Ex: "Instrument de musique", "Animal magique", etc.\n\n' +
+            '⏱️ Tu as 2 minutes. Tape **"aucun"** pour ne pas mettre d\'indice.'
+          )
+          .setColor('#9B59B6')
+          .setFooter({ text: 'Tape "annuler" pour annuler' });
+
+        await interaction.editReply({
+          content: '',
+          embeds: [step3Embed],
+          components: []
+        });
+
+        const hintCollected = await interaction.channel.awaitMessages({
+          filter,
+          max: 1,
+          time: 120000,
+          errors: ['time']
+        });
+
+        const hintInput = hintCollected.first().content.trim();
+        try { await hintCollected.first().delete(); } catch (e) {}
+
+        if (hintInput.toLowerCase() === 'annuler') {
+          return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+        }
+
+        const hint = hintInput.toLowerCase() === 'aucun' ? null : hintInput.substring(0, 100);
+
+        // Sauvegarder le mot dans quiz_questions
+        await db.query(
+          `INSERT INTO quiz_questions (guild_id, theme_id, mission_id, question_text, correct_answer, hint, difficulty)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [guildId, theme.id, missionId, `Wordle: ${cleanWord}`, cleanWord, hint, difficulty]
+        );
+
+        // Mettre à jour validation_data avec le compteur de mots
+        const wordsCount = await db.queryOne(
+          `SELECT COUNT(*) as count FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3`,
+          [guildId, missionId, theme.id]
+        );
+
+        await db.query(
+          `UPDATE missions SET validation_data = validation_data || $1::jsonb WHERE id = $2 AND guild_id = $3`,
+          [JSON.stringify({ words_count: parseInt(wordsCount.count) }), missionId, guildId]
+        );
+
+        console.log(`✅ [Wordle] Mot "${cleanWord}" (${difficulty}, ${wordLength} lettres) ajouté à la mission #${missionId}`);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Mot Wordle Ajouté !')
+          .setDescription(
+            `${diffEmoji} **${cleanWord}** (${wordLength} lettres - ${diffLabel})\n` +
+            `${hint ? `💡 Indice: ${hint}\n` : ''}` +
+            `📊 Total: **${wordsCount.count}** mot(s)`
+          )
+          .setColor('#2ECC71');
+
+        await interaction.editReply({
+          embeds: [successEmbed],
+          components: []
+        });
+
+        // Retourner à la liste après 2 secondes
+        await this.sleep(2000);
+        return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+
+      } catch (error) {
+        console.error('❌ Erreur lors de l\'ajout du mot wordle:', error);
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('⏱️ Temps écoulé')
+            .setDescription('La création du mot a été annulée.')
+            .setColor('#E74C3C')
+          ],
+          components: []
+        });
+        await this.sleep(2000);
+        return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+      }
+    });
+
+    diffCollector.on('end', async (collected, reason) => {
+      if (reason === 'time' && collected.size === 0) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('⏱️ Temps écoulé')
+            .setDescription('La création du mot a été annulée.')
+            .setColor('#E74C3C')
+          ],
+          components: []
+        });
+        await this.sleep(2000);
+        return this._displayWordleWordsList(interaction, guildId, missionId, 0);
+      }
+    });
+  }
+
+  /**
+   * Afficher le select pour supprimer un mot Wordle
+   */
+  async handleWordleWordDeleteSelect(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const theme = await db.getActiveTheme(guildId);
+    if (!theme) {
+      return interaction.editReply({ content: '❌ Aucun thème actif.', embeds: [], components: [] });
+    }
+
+    const words = await db.queryAll(
+      `SELECT id, correct_answer, hint FROM quiz_questions
+       WHERE guild_id = $1 AND mission_id = $2 AND theme_id = $3
+       ORDER BY created_at DESC LIMIT 25`,
+      [guildId, missionId, theme.id]
+    );
+
+    if (words.length === 0) {
+      return interaction.editReply({
+        content: '❌ Aucun mot à supprimer.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`select_wordle_delete_${missionId}`)
+      .setPlaceholder('Sélectionne un mot à supprimer')
+      .addOptions(words.map(w => ({
+        label: w.correct_answer?.toUpperCase() || '???',
+        value: w.id.toString(),
+        description: w.hint ? w.hint.substring(0, 50) : 'Aucun indice'
+      })));
+
+    const embed = new EmbedBuilder()
+      .setTitle('🗑️ Supprimer un mot Wordle')
+      .setDescription('Sélectionne le mot que tu veux supprimer.')
+      .setColor('#E74C3C');
+
+    const cancelButton = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_wordle_words_${missionId}`)
+        .setLabel('🔙 Annuler')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        cancelButton
+      ]
+    });
+  }
+
+  /**
+   * Supprimer un mot Wordle après sélection
+   */
+  async handleWordleWordDelete(interaction) {
+    await interaction.deferReply({ flags: 64 });
+
+    const wordId = parseInt(interaction.values[0]);
+    const guildId = interaction.guildId;
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    // Récupérer le mot avant suppression
+    const word = await db.queryOne(
+      'SELECT correct_answer FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [wordId, guildId]
+    );
+
+    // Supprimer
+    await db.query(
+      'DELETE FROM quiz_questions WHERE id = $1 AND guild_id = $2',
+      [wordId, guildId]
+    );
+
+    console.log(`🗑️ [Wordle] Mot "${word?.correct_answer}" #${wordId} supprimé`);
+
+    // Mettre à jour le compteur
+    const count = await db.queryOne(
+      `SELECT COUNT(*) as count FROM quiz_questions WHERE guild_id = $1 AND mission_id = $2`,
+      [guildId, missionId]
+    );
+
+    await db.query(
+      `UPDATE missions SET validation_data = validation_data || $1::jsonb WHERE id = $2 AND guild_id = $3`,
+      [JSON.stringify({ words_count: parseInt(count.count) }), missionId, guildId]
+    );
+
+    await interaction.editReply({
+      content: `✅ Mot **${word?.correct_answer?.toUpperCase() || ''}** supprimé !`
+    });
+
+    // Retourner à la liste
+    const fakeInteraction = {
+      ...interaction,
+      customId: `mission_wordle_words_${missionId}`,
+      deferUpdate: async () => {},
+      editReply: interaction.message.edit.bind(interaction.message)
+    };
+
+    return this._displayWordleWordsList(fakeInteraction, guildId, missionId, 0);
+  }
+
+  /**
+   * Toggle l'option "première lettre révélée" pour Wordle
+   */
+  async handleWordleFirstLetterToggle(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const mission = await db.queryOne(
+      'SELECT * FROM missions WHERE id = $1 AND guild_id = $2',
+      [missionId, guildId]
+    );
+
+    if (!mission) {
+      return interaction.editReply({ content: '❌ Mission introuvable.', embeds: [], components: [] });
+    }
+
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+    }
+    validationData = validationData || {};
+
+    const newValue = !validationData.show_first_letter;
+    validationData.show_first_letter = newValue;
+
+    await db.query(
+      `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+      [JSON.stringify(validationData), missionId, guildId]
+    );
+
+    console.log(`🔤 [Wordle] Mission #${missionId} - 1ère lettre: ${newValue ? 'révélée' : 'cachée'}`);
+
+    // Rafraîchir la vue de la mission
+    const adminPanelHandler = require('./adminPanelHandler');
+    const modifiedInteraction = Object.create(interaction);
+    modifiedInteraction.customId = `select_mission_${missionId}`;
+    modifiedInteraction.values = null;
+    modifiedInteraction.deferUpdate = async () => {};
+
+    return adminPanelHandler.handleMissionSelection(modifiedInteraction);
+  }
+
+  /**
+   * Configurer le nombre d'essais PAR DIFFICULTÉ pour une mission Wordle
+   * - Facile (5 lettres): easy_attempts
+   * - Moyen (6 lettres): medium_attempts
+   * - Difficile (7 lettres): hard_attempts
+   */
+  async handleWordleAttemptsConfig(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+    const guildId = interaction.guildId;
+
+    const mission = await db.queryOne(
+      'SELECT * FROM missions WHERE id = $1 AND guild_id = $2',
+      [missionId, guildId]
+    );
+
+    if (!mission) {
+      return interaction.editReply({ content: '❌ Mission introuvable.', embeds: [], components: [] });
+    }
+
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+    }
+    validationData = validationData || {};
+
+    // Défauts logiques: plus c'est difficile, moins d'essais
+    const easyAttempts = validationData.easy_attempts || 8;    // Facile = 8 essais
+    const mediumAttempts = validationData.medium_attempts || 6; // Moyen = 6 essais
+    const hardAttempts = validationData.hard_attempts || 4;    // Difficile = 4 essais
+
+    // Afficher le menu de sélection de difficulté
+    const embed = new EmbedBuilder()
+      .setTitle('🎯 Configurer les essais par difficulté')
+      .setDescription(
+        '**Chaque difficulté a son propre nombre d\'essais:**\n\n' +
+        `🟢 **Facile** (5 lettres) : **${easyAttempts}** essais\n` +
+        `🟡 **Moyen** (6 lettres) : **${mediumAttempts}** essais\n` +
+        `🔴 **Difficile** (7 lettres) : **${hardAttempts}** essais\n\n` +
+        '*Clique sur une difficulté pour modifier le nombre d\'essais.*'
+      )
+      .setColor('#9B59B6');
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_cfg_easy_${missionId}`)
+        .setLabel(`🟢 Facile: ${easyAttempts} essais`)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`wordle_cfg_medium_${missionId}`)
+        .setLabel(`🟡 Moyen: ${mediumAttempts} essais`)
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`wordle_cfg_hard_${missionId}`)
+        .setLabel(`🔴 Difficile: ${hardAttempts} essais`)
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`select_mission_${missionId}`)
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [row1, row2]
+    });
+  }
+
+  /**
+   * Afficher les options d'essais pour une difficulté spécifique
+   */
+  async handleWordleAttemptsDifficultySelect(interaction) {
+    await interaction.deferUpdate();
+
+    // customId: wordle_cfg_easy_123 / wordle_cfg_medium_123 / wordle_cfg_hard_123
+    const parts = interaction.customId.split('_');
+    const missionId = parseInt(parts.pop());
+    const difficulty = parts[2]; // easy, medium, hard
+    const guildId = interaction.guildId;
+
+    const mission = await db.queryOne(
+      'SELECT * FROM missions WHERE id = $1 AND guild_id = $2',
+      [missionId, guildId]
+    );
+
+    if (!mission) {
+      return interaction.editReply({ content: '❌ Mission introuvable.', embeds: [], components: [] });
+    }
+
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+    }
+    validationData = validationData || {};
+
+    const currentAttempts = validationData[`${difficulty}_attempts`] || 6;
+
+    const diffEmoji = difficulty === 'easy' ? '🟢' : difficulty === 'hard' ? '🔴' : '🟡';
+    const diffLabel = difficulty === 'easy' ? 'Facile (5 lettres)' :
+                      difficulty === 'hard' ? 'Difficile (7 lettres)' : 'Moyen (6 lettres)';
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${diffEmoji} Essais pour ${diffLabel}`)
+      .setDescription(
+        `**Valeur actuelle:** ${currentAttempts} essais\n\n` +
+        '*Sélectionne le nouveau nombre d\'essais:*'
+      )
+      .setColor(difficulty === 'easy' ? '#2ECC71' : difficulty === 'hard' ? '#E74C3C' : '#F39C12');
+
+    // Ligne 1: 3, 4, 5, 6, 7
+    const row1 = new ActionRowBuilder().addComponents(
+      [3, 4, 5, 6, 7].map(n =>
+        new ButtonBuilder()
+          .setCustomId(`wordle_set_${difficulty}_${missionId}_${n}`)
+          .setLabel(`${n}`)
+          .setStyle(currentAttempts === n ? ButtonStyle.Success : ButtonStyle.Secondary)
+      )
+    );
+
+    // Ligne 2: 8, 9, 10 + Retour
+    const row2 = new ActionRowBuilder().addComponents(
+      [8, 9, 10].map(n =>
+        new ButtonBuilder()
+          .setCustomId(`wordle_set_${difficulty}_${missionId}_${n}`)
+          .setLabel(`${n}`)
+          .setStyle(currentAttempts === n ? ButtonStyle.Success : ButtonStyle.Secondary)
+      )
+    );
+
+    row2.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mission_wordle_attempts_${missionId}`)
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '',
+      embeds: [embed],
+      components: [row1, row2]
+    });
+  }
+
+  /**
+   * Définir le nombre d'essais pour une difficulté spécifique
+   */
+  async handleWordleSetAttempts(interaction) {
+    await interaction.deferUpdate();
+
+    // customId: wordle_set_easy_123_6 / wordle_set_medium_123_5 / wordle_set_hard_123_4
+    const parts = interaction.customId.split('_');
+    const newAttempts = parseInt(parts.pop());
+    const missionId = parseInt(parts.pop());
+    const difficulty = parts[2]; // easy, medium, hard
+    const guildId = interaction.guildId;
+
+    const mission = await db.queryOne(
+      'SELECT * FROM missions WHERE id = $1 AND guild_id = $2',
+      [missionId, guildId]
+    );
+
+    if (!mission) {
+      return interaction.editReply({ content: '❌ Mission introuvable.', embeds: [], components: [] });
+    }
+
+    let validationData = mission.validation_data;
+    if (typeof validationData === 'string') {
+      try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+    }
+    validationData = validationData || {};
+
+    validationData[`${difficulty}_attempts`] = newAttempts;
+
+    await db.query(
+      `UPDATE missions SET validation_data = $1 WHERE id = $2 AND guild_id = $3`,
+      [JSON.stringify(validationData), missionId, guildId]
+    );
+
+    const diffLabel = difficulty === 'easy' ? 'Facile' : difficulty === 'hard' ? 'Difficile' : 'Moyen';
+    console.log(`🎯 [Wordle] Mission #${missionId} - ${diffLabel}: ${newAttempts} essais`);
+
+    // Retourner au menu principal des essais
+    const modifiedInteraction = Object.create(interaction);
+    modifiedInteraction.customId = `mission_wordle_attempts_${missionId}`;
+    modifiedInteraction.deferUpdate = async () => {};
+
+    return this.handleWordleAttemptsConfig(modifiedInteraction);
   }
 }
 

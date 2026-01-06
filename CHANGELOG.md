@@ -5,9 +5,97 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.2.0] - 2026-01-06
+
+### 🐛 Fixed
+
+- **[Missions Hangman/Wordle - Récompenses et Annonces]**: Correction critique du système de récompenses (2026-01-06)
+  - **Bug corrigé**: Les missions Hangman et Wordle ne donnaient PAS de récompenses et n'envoyaient AUCUNE annonce de complétion
+  - **Cause racine**: Appel à `grantMissionReward()` qui n'existait pas, causant des échecs silencieux
+  - **Solution**: Remplacement par `completeMission()` qui gère correctement :
+    - ✅ Mise à jour du status mission → 'completed'
+    - ✅ Attribution des récompenses (collectibles)
+    - ✅ Envoi des annonces de complétion
+    - ✅ Déblocage des badges associés
+    - ✅ Archivage du thread de mission
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js`:
+      - Lignes 333-341: Passage du paramètre `player` à validateHangman/validateWordle
+      - Ligne 1805: Signature updatee `validateHangman(interaction, mission, player, progress)`
+      - Lignes 2280-2299: Remplacement grantMissionReward par completeMission pour Hangman
+      - Ligne 6569: Signature updatee `validateWordle(interaction, mission, player, progress)`
+      - Lignes 7271-7288: Remplacement grantMissionReward par completeMission pour Wordle
+
 ## [Non publié]
 
 ### ✨ Added
+
+- **[Mission Wordle - Système de Difficulté Avancé]**: Refonte complète du système Wordle avec difficultés par longueur de mot (2026-01-05)
+  - **Système de difficulté intelligent**:
+    - 🟢 **Facile** = 5 lettres (défaut: 8 essais, configurable 3-10)
+    - 🟡 **Moyen** = 6 lettres (défaut: 6 essais, configurable 3-10)
+    - 🔴 **Difficile** = 7 lettres (défaut: 4 essais, configurable 3-10)
+    - Logique inversée: plus c'est difficile, moins d'essais
+    - Choix de la difficulté EN PREMIER lors de l'ajout d'un mot
+    - Validation automatique de la longueur selon la difficulté choisie
+  - **Configuration des essais par difficulté**:
+    - `easy_attempts`, `medium_attempts`, `hard_attempts` dans validation_data
+    - Interface de configuration avec 3 boutons par difficulté
+    - Chaque difficulté peut avoir un nombre d'essais différent
+  - **Gameplay adaptatif**:
+    - Le jeu récupère la difficulté du mot choisi aléatoirement
+    - Le nombre d'essais dépend de la difficulté du mot
+    - Affichage clair de la difficulté et longueur dans l'embed de jeu
+  - **Interface mise à jour**:
+    - Embed admin avec explication complète du système
+    - Bouton "🎯 Essais par difficulté" pour configurer les 3 valeurs
+    - Répartition des mots par difficulté et longueur
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js`: handleWordleWordAdd(), validateWordle(), handleWordleAttemptsConfig(), handleWordleAttemptsDifficultySelect(), handleWordleSetAttempts()
+    - `handlers/adminPanelHandler.js`: embed wordle, bouton essais, validation longueur
+    - `events/interactionCreate.js`: routing wordle_cfg_, wordle_set_, wordle_add_cancel_
+
+- **[Mission Wordle - Jeu Premium]**: Nouveau mini-jeu Wordle avec interface graphique exceptionnelle (2026-01-05)
+  - **Gameplay complet**:
+    - Mots de 5-7 lettres selon difficulté, essais configurables
+    - Système de couleurs: 🟩 (bonne position), 🟨 (présent ailleurs), ⬛ (absent)
+    - Support clavier virtuel alphabétique interactif + saisie texte (X, Y, Z au clavier)
+    - Option "première lettre révélée" pour faciliter
+  - **Interface graphique premium**:
+    - Grille visuelle avec effets animés selon progression
+    - Barre de vie dynamique avec couleurs urgence (vert → jaune → rouge)
+    - Emojis d'ambiance adaptatifs (😊 → 🤔 → 😰 → 😱)
+    - Légende des couleurs intégrée + indice en spoiler
+  - **Embeds spectaculaires**:
+    - Victoire: Bannière célébration, étoiles performance, distribution stats
+    - Défaite: Révélation dramatique, conseils pour améliorer
+    - Score en pourcentage + compteur lettres trouvées
+  - **Admin Panel complet**:
+    - Création mission via modal (nom, description, récompense, timeout)
+    - Gestion des mots: ajout (3 étapes), suppression, pagination
+    - Configuration difficulté + essais par difficulté
+    - Toggle première lettre révélée
+    - Affichage statistiques par difficulté
+
+- **[Portfolio - Synchronisation Dynamique Complète]**: Toutes les sections du portfolio utilisent maintenant des données LIVE (2026-01-04)
+  - **Données dynamiques pour TOUTES les sections**:
+    - Pinned embed: Tagline synchronisée avec nombre de tables/badges réels
+    - Overview: Highlights dynamiques avec métriques LIVE
+    - Features: Nombre de missions, badges, quiz questions en temps réel
+    - Stack: Nombre de tables DB mis à jour automatiquement
+    - Stats LIVE: Déjà dynamique (session précédente)
+  - **Métrique principale**: Mystery Boxes ouvertes (calculé depuis `give_logs`)
+  - **10 métriques secondaires**: Joueurs, Badges débloqués, Missions complétées, Pièges déclenchés/bloqués, Collectibles en circulation, Thèmes, Légendaires, Super Bonus utilisés, Loomix en circulation
+  - **Nouvelles fonctions async**:
+    - `buildPinnedEmbedAsync()`: Embed pinned avec données LIVE
+    - `buildOverviewEmbedAsync()`: Aperçu avec highlights dynamiques
+    - `buildFeaturesEmbedAsync()`: Features avec compteurs temps réel
+    - `buildStackEmbedAsync()`: Stack technique avec nombre de tables actuel
+    - `generateProjectPostAsync()`: Post complet avec données fraîches
+  - **Indicateur 🔴 LIVE**: Affiché dans le footer de toutes les sections dynamiques
+  - **Fichiers modifiés**:
+    - `handlers/portfolioHandler.js` (ajout de 5 builders async, mise à jour handler)
+    - `portfolio/queries/mysterybox.queries.js` (`fetchFullPortfolioData()` pour sync complète)
 
 - **[Leaderboard Complet]**: Refonte complète du système de classement avec pagination (2026-01-03)
   - **11 types de classement** disponibles:
