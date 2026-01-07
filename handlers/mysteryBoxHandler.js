@@ -1443,6 +1443,12 @@ class MysteryBoxHandler {
 
     await interaction.followUp({ embeds: [revealEmbed], flags: 64 });
 
+    // Message éphémère avec le LIEN DIRECT vers le thread
+    await interaction.followUp({
+      content: `🔗 **Accède à ta mission ici:** <#${thread.id}>`,
+      flags: 64
+    });
+
     // Message mystérieux dans le thread
     // Convertir le timeout en unité appropriée
     const timeoutSeconds = mission.timeout || 300;

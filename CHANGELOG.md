@@ -5,6 +5,18 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.3.6] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Missions - Lien Thread Manquant]**: Ajout du lien direct vers le thread de mission (2026-01-07)
+  - **Problème**: Quand un joueur déclenchait une mission, le message éphémère ne contenait pas le lien vers le thread
+  - **Impact**: Le joueur devait chercher manuellement le thread au lieu de cliquer directement dessus
+  - **Solution**: Ajout d'un message éphémère supplémentaire `🔗 **Accède à ta mission ici:** <#thread_id>`
+  - **Fichier corrigé**: `handlers/mysteryBoxHandler.js` (lignes 1446-1450)
+
+---
+
 ## [2.3.5] - 2026-01-07
 
 ### 🐛 Fixed
