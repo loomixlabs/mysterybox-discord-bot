@@ -5,6 +5,7 @@
  */
 
 const db = require('./database-pg');
+const announcements = require('./announcements');
 
 class ThreadManager {
   constructor() {
@@ -279,6 +280,15 @@ class ThreadManager {
               await this.archiveWithRetry(thread);
             }
           }
+
+          // Annonce : mission échouée (abandonnée)
+          await announcements.announceMissionFailed(
+            client,
+            mission.guild_id,
+            mission.username,
+            mission.mission_name,
+            'Mission non lancée à temps'
+          );
 
           console.log(`${this.config.logPrefix} Mission abandonnée ${mission.id} (${mission.mission_name}) marquée comme échouée`);
           processed++;

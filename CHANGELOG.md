@@ -5,6 +5,18 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.3.7] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Missions Abandonnées - Annonce Manquante]**: Ajout de l'annonce pour missions abandonnées (2026-01-07)
+  - **Problème**: `cleanupAbandonedMissions()` ne faisait pas d'annonce quand une mission était marquée comme échouée
+  - **Impact**: Aucune notification dans le canal d'annonces pour les missions non lancées à temps
+  - **Solution**: Ajout de `announcements.announceMissionFailed()` dans `threadManager.cleanupAbandonedMissions()`
+  - **Fichier corrigé**: `utils/threadManager.js` (lignes 284-291)
+
+---
+
 ## [2.3.6] - 2026-01-07
 
 ### 🐛 Fixed
