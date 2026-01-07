@@ -1228,12 +1228,21 @@ class DatabaseWrapper {
    */
   async createMissionProgress(guildId, playerId, missionId, threadId = null, gameState = null) {
     guildId = this._getGuildId(guildId);
-    return this.queryOne(
-      `INSERT INTO mission_progress (guild_id, player_id, mission_id, thread_id, status, game_state)
-       VALUES ($1, $2, $3, $4, 'in_progress', $5)
-       RETURNING *`,
-      [guildId, playerId, missionId, threadId, gameState ? JSON.stringify(gameState) : null]
-    );
+    try {
+      return await this.queryOne(
+        `INSERT INTO mission_progress (guild_id, player_id, mission_id, thread_id, status, game_state)
+         VALUES ($1, $2, $3, $4, 'in_progress', $5)
+         RETURNING *`,
+        [guildId, playerId, missionId, threadId, gameState ? JSON.stringify(gameState) : null]
+      );
+    } catch (error) {
+      // 🔒 RACE CONDITION: Si violation de contrainte unique (23505), le joueur a déjà une mission active
+      if (error.code === '23505' && error.constraint === 'idx_mission_progress_one_active_per_player') {
+        console.warn(`⚠️ [RACE CONDITION] Joueur ${playerId} a tenté de créer une 2ème mission active - bloqué par contrainte DB`);
+        return null; // Retourner null pour signaler l'échec
+      }
+      throw error; // Re-throw autres erreurs
+    }
   }
 
   /**
@@ -3657,6 +3666,8 @@ class DatabaseWrapper {
 
     // 2. Calculer le streak global en comptant les jours consécutifs en arrière depuis hier
     // On regarde tous les thèmes car le streak global persiste entre les thèmes
+    // NOTE: Au moment de ce calcul, le claim d'aujourd'hui n'est PAS encore dans les logs
+    // Donc on compte depuis yesterday et on ajoute +1 à la fin
     const globalStreakResult = await this.queryOne(`
       WITH claim_dates AS (
         SELECT DISTINCT claim_date::date as claim_day
@@ -3673,7 +3684,7 @@ class DatabaseWrapper {
       consecutive AS (
         SELECT claim_day, rn, days_ago
         FROM numbered
-        WHERE days_ago = rn  -- Jours consécutifs à partir d'hier
+        WHERE days_ago = rn - 1  -- Fix: rn-1 car rn commence à 1, days_ago à 0 pour yesterday
       )
       SELECT COUNT(*) as streak FROM consecutive
     `, [guildId, playerId, yesterdayStr]);
@@ -5630,6 +5641,155 @@ class DatabaseWrapper {
       openAt,
       progressionPercent
     };
+  }
+
+  // ============================================================================
+  // THEME CATEGORIES SYSTEM
+  // ============================================================================
+
+  /**
+   * Récupérer toutes les catégories de thèmes
+   * @returns {Array} Liste des catégories ordonnées
+   */
+  async getThemeCategories() {
+    return this.query(`
+      SELECT id, code, emoji, label, description, keywords, display_order, is_default
+      FROM theme_categories
+      ORDER BY display_order ASC
+    `);
+  }
+
+  /**
+   * Récupérer une catégorie par son code
+   * @param {string} code - Code de la catégorie
+   * @returns {Object|null} Catégorie ou null
+   */
+  async getThemeCategoryByCode(code) {
+    return this.queryOne(`
+      SELECT id, code, emoji, label, description, keywords, display_order, is_default
+      FROM theme_categories
+      WHERE code = $1
+    `, [code]);
+  }
+
+  /**
+   * Créer une nouvelle catégorie de thèmes
+   * @param {Object} categoryData - Données de la catégorie
+   * @returns {Object} Catégorie créée
+   */
+  async createThemeCategory(categoryData) {
+    const { code, emoji, label, description, keywords = [], display_order = 50 } = categoryData;
+
+    return this.queryOne(`
+      INSERT INTO theme_categories (code, emoji, label, description, keywords, display_order)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [code, emoji || '📁', label, description, keywords, display_order]);
+  }
+
+  /**
+   * Mettre à jour une catégorie de thèmes
+   * @param {number} categoryId - ID de la catégorie
+   * @param {Object} updateData - Données à mettre à jour
+   * @returns {Object} Catégorie mise à jour
+   */
+  async updateThemeCategory(categoryId, updateData) {
+    const { emoji, label, description, keywords, display_order } = updateData;
+
+    return this.queryOne(`
+      UPDATE theme_categories SET
+        emoji = COALESCE($2, emoji),
+        label = COALESCE($3, label),
+        description = COALESCE($4, description),
+        keywords = COALESCE($5, keywords),
+        display_order = COALESCE($6, display_order),
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [categoryId, emoji, label, description, keywords, display_order]);
+  }
+
+  /**
+   * Supprimer une catégorie de thèmes
+   * @param {number} categoryId - ID de la catégorie
+   * @returns {boolean} Succès de la suppression
+   */
+  async deleteThemeCategory(categoryId) {
+    // Vérifier que ce n'est pas 'all' ou 'custom' (protégés)
+    const category = await this.queryOne(`
+      SELECT code, is_default FROM theme_categories WHERE id = $1
+    `, [categoryId]);
+
+    if (!category) return false;
+    if (category.code === 'all' || category.is_default) {
+      throw new Error('Impossible de supprimer cette catégorie protégée');
+    }
+
+    await this.query(`DELETE FROM theme_categories WHERE id = $1`, [categoryId]);
+    return true;
+  }
+
+  /**
+   * Détecter automatiquement la catégorie d'un thème basé sur son nom et ses tags
+   * @param {string} themeName - Nom du thème
+   * @param {Array} tags - Tags du thème
+   * @returns {Object} Catégorie détectée
+   */
+  async detectThemeCategory(themeName, tags = []) {
+    const searchText = `${themeName} ${tags.join(' ')}`.toLowerCase();
+
+    // Récupérer toutes les catégories avec leurs keywords
+    const categories = await this.query(`
+      SELECT id, code, emoji, label, keywords
+      FROM theme_categories
+      WHERE code != 'all' AND array_length(keywords, 1) > 0
+      ORDER BY display_order
+    `);
+
+    // Chercher une correspondance
+    for (const cat of categories) {
+      const keywords = cat.keywords || [];
+      for (const keyword of keywords) {
+        if (searchText.includes(keyword.toLowerCase())) {
+          return cat;
+        }
+      }
+    }
+
+    // Retourner la catégorie par défaut ('custom')
+    return this.queryOne(`
+      SELECT id, code, emoji, label FROM theme_categories WHERE is_default = TRUE
+    `);
+  }
+
+  /**
+   * Ajouter un mot-clé à une catégorie
+   * @param {number} categoryId - ID de la catégorie
+   * @param {string} keyword - Mot-clé à ajouter
+   * @returns {Object} Catégorie mise à jour
+   */
+  async addKeywordToCategory(categoryId, keyword) {
+    return this.queryOne(`
+      UPDATE theme_categories
+      SET keywords = array_append(keywords, $2), updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [categoryId, keyword.toLowerCase()]);
+  }
+
+  /**
+   * Retirer un mot-clé d'une catégorie
+   * @param {number} categoryId - ID de la catégorie
+   * @param {string} keyword - Mot-clé à retirer
+   * @returns {Object} Catégorie mise à jour
+   */
+  async removeKeywordFromCategory(categoryId, keyword) {
+    return this.queryOne(`
+      UPDATE theme_categories
+      SET keywords = array_remove(keywords, $2), updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [categoryId, keyword.toLowerCase()]);
   }
 }
 

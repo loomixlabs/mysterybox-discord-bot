@@ -5,6 +5,20 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.3.3] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Streak Global - Calcul Incorrect]**: Correction du bug de calcul du streak global (2026-01-07)
+  - **Problème**: Le `current_claim_streak` et `best_claim_streak` étaient incorrects (ex: valerie2603 avait 5 au lieu de 7)
+  - **Cause**: Dans la requête SQL, `WHERE days_ago = rn` était décalé de 1 car `rn` commence à 1 et `days_ago` à 0
+  - **Solution**: Corrigé en `WHERE days_ago = rn - 1` pour aligner correctement les indices
+  - **Script de correction**: `scripts/fix-global-streaks.js` a corrigé 71 joueurs sur 3 serveurs
+  - **Fichier modifié**: `utils/database-pg.js` (ligne 3687)
+  - **Impact**: Leaderboard streak et Badges ENGAGEMENT maintenant synchronisés avec le claim quotidien
+
+---
+
 ## [2.3.2] - 2026-01-07
 
 ### 🐛 Fixed
