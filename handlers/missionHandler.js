@@ -1327,6 +1327,7 @@ class MissionHandler {
                 // Archiver le thread après un délai
                 setTimeout(async () => {
                   try {
+                    await this.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
                     await interaction.channel.setArchived(true);
                   } catch (archiveError) {
                     console.warn('⚠️ Impossible d\'archiver le thread (fallback)');

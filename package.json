@@ -1,6 +1,6 @@
 {
   "name": "bot-discord-giveaway",
-  "version": "2.3.4",
+  "version": "2.3.5",
   "description": "Bot Discord pour giveaways gamifiés thématiques",
   "main": "index.js",
   "scripts": {

@@ -2,6 +2,7 @@ const db = require('../utils/database-pg');
 const { EmbedBuilder } = require('discord.js');
 const announcements = require('../utils/announcements');
 const quizAnswerMatcher = require('../utils/quizAnswerMatcher');
+const missionHandler = require('../handlers/missionHandler');
 
 module.exports = {
   name: 'messageCreate',
@@ -118,10 +119,12 @@ async function handleMissionFailure(message, missionProgress, missionOwner, keyw
       // Archiver le thread après 30 secondes
       setTimeout(async () => {
         try {
+          // Nettoyer les permissions temporaires AVANT d'archiver le thread
+          await missionHandler.cleanupTempPermissionByThread(message.client, missionProgress.thread_id, message.guild.id);
           await thread.setArchived(true);
           console.log(`✅ Thread mission_${missionProgress.id} archivé (échec)`);
         } catch (error) {
-          console.warn('⚠️  Impossible d\'archiver le thread');
+          console.warn('⚠️  Impossible d\'archiver le thread:', error.message);
         }
       }, 30000);
     }
@@ -328,10 +331,12 @@ async function handleMissionSuccess(message, missionProgress, missionOwner, keyw
 
       setTimeout(async () => {
         try {
+          // Nettoyer les permissions temporaires AVANT d'archiver le thread
+          await missionHandler.cleanupTempPermissionByThread(message.client, missionProgress.thread_id, message.guild.id);
           await thread.setArchived(true);
           console.log(`✅ Thread mission_${missionProgress.id} archivé (succès)`);
         } catch (error) {
-          console.warn('⚠️  Impossible d\'archiver le thread');
+          console.warn('⚠️  Impossible d\'archiver le thread:', error.message);
         }
       }, 30000);
     }

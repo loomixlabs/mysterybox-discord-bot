@@ -3,6 +3,7 @@ const missionHandler = require('../handlers/missionHandler');
 const mysteryBoxHandler = require('../handlers/mysteryBoxHandler');
 const adminPanelHandler = require('../handlers/adminPanelHandler');
 const giveUniqueHandler = require('../handlers/giveUniqueHandler');
+const campaignAdminHandler = require('../handlers/campaignAdminHandler');
 const modalHandler = require('../handlers/modalHandler');
 const superAdminHandler = require('../handlers/superAdminHandler');
 const setupHandler = require('../handlers/setupHandler');
@@ -13,6 +14,7 @@ const subscriptionHandler = require('../handlers/subscriptionHandler');
 const mysteryBoxConfigHandler = require('../handlers/mysteryBoxConfigHandler');
 const craftingHandler = require('../handlers/craftingHandler');
 const tutorialView = require('../views/tutorialView');
+const portfolioHandler = require('../handlers/portfolioHandler');
 
 // Pour le tracking des connexions et badges Engagement
 const db = require('../utils/database-pg');
@@ -260,6 +262,68 @@ module.exports = {
         else if (customId.startsWith('mission_emoji_delete_')) {
           await missionHandler.handleEmojiPuzzleDeleteSelect(interaction);
         }
+        // Boutons Unscramble (Lettres Mélangées) missions
+        else if (customId.startsWith('mission_unscramble_words_')) {
+          await missionHandler.handleUnscrambleWordsManagement(interaction, 0);
+        }
+        else if (customId.startsWith('mission_unscramble_page_')) {
+          // Pagination: mission_unscramble_page_123_0
+          const parts = customId.split('_');
+          const page = parseInt(parts[parts.length - 1]);
+          await missionHandler.handleUnscrambleWordsManagement(interaction, page);
+        }
+        else if (customId.startsWith('mission_unscramble_add_')) {
+          await missionHandler.handleUnscrambleWordAdd(interaction);
+        }
+        else if (customId.startsWith('mission_unscramble_delete_')) {
+          await missionHandler.handleUnscrambleWordDeleteSelect(interaction);
+        }
+        // Boutons Hangman (Le Pendu) missions
+        else if (customId.startsWith('mission_hangman_words_')) {
+          await missionHandler.handleHangmanWordsManagement(interaction, 0);
+        }
+        else if (customId.startsWith('mission_hangman_page_')) {
+          // Pagination: mission_hangman_page_123_0
+          const parts = customId.split('_');
+          const page = parseInt(parts[parts.length - 1]);
+          await missionHandler.handleHangmanWordsManagement(interaction, page);
+        }
+        else if (customId.startsWith('mission_hangman_add_')) {
+          await missionHandler.handleHangmanWordAdd(interaction);
+        }
+        else if (customId.startsWith('mission_hangman_delete_')) {
+          await missionHandler.handleHangmanWordDeleteSelect(interaction);
+        }
+        else if (customId.startsWith('mission_hangman_first_letter_')) {
+          await missionHandler.handleHangmanFirstLetterToggle(interaction);
+        }
+        // Boutons Wordle missions
+        else if (customId.startsWith('mission_wordle_words_')) {
+          await missionHandler.handleWordleWordsManagement(interaction, 0);
+        }
+        else if (customId.startsWith('wordle_words_page_')) {
+          await missionHandler.handleWordleWordsPage(interaction);
+        }
+        else if (customId.startsWith('wordle_word_add_')) {
+          await missionHandler.handleWordleWordAdd(interaction);
+        }
+        else if (customId.startsWith('wordle_word_delete_select_')) {
+          await missionHandler.handleWordleWordDeleteSelect(interaction);
+        }
+        else if (customId.startsWith('mission_wordle_first_letter_')) {
+          await missionHandler.handleWordleFirstLetterToggle(interaction);
+        }
+        else if (customId.startsWith('mission_wordle_attempts_')) {
+          await missionHandler.handleWordleAttemptsConfig(interaction);
+        }
+        else if (customId.startsWith('wordle_cfg_')) {
+          // wordle_cfg_easy_123, wordle_cfg_medium_123, wordle_cfg_hard_123
+          await missionHandler.handleWordleAttemptsDifficultySelect(interaction);
+        }
+        else if (customId.startsWith('wordle_set_')) {
+          // wordle_set_easy_123_6, wordle_set_medium_123_5, etc.
+          await missionHandler.handleWordleSetAttempts(interaction);
+        }
         else if (customId.startsWith('mission_keyword_add_')) {
           await missionHandler.handleKeywordAddMenu(interaction);
         }
@@ -426,6 +490,24 @@ module.exports = {
           }
         }
 
+        // 🖼️ Boutons Portfolio (serveur Showcase Loomix-labs)
+        else if (customId.startsWith('portfolio_')) {
+          await portfolioHandler.handlePortfolioButton(interaction);
+        }
+
+        // 🎮 Boutons gérés par collectors locaux (ignorer)
+        else if (
+          customId.startsWith('wordle_diff_') ||      // Difficulté wordle (collector dans handleWordleWordAdd)
+          customId.startsWith('wordle_add_cancel_') || // Annulation ajout wordle (collector)
+          customId.startsWith('hangman_diff_') ||     // Difficulté hangman (collector)
+          customId.startsWith('wordle_key_') ||       // Clavier wordle gameplay (collector)
+          customId.startsWith('wordle_submit_') ||    // Submit wordle gameplay (collector)
+          customId.startsWith('wordle_delete_') ||    // Delete wordle gameplay (collector)
+          customId.startsWith('hangman_letter_')      // Lettres hangman gameplay (collector)
+        ) {
+          // Géré par un collector local, ne rien faire
+        }
+
         else {
           console.warn(`⚠️  Bouton non géré: ${customId}`);
         }
@@ -483,6 +565,10 @@ module.exports = {
         // Modals Mystery Box Config
         else if (interaction.customId.startsWith('mb_config_modal_')) {
           await mysteryBoxConfigHandler.handleInteraction(interaction);
+        }
+        // Modals Catégories de Thèmes (Super Admin)
+        else if (interaction.customId.startsWith('modal_category_')) {
+          await superAdminHandler.handleCategoryModalSubmit(interaction);
         }
         // Autres modals (inclut modal_frame_ via modalHandler.js)
         else {
@@ -567,6 +653,18 @@ module.exports = {
         else if (interaction.customId.startsWith('select_emoji_delete_')) {
           await missionHandler.handleEmojiPuzzleDelete(interaction);
         }
+        // Select menus Unscramble missions
+        else if (interaction.customId.startsWith('select_unscramble_delete_')) {
+          await missionHandler.handleUnscrambleWordDelete(interaction);
+        }
+        // Select menus Hangman (Le Pendu) missions
+        else if (interaction.customId.startsWith('select_hangman_delete_')) {
+          await missionHandler.handleHangmanWordDelete(interaction);
+        }
+        // Select menus Wordle missions
+        else if (interaction.customId.startsWith('select_wordle_delete_')) {
+          await missionHandler.handleWordleWordDelete(interaction);
+        }
         else if (interaction.customId.startsWith('mission_max_attempts_select_')) {
           await missionHandler.handleMaxAttemptsSelect(interaction);
         }
@@ -593,6 +691,10 @@ module.exports = {
         // Select menu Setup - Sélection de thème préconfigurés
         else if (interaction.customId === 'setup_theme_select') {
           await setupHandler.handleThemeSelect(interaction);
+        }
+        // Select menu Setup - Filtrer par catégorie
+        else if (interaction.customId === 'setup_theme_category') {
+          await setupHandler.handleCategorySelect(interaction);
         }
         // Select menus Super-Admin
         else if (interaction.customId.startsWith('superadmin_')) {
@@ -645,6 +747,10 @@ module.exports = {
         // Ajouter un canal de distribution (admin panel)
         else if (interaction.customId === 'select_add_channel') {
           await adminPanelHandler.handleAddChannelSelection(interaction);
+        }
+        // Sélection canaux pour campagne (campaignAdminHandler)
+        else if (interaction.customId === 'campaign_channels_select') {
+          await campaignAdminHandler.handleInteraction(interaction);
         }
         else {
           console.warn(`⚠️ Channel select menu non géré: ${interaction.customId}`);
@@ -724,6 +830,12 @@ async function handleThreadClose(interaction) {
 
   // Archiver le thread après 3 secondes
   setTimeout(async () => {
+    // Nettoyer les permissions temporaires au cas où c'est un thread de mission
+    try {
+      await missionHandler.cleanupTempPermissionByThread(interaction.client, interaction.channel.id, interaction.guildId);
+    } catch (cleanupError) {
+      // Ignorer si pas de permissions temporaires
+    }
     await interaction.channel.setArchived(true);
   }, 3000);
 }
@@ -845,7 +957,16 @@ async function handleSuperAdminButton(interaction) {
     return await superAdminHandler.showThemeExportSelection(interaction, guildId);
   }
 
-  // Télécharger un thème en JSON
+  // Télécharger un thème en JSON (format v2.3 avec catégorie - nouveau)
+  if (customId.startsWith('superadmin_export_download:')) {
+    const parts = customId.replace('superadmin_export_download:', '').split(':');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    const categoryCode = parts[2] || 'custom';
+    return await superAdminHandler.handleThemeExportDownload(interaction, guildId, themeId, categoryCode);
+  }
+
+  // Télécharger un thème en JSON (format ancien - rétrocompatibilité)
   if (customId.startsWith('superadmin_export_download_')) {
     const parts = customId.replace('superadmin_export_download_', '').split('_');
     const guildId = parts[0];
@@ -853,12 +974,119 @@ async function handleSuperAdminButton(interaction) {
     return await superAdminHandler.handleThemeExportDownload(interaction, guildId, themeId);
   }
 
-  // Sauvegarder un thème dans les templates
+  // Sauvegarder un thème dans les templates (format v2.3 avec catégorie - nouveau)
+  if (customId.startsWith('superadmin_export_template:')) {
+    const parts = customId.replace('superadmin_export_template:', '').split(':');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    const categoryCode = parts[2] || 'custom';
+    return await superAdminHandler.handleThemeExportToTemplates(interaction, guildId, themeId, categoryCode);
+  }
+
+  // Sauvegarder un thème dans les templates (format ancien - rétrocompatibilité)
   if (customId.startsWith('superadmin_export_template_')) {
     const parts = customId.replace('superadmin_export_template_', '').split('_');
     const guildId = parts[0];
     const themeId = parts[1];
-    return await superAdminHandler.handleThemeExportToTemplates(interaction, guildId, themeId);
+    // Utiliser la nouvelle fonction avec vérification de conflit d'ID
+    return await superAdminHandler.handleThemeExportWithIdCheck(interaction, guildId, themeId);
+  }
+
+  // Export avec remplacement (overwrite)
+  if (customId.startsWith('superadmin_export_overwrite:')) {
+    const parts = customId.replace('superadmin_export_overwrite:', '').split(':');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    return await superAdminHandler.handleThemeExportOverwrite(interaction, guildId, themeId);
+  }
+
+  // Export avec renommage (timestamp)
+  if (customId.startsWith('superadmin_export_rename:')) {
+    const parts = customId.replace('superadmin_export_rename:', '').split(':');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    return await superAdminHandler.handleThemeExportRename(interaction, guildId, themeId);
+  }
+
+  // Gestion fichiers thèmes - Accès au panneau
+  if (customId === 'superadmin_theme_files') {
+    return await superAdminHandler.showThemeFilesManagement(interaction);
+  }
+
+  // Gestion fichiers thèmes - Voir détails d'un fichier
+  if (customId.startsWith('superadmin_theme_file:')) {
+    const parts = customId.replace('superadmin_theme_file:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':'); // Au cas où le nom contient des ":"
+    return await superAdminHandler.showThemeFileDetails(interaction, source, filename);
+  }
+
+  // Gestion fichiers thèmes - Éditer emoji (via chat awaitMessages)
+  if (customId.startsWith('superadmin_theme_edit_emoji:')) {
+    const parts = customId.replace('superadmin_theme_edit_emoji:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':');
+    return await superAdminHandler.showThemeEmojiPrompt(interaction, source, filename);
+  }
+
+  // Gestion fichiers thèmes - Supprimer (confirmation)
+  if (customId.startsWith('superadmin_theme_delete:')) {
+    const parts = customId.replace('superadmin_theme_delete:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':');
+    return await superAdminHandler.confirmThemeFileDeletion(interaction, source, filename);
+  }
+
+  // Gestion fichiers thèmes - Confirmer suppression
+  if (customId.startsWith('superadmin_theme_delete_confirm:')) {
+    const parts = customId.replace('superadmin_theme_delete_confirm:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':');
+    return await superAdminHandler.deleteThemeFile(interaction, source, filename);
+  }
+
+  // Gestion fichiers thèmes - Dupliquer
+  if (customId.startsWith('superadmin_theme_duplicate:')) {
+    const parts = customId.replace('superadmin_theme_duplicate:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':');
+    return await superAdminHandler.duplicateThemeFile(interaction, source, filename);
+  }
+
+  // Gestion fichiers thèmes - Modifier catégorie
+  if (customId.startsWith('superadmin_theme_edit_category:')) {
+    const parts = customId.replace('superadmin_theme_edit_category:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':');
+    return await superAdminHandler.showThemeCategorySelect(interaction, source, filename);
+  }
+
+  // Gestion catégories - Panneau principal
+  if (customId === 'superadmin_categories_manage') {
+    return await superAdminHandler.showCategoriesManagement(interaction);
+  }
+
+  // Gestion catégories - Ajouter nouvelle
+  if (customId === 'superadmin_category_add') {
+    return await superAdminHandler.showCategoryModal(interaction);
+  }
+
+  // Gestion catégories - Modifier
+  if (customId.startsWith('superadmin_category_edit:')) {
+    const categoryId = parseInt(customId.replace('superadmin_category_edit:', ''));
+    return await superAdminHandler.showCategoryModal(interaction, categoryId);
+  }
+
+  // Gestion catégories - Supprimer (confirmation)
+  if (customId.startsWith('superadmin_category_delete:') && !customId.includes('_confirm:')) {
+    const categoryId = parseInt(customId.replace('superadmin_category_delete:', ''));
+    return await superAdminHandler.deleteCategoryConfirm(interaction, categoryId);
+  }
+
+  // Gestion catégories - Supprimer (confirmé)
+  if (customId.startsWith('superadmin_category_delete_confirm:')) {
+    const categoryId = parseInt(customId.replace('superadmin_category_delete_confirm:', ''));
+    return await superAdminHandler.deleteCategory(interaction, categoryId);
   }
 
   // Voir détails d'un serveur
@@ -900,6 +1128,38 @@ async function handleSuperAdminSelect(interaction) {
     const guildId = customId.replace('superadmin_export_theme_select_', '');
     const themeId = interaction.values[0];
     return await superAdminHandler.handleThemeExport(interaction, guildId, themeId);
+  }
+
+  // Sélection d'un fichier thème à gérer
+  if (customId === 'superadmin_theme_file_select') {
+    const value = interaction.values[0]; // Format: "source:filename"
+    const [source, ...filenameParts] = value.split(':');
+    const filename = filenameParts.join(':');
+    return await superAdminHandler.showThemeFileDetails(interaction, source, filename);
+  }
+
+  // Sélection d'une catégorie pour voir ses détails
+  if (customId === 'superadmin_category_select') {
+    const categoryId = parseInt(interaction.values[0]);
+    return await superAdminHandler.showCategoryDetails(interaction, categoryId);
+  }
+
+  // Sélection d'une catégorie à assigner à un fichier thème
+  if (customId.startsWith('superadmin_theme_set_category:')) {
+    const parts = customId.replace('superadmin_theme_set_category:', '').split(':');
+    const source = parts[0];
+    const filename = parts.slice(1).join(':');
+    const categoryCode = interaction.values[0];
+    return await superAdminHandler.setThemeCategory(interaction, source, filename, categoryCode);
+  }
+
+  // Sélection d'une catégorie lors de l'export d'un thème
+  if (customId.startsWith('superadmin_export_category:')) {
+    const parts = customId.replace('superadmin_export_category:', '').split(':');
+    const guildId = parts[0];
+    const themeId = parts[1];
+    const selectedCategory = interaction.values[0];
+    return await superAdminHandler.handleThemeExport(interaction, guildId, themeId, selectedCategory);
   }
 }
 

@@ -5,6 +5,21 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.3.5] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Missions - Nettoyage Permissions]**: Correction du nettoyage des permissions temporaires (2026-01-07)
+  - **Problème**: Les permissions temporaires n'étaient pas nettoyées à la fin des missions keyword-message
+  - **Impact**: Joueurs bloqués - impossible d'ouvrir des mystery boxes après mission terminée
+  - **Cause**: `messageCreate.js` archivait le thread sans appeler `cleanupTempPermissionByThread()`
+  - **Fichiers corrigés**:
+    - `events/messageCreate.js`: Ajout cleanup avant archivage (succès + échec)
+    - `handlers/missionHandler.js`: Ajout cleanup dans le fallback emoji-puzzle (ligne 1330)
+    - `events/interactionCreate.js`: Ajout cleanup dans `handleThreadClose()` pour fermeture admin
+
+---
+
 ## [2.3.4] - 2026-01-07
 
 ### 🐛 Fixed
