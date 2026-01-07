@@ -1,6 +1,19 @@
 /**
- * Importateur de thèmes préconfigurés
+ * Importateur de thèmes préconfigurés v2.1
  * Gère l'import complet d'un fichier .theme.json vers la base de données
+ *
+ * Types de missions supportés (v2.1):
+ * - keyword-message (mission_keywords)
+ * - quiz (quiz_questions)
+ * - true-false (quiz_questions)
+ * - emoji-puzzle (quiz_questions)
+ * - wordle (quiz_questions)
+ * - hangman (quiz_questions)
+ * - unscramble (quiz_questions)
+ *
+ * Tables v2.1:
+ * - theme_profile_frames (NEW)
+ * - theme_collectible_frames (NEW)
  */
 
 const fs = require('fs');
@@ -67,7 +80,10 @@ class ThemeImporter {
       dailyCatchup: false,
       mysteryBoxConfig: 0,
       progressionRoles: 0,
-      superBonuses: 0
+      superBonuses: 0,
+      // v2.1 - Frames
+      profileFrames: 0,
+      collectibleFrames: 0
     };
     this.errors = [];
   }
@@ -196,18 +212,32 @@ class ThemeImporter {
         await this.createSuperBonuses(themeId, themeData.super_bonuses);
       }
 
-      // 12. Créer le rôle Discord si demandé
+      // ═══════════════════════════════════════════════════════════
+      // NOUVELLES TABLES v2.1 - FRAMES
+      // ═══════════════════════════════════════════════════════════
+
+      // 12. Importer theme_profile_frames
+      if (themeData.theme_profile_frames && themeData.theme_profile_frames.length > 0) {
+        await this.createProfileFrames(themeId, themeData.theme_profile_frames);
+      }
+
+      // 13. Importer theme_collectible_frames
+      if (themeData.theme_collectible_frames && themeData.theme_collectible_frames.length > 0) {
+        await this.createCollectibleFrames(themeId, themeData.theme_collectible_frames);
+      }
+
+      // 14. Créer le rôle Discord si demandé
       let roleCreated = null;
       if (autoCreateRoles && guild) {
         roleCreated = await this.createDiscordRole(guild, themeData.theme);
       }
 
-      // 13. Installer les super bonus par défaut si demandé (et si aucun importé)
+      // 15. Installer les super bonus par défaut si demandé (et si aucun importé)
       if (autoInstallSuperBonuses && this.importedData.superBonuses === 0) {
         await this.installSuperBonuses();
       }
 
-      // 14. Activer le thème si demandé
+      // 16. Activer le thème si demandé
       if (activateAfterImport) {
         await this.activateTheme(themeId);
       }
@@ -224,6 +254,8 @@ class ThemeImporter {
       console.log(`   - Mystery Box Config: ${this.importedData.mysteryBoxConfig} raretés`);
       console.log(`   - Progression Roles: ${this.importedData.progressionRoles}`);
       console.log(`   - Super Bonuses: ${this.importedData.superBonuses}`);
+      console.log(`   - Profile Frames: ${this.importedData.profileFrames}`);
+      console.log(`   - Collectible Frames: ${this.importedData.collectibleFrames}`);
 
       return {
         success: true,
@@ -491,38 +523,27 @@ class ThemeImporter {
   }
 
   /**
-   * Crée les missions et leur contenu (keywords, questions)
+   * Crée les missions et leur contenu (keywords, questions) v2.1
+   * Supporte les 7 types de missions:
+   * - keyword-message (mission_keywords)
+   * - quiz (quiz_questions avec wrong_answers)
+   * - true-false (quiz_questions)
+   * - emoji-puzzle (quiz_questions)
+   * - wordle (quiz_questions)
+   * - hangman (quiz_questions)
+   * - unscramble (quiz_questions)
    */
   async createMissions(themeId, missions) {
-    // Missions keyword
+
+    // ═══════════════════════════════════════════════════════════
+    // 1. KEYWORD-MESSAGE - Utilise mission_keywords
+    // ═══════════════════════════════════════════════════════════
     if (missions.keyword && missions.keyword.length > 0) {
       for (const mission of missions.keyword) {
-        const missionResult = await db.query(`
-          INSERT INTO missions (
-            guild_id, theme_id, mission_id, name, type, description,
-            validation_type, timeout, image_url, reward_type, created_at
-          ) VALUES ($1, $2, $3, $4, 'keyword-message', $5, 'auto', $6, $7, 'random-collectible', NOW())
-          ON CONFLICT (guild_id, theme_id, mission_id) DO UPDATE SET
-            name = EXCLUDED.name,
-            description = EXCLUDED.description,
-            timeout = EXCLUDED.timeout,
-            image_url = EXCLUDED.image_url
-          RETURNING id
-        `, [
-          this.guildId,
-          themeId,
-          mission.mission_id,
-          mission.name,
-          mission.description,
-          mission.timeout || 60,
-          mission.image_url || null
-        ]);
-
-        const missionDbId = missionResult[0].id;
-        this.importedData.missions++;
+        const missionDbId = await this.createMissionBase(themeId, mission, 'keyword-message');
 
         // Créer les mots-clés
-        for (const keyword of mission.keywords) {
+        for (const keyword of mission.keywords || []) {
           await db.query(`
             INSERT INTO mission_keywords (
               guild_id, mission_id, keyword, difficulty, created_at
@@ -541,53 +562,122 @@ class ThemeImporter {
       }
     }
 
-    // Missions quiz
+    // ═══════════════════════════════════════════════════════════
+    // 2. QUIZ - Questions QCM avec wrong_answers
+    // ═══════════════════════════════════════════════════════════
     if (missions.quiz && missions.quiz.length > 0) {
       for (const mission of missions.quiz) {
-        const missionResult = await db.query(`
-          INSERT INTO missions (
-            guild_id, theme_id, mission_id, name, type, description,
-            validation_type, timeout, image_url, reward_type, max_attempts, created_at
-          ) VALUES ($1, $2, $3, $4, 'quiz', $5, 'auto', $6, $7, 'random-collectible', $8, NOW())
-          ON CONFLICT (guild_id, theme_id, mission_id) DO UPDATE SET
-            name = EXCLUDED.name,
-            description = EXCLUDED.description,
-            timeout = EXCLUDED.timeout,
-            image_url = EXCLUDED.image_url,
-            max_attempts = EXCLUDED.max_attempts
-          RETURNING id
-        `, [
-          this.guildId,
-          themeId,
-          mission.mission_id,
-          mission.name,
-          mission.description,
-          mission.timeout || 60,
-          mission.image_url || null,
-          mission.max_attempts || null
-        ]);
+        const missionDbId = await this.createMissionBase(themeId, mission, 'quiz');
 
-        const missionDbId = missionResult[0].id;
-        this.importedData.missions++;
+        // Créer les questions quiz
+        for (const question of mission.questions || []) {
+          await this.createQuizQuestion(themeId, missionDbId, {
+            question_text: question.question_text,
+            correct_answer: question.correct_answer,
+            wrong_answers: question.wrong_answers || [],
+            hint: question.hint,
+            difficulty: question.difficulty
+          });
+        }
+      }
+    }
 
-        // Créer les questions en les liant à la mission
-        for (const question of mission.questions) {
-          await db.query(`
-            INSERT INTO quiz_questions (
-              guild_id, theme_id, mission_id, question_text, correct_answer, wrong_answers, hint, difficulty, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-          `, [
-            this.guildId,
-            themeId,
-            missionDbId,
-            question.question_text,
-            question.correct_answer,
-            question.wrong_answers || null,
-            question.hint || null,
-            question.difficulty || 'medium'
-          ]);
+    // ═══════════════════════════════════════════════════════════
+    // 3. TRUE-FALSE - Questions vrai/faux
+    // ═══════════════════════════════════════════════════════════
+    if (missions['true-false'] && missions['true-false'].length > 0) {
+      for (const mission of missions['true-false']) {
+        const missionDbId = await this.createMissionBase(themeId, mission, 'true-false');
 
-          this.importedData.questions++;
+        // Créer les questions true-false
+        for (const question of mission.questions || []) {
+          await this.createQuizQuestion(themeId, missionDbId, {
+            question_text: question.question_text,
+            correct_answer: question.correct_answer, // "vrai" ou "faux"
+            wrong_answers: null, // Pas de wrong_answers pour true-false
+            hint: question.hint,
+            difficulty: question.difficulty
+          });
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 4. EMOJI-PUZZLE - Séquence d'emojis à deviner
+    // ═══════════════════════════════════════════════════════════
+    if (missions['emoji-puzzle'] && missions['emoji-puzzle'].length > 0) {
+      for (const mission of missions['emoji-puzzle']) {
+        const missionDbId = await this.createMissionBase(themeId, mission, 'emoji-puzzle');
+
+        // Créer les puzzles emoji
+        for (const puzzle of mission.puzzles || []) {
+          await this.createQuizQuestion(themeId, missionDbId, {
+            question_text: puzzle.emoji_sequence, // Les emojis
+            correct_answer: puzzle.answer,
+            wrong_answers: puzzle.hints || [], // Hints stockés dans wrong_answers
+            hint: null,
+            difficulty: puzzle.difficulty
+          });
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 5. WORDLE - Mot à deviner lettre par lettre
+    // ═══════════════════════════════════════════════════════════
+    if (missions.wordle && missions.wordle.length > 0) {
+      for (const mission of missions.wordle) {
+        const missionDbId = await this.createMissionBase(themeId, mission, 'wordle');
+
+        // Créer les mots wordle
+        for (const wordEntry of mission.words || []) {
+          await this.createQuizQuestion(themeId, missionDbId, {
+            question_text: wordEntry.word, // Le mot à deviner
+            correct_answer: wordEntry.word,
+            wrong_answers: null,
+            hint: wordEntry.hint,
+            difficulty: wordEntry.difficulty
+          });
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 6. HANGMAN - Mot à deviner (pendu)
+    // ═══════════════════════════════════════════════════════════
+    if (missions.hangman && missions.hangman.length > 0) {
+      for (const mission of missions.hangman) {
+        const missionDbId = await this.createMissionBase(themeId, mission, 'hangman');
+
+        // Créer les mots hangman
+        for (const wordEntry of mission.words || []) {
+          await this.createQuizQuestion(themeId, missionDbId, {
+            question_text: wordEntry.word, // Le mot à deviner
+            correct_answer: wordEntry.word,
+            wrong_answers: null,
+            hint: wordEntry.hint,
+            difficulty: wordEntry.difficulty
+          });
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 7. UNSCRAMBLE - Mot mélangé à reconstituer
+    // ═══════════════════════════════════════════════════════════
+    if (missions.unscramble && missions.unscramble.length > 0) {
+      for (const mission of missions.unscramble) {
+        const missionDbId = await this.createMissionBase(themeId, mission, 'unscramble');
+
+        // Créer les mots unscramble
+        for (const wordEntry of mission.words || []) {
+          await this.createQuizQuestion(themeId, missionDbId, {
+            question_text: wordEntry.word, // Le mot original
+            correct_answer: wordEntry.word,
+            wrong_answers: null,
+            hint: wordEntry.hint,
+            difficulty: wordEntry.difficulty
+          });
         }
       }
     }
@@ -595,6 +685,79 @@ class ThemeImporter {
     console.log(`   ✅ ${this.importedData.missions} mission(s) créée(s)`);
     console.log(`   ✅ ${this.importedData.keywords} mot(s)-clé(s) créé(s)`);
     console.log(`   ✅ ${this.importedData.questions} question(s) créée(s)`);
+  }
+
+  /**
+   * Crée une mission de base (sans contenu spécifique)
+   * @returns {number} ID de la mission créée
+   */
+  async createMissionBase(themeId, mission, type) {
+    const missionResult = await db.query(`
+      INSERT INTO missions (
+        guild_id, theme_id, mission_id, name, type, description,
+        validation_type, timeout, image_url, reward_type, max_attempts,
+        validation_data, reward_data, allowed_channels, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'auto', $7, $8, 'random-collectible', $9, $10, $11, $12, NOW())
+      ON CONFLICT (guild_id, theme_id, mission_id) DO UPDATE SET
+        name = EXCLUDED.name,
+        type = EXCLUDED.type,
+        description = EXCLUDED.description,
+        timeout = EXCLUDED.timeout,
+        image_url = EXCLUDED.image_url,
+        max_attempts = EXCLUDED.max_attempts,
+        validation_data = EXCLUDED.validation_data,
+        reward_data = EXCLUDED.reward_data,
+        allowed_channels = EXCLUDED.allowed_channels
+      RETURNING id
+    `, [
+      this.guildId,
+      themeId,
+      mission.mission_id,
+      mission.name,
+      type,
+      mission.description,
+      mission.timeout || 60,
+      mission.image_url || null,
+      mission.max_attempts || null,
+      mission.validation_data ? JSON.stringify(mission.validation_data) : null,
+      mission.reward_data ? JSON.stringify(mission.reward_data) : null,
+      // allowed_channels n'est plus exporté (IDs spécifiques au serveur source)
+      // Si un ancien export en contient, on l'ignore pour éviter des erreurs
+      null
+    ]);
+
+    this.importedData.missions++;
+    return missionResult[0].id;
+  }
+
+  /**
+   * Crée une entrée quiz_questions
+   * Note: wrong_answers est de type text[] (tableau PostgreSQL natif)
+   */
+  async createQuizQuestion(themeId, missionDbId, question) {
+    // Convertir wrong_answers en format tableau PostgreSQL natif
+    // text[] attend un tableau JS, pas une chaîne JSON
+    let wrongAnswersArray = null;
+    if (question.wrong_answers && Array.isArray(question.wrong_answers) && question.wrong_answers.length > 0) {
+      wrongAnswersArray = question.wrong_answers;
+    }
+
+    await db.query(`
+      INSERT INTO quiz_questions (
+        guild_id, theme_id, mission_id, question_text, correct_answer, wrong_answers, hint, difficulty, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    `, [
+      this.guildId,
+      themeId,
+      missionDbId,
+      question.question_text,
+      question.correct_answer,
+      wrongAnswersArray,
+      question.hint || null,
+      question.difficulty || 'medium'
+    ]);
+
+    this.importedData.questions++;
   }
 
   /**
@@ -1113,6 +1276,69 @@ class ThemeImporter {
     }
 
     console.log(`   ✅ ${this.importedData.superBonuses} super bonus créé(s)`);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOUVELLES MÉTHODES v2.1 - FRAMES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Crée les entrées theme_profile_frames
+   */
+  async createProfileFrames(themeId, frames) {
+    for (const frame of frames) {
+      await db.query(`
+        INSERT INTO theme_profile_frames (
+          guild_id, theme_id, frame_number, name, description,
+          frame_url, unlock_condition, bonus_type, bonus_value, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        ON CONFLICT (guild_id, theme_id, frame_number) DO UPDATE SET
+          name = EXCLUDED.name,
+          description = EXCLUDED.description,
+          frame_url = EXCLUDED.frame_url,
+          unlock_condition = EXCLUDED.unlock_condition,
+          bonus_type = EXCLUDED.bonus_type,
+          bonus_value = EXCLUDED.bonus_value
+      `, [
+        this.guildId,
+        themeId,
+        frame.frame_number,
+        frame.name,
+        frame.description || null,
+        frame.frame_url,
+        frame.unlock_condition ? JSON.stringify(frame.unlock_condition) : null,
+        frame.bonus_type || null,
+        frame.bonus_value || null
+      ]);
+
+      this.importedData.profileFrames++;
+    }
+
+    console.log(`   ✅ ${this.importedData.profileFrames} frame(s) de profil créé(s)`);
+  }
+
+  /**
+   * Crée les entrées theme_collectible_frames
+   */
+  async createCollectibleFrames(themeId, frames) {
+    for (const frame of frames) {
+      await db.query(`
+        INSERT INTO theme_collectible_frames (
+          guild_id, theme_id, rarity, frame_url, created_at
+        ) VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (guild_id, theme_id, rarity) DO UPDATE SET
+          frame_url = EXCLUDED.frame_url
+      `, [
+        this.guildId,
+        themeId,
+        frame.rarity,
+        frame.frame_url
+      ]);
+
+      this.importedData.collectibleFrames++;
+    }
+
+    console.log(`   ✅ ${this.importedData.collectibleFrames} frame(s) de collectible créé(s)`);
   }
 }
 

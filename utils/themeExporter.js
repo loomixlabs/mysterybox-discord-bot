@@ -1,5 +1,5 @@
 /**
- * Exportateur de thèmes v2.0
+ * Exportateur de thèmes v2.1
  * Exporte un thème existant vers un fichier .theme.json
  *
  * Tables exportées:
@@ -10,6 +10,17 @@
  * - progression_roles (v2.0 - table séparée)
  * - super_bonuses (v2.0)
  * - announcement_templates (v2.0)
+ * - theme_profile_frames (v2.1 - NEW)
+ * - theme_collectible_frames (v2.1 - NEW)
+ *
+ * Types de missions supportés (v2.1):
+ * - keyword-message (mission_keywords)
+ * - quiz (quiz_questions)
+ * - true-false (quiz_questions)
+ * - emoji-puzzle (quiz_questions)
+ * - wordle (quiz_questions)
+ * - hangman (quiz_questions)
+ * - unscramble (quiz_questions)
  */
 
 const fs = require('fs');
@@ -127,13 +138,33 @@ class ThemeExporter {
         WHERE theme_id = $1 AND guild_id = $2
       `, [themeDbId, this.guildId]);
 
+      // ═══════════════════════════════════════════════════════════
+      // NOUVELLES TABLES v2.1 - FRAMES
+      // ═══════════════════════════════════════════════════════════
+
+      // 15. Récupérer theme_profile_frames
+      const profileFrames = await db.queryAll(`
+        SELECT * FROM theme_profile_frames
+        WHERE theme_id = $1 AND guild_id = $2
+        ORDER BY frame_number ASC
+      `, [themeDbId, this.guildId]);
+
+      // 16. Récupérer theme_collectible_frames
+      const collectibleFrames = await db.queryAll(`
+        SELECT * FROM theme_collectible_frames
+        WHERE theme_id = $1 AND guild_id = $2
+        ORDER BY rarity ASC
+      `, [themeDbId, this.guildId]);
+
       // Construire l'objet exporté
       const exportedTheme = {
-        version: '2.0.0',
+        version: '2.3.0',
         metadata: {
           name: metadata.name || theme.name,
           description: metadata.description || `Thème ${theme.name} exporté depuis le serveur`,
           author: metadata.author || 'Bot Discord',
+          emoji: metadata.emoji || '🎨', // Emoji personnalisable pour l'affichage dans /setup
+          category: metadata.category || 'custom', // Code de catégorie (cinema, gaming, anime, etc.)
           tags: metadata.tags || [],
           preview_image: metadata.preview_image || null,
           created_at: new Date().toISOString(),
@@ -163,6 +194,12 @@ class ThemeExporter {
         super_bonuses: superBonuses.map(b => this.formatSuperBonus(b)),
         announcement_templates: announcementTemplates.map(t => this.formatAnnouncementTemplate(t)),
 
+        // ═══════════════════════════════════════════════════════════
+        // NOUVELLES SECTIONS v2.1 - FRAMES
+        // ═══════════════════════════════════════════════════════════
+        theme_profile_frames: profileFrames.map(f => this.formatProfileFrame(f)),
+        theme_collectible_frames: collectibleFrames.map(f => this.formatCollectibleFrame(f)),
+
         settings: {
           auto_create_roles: true,
           auto_install_super_bonuses: true,
@@ -181,6 +218,8 @@ class ThemeExporter {
       console.log(`   - Progression Roles: ${progressionRoles.length}`);
       console.log(`   - Super Bonuses: ${superBonuses.length}`);
       console.log(`   - Announcement Templates: ${announcementTemplates.length}`);
+      console.log(`   - Profile Frames: ${profileFrames.length}`);
+      console.log(`   - Collectible Frames: ${collectibleFrames.length}`);
 
       return {
         success: true,
@@ -322,61 +361,145 @@ class ThemeExporter {
   }
 
   /**
-   * Formate les missions pour l'export
+   * Formate les missions pour l'export v2.1
+   * Supporte les 7 types de missions:
+   * - keyword-message (stocké dans mission_keywords)
+   * - quiz (stocké dans quiz_questions)
+   * - true-false (stocké dans quiz_questions)
+   * - emoji-puzzle (stocké dans quiz_questions)
+   * - wordle (stocké dans quiz_questions)
+   * - hangman (stocké dans quiz_questions)
+   * - unscramble (stocké dans quiz_questions)
    */
   formatMissions(missions, keywords, quizQuestions) {
     const result = {
       keyword: [],
-      quiz: []
+      quiz: [],
+      'true-false': [],
+      'emoji-puzzle': [],
+      wordle: [],
+      hangman: [],
+      unscramble: []
     };
 
     for (const mission of missions) {
+      // Base commune pour toutes les missions
+      // NOTE: allowed_channels n'est PAS exporté car les IDs de salons
+      // sont spécifiques au serveur source et ne seront pas valides sur un autre serveur
+      const baseMission = {
+        mission_id: mission.mission_id,
+        name: mission.name,
+        description: mission.description,
+        timeout: mission.timeout || 60,
+        max_attempts: mission.max_attempts || undefined,
+        image_url: mission.image_url || undefined,
+        validation_data: mission.validation_data || undefined,
+        reward_data: mission.reward_data || undefined
+        // allowed_channels: exclus de l'export (IDs spécifiques au serveur)
+      };
+
       if (mission.type === 'keyword-message') {
+        // Type keyword-message: utilise mission_keywords
         const missionKeywords = keywords[mission.id] || [];
         result.keyword.push({
-          mission_id: mission.mission_id,
-          name: mission.name,
-          description: mission.description,
-          timeout: mission.timeout || 60,
-          image_url: mission.image_url || undefined,
-          validation_data: mission.validation_data || undefined,
-          reward_data: mission.reward_data || undefined,
-          allowed_channels: mission.allowed_channels || undefined,
+          ...baseMission,
           keywords: missionKeywords.map(k => ({
             keyword: k.keyword,
             difficulty: k.difficulty || 'medium'
           }))
         });
-      } else if (mission.type === 'quiz') {
-        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
-        const questions = missionQuestions.map(q => ({
-          question_text: q.question_text,
-          correct_answer: q.correct_answer,
-          wrong_answers: q.wrong_answers || [],
-          hint: q.hint || undefined,
-          difficulty: q.difficulty || 'medium'
-        }));
 
+      } else if (mission.type === 'quiz') {
+        // Type quiz: questions avec wrong_answers (QCM)
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
         result.quiz.push({
-          mission_id: mission.mission_id,
-          name: mission.name,
-          description: mission.description,
-          timeout: mission.timeout || 60,
-          max_attempts: mission.max_attempts || undefined,
-          image_url: mission.image_url || undefined,
-          validation_data: mission.validation_data || undefined,
-          reward_data: mission.reward_data || undefined,
-          allowed_channels: mission.allowed_channels || undefined,
-          questions: questions
+          ...baseMission,
+          questions: missionQuestions.map(q => ({
+            question_text: q.question_text,
+            correct_answer: q.correct_answer,
+            wrong_answers: q.wrong_answers || [],
+            hint: q.hint || undefined,
+            difficulty: q.difficulty || 'medium'
+          }))
         });
+
+      } else if (mission.type === 'true-false') {
+        // Type true-false: correct_answer est "vrai" ou "faux"
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
+        result['true-false'].push({
+          ...baseMission,
+          questions: missionQuestions.map(q => ({
+            question_text: q.question_text,
+            correct_answer: q.correct_answer, // "vrai" ou "faux"
+            hint: q.hint || undefined,
+            difficulty: q.difficulty || 'medium'
+          }))
+        });
+
+      } else if (mission.type === 'emoji-puzzle') {
+        // Type emoji-puzzle: question_text contient les emojis, correct_answer la réponse
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
+        result['emoji-puzzle'].push({
+          ...baseMission,
+          puzzles: missionQuestions.map(q => ({
+            emoji_sequence: q.question_text, // Les emojis
+            answer: q.correct_answer,
+            hints: q.wrong_answers || [], // Les hints sont stockés dans wrong_answers
+            difficulty: q.difficulty || 'medium'
+          }))
+        });
+
+      } else if (mission.type === 'wordle') {
+        // Type wordle: question_text contient le mot à deviner
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
+        result.wordle.push({
+          ...baseMission,
+          words: missionQuestions.map(q => ({
+            word: q.correct_answer || q.question_text,
+            hint: q.hint || undefined,
+            difficulty: q.difficulty || 'medium'
+          }))
+        });
+
+      } else if (mission.type === 'hangman') {
+        // Type hangman: question_text contient le mot à deviner
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
+        result.hangman.push({
+          ...baseMission,
+          words: missionQuestions.map(q => ({
+            word: q.correct_answer || q.question_text,
+            hint: q.hint || undefined,
+            difficulty: q.difficulty || 'medium'
+          }))
+        });
+
+      } else if (mission.type === 'unscramble') {
+        // Type unscramble: mot à reconstituer
+        const missionQuestions = quizQuestions.filter(q => q.mission_id === mission.id);
+        result.unscramble.push({
+          ...baseMission,
+          words: missionQuestions.map(q => ({
+            word: q.correct_answer || q.question_text,
+            hint: q.hint || undefined,
+            difficulty: q.difficulty || 'medium'
+          }))
+        });
+
+      } else {
+        // Type inconnu - log pour debug
+        console.warn(`⚠️  Type de mission non reconnu: ${mission.type} (mission: ${mission.name})`);
       }
     }
 
-    // Nettoyer les valeurs undefined
-    result.keyword = result.keyword.map(m => JSON.parse(JSON.stringify(m)));
-    result.quiz = result.quiz.map(m => JSON.parse(JSON.stringify(m)));
+    // Nettoyer les valeurs undefined et les arrays vides
+    const cleanedResult = {};
+    for (const [type, missionsList] of Object.entries(result)) {
+      if (missionsList.length > 0) {
+        cleanedResult[type] = missionsList.map(m => JSON.parse(JSON.stringify(m)));
+      }
+    }
 
-    return result;
+    return cleanedResult;
   }
 
   /**
@@ -518,6 +641,35 @@ class ThemeExporter {
       footer_text: t.footer_text,
       image_url: t.image_url,
       thumbnail_url: t.thumbnail_url
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOUVELLES MÉTHODES v2.1 - FRAMES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Formate theme_profile_frames
+   */
+  formatProfileFrame(f) {
+    return {
+      frame_number: f.frame_number,
+      name: f.name,
+      description: f.description || null,
+      frame_url: f.frame_url,
+      unlock_condition: f.unlock_condition,
+      bonus_type: f.bonus_type || null,
+      bonus_value: f.bonus_value || null
+    };
+  }
+
+  /**
+   * Formate theme_collectible_frames
+   */
+  formatCollectibleFrame(f) {
+    return {
+      rarity: f.rarity,
+      frame_url: f.frame_url
     };
   }
 

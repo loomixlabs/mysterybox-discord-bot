@@ -1,14 +1,21 @@
 /**
- * Validateur de fichiers de thèmes (.theme.json) v2.0
- * Supporte les versions 1.x et 2.x du format
+ * Validateur de fichiers de thèmes (.theme.json) v2.1
+ * Supporte les versions 1.x, 2.0 et 2.1 du format
  *
- * Nouvelles sections v2.0:
+ * Sections v2.0:
  * - daily_rewards_config (calendrier 28 jours)
  * - daily_catchup_config (configuration rattrapage)
  * - mystery_box_config (configuration par rareté)
  * - progression_roles (table séparée)
  * - super_bonuses (bonus liés au thème)
  * - announcement_templates (templates liés au thème)
+ *
+ * Nouvelles sections v2.1:
+ * - theme_profile_frames (frames de profil personnalisés)
+ * - theme_collectible_frames (frames de collectibles par rareté)
+ *
+ * Types de missions supportés v2.1:
+ * - keyword-message, quiz, true-false, emoji-puzzle, wordle, hangman, unscramble
  */
 
 const fs = require('fs');
@@ -126,6 +133,20 @@ class ThemeValidator {
     // Valider announcement_templates si présent
     if (themeData.announcement_templates && themeData.announcement_templates.length > 0) {
       this.validateAnnouncementTemplates(themeData.announcement_templates);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // NOUVELLES VALIDATIONS v2.1 - FRAMES
+    // ═══════════════════════════════════════════════════════════
+
+    // Valider theme_profile_frames si présent
+    if (themeData.theme_profile_frames && themeData.theme_profile_frames.length > 0) {
+      this.validateProfileFrames(themeData.theme_profile_frames);
+    }
+
+    // Valider theme_collectible_frames si présent
+    if (themeData.theme_collectible_frames && themeData.theme_collectible_frames.length > 0) {
+      this.validateCollectibleFrames(themeData.theme_collectible_frames);
     }
 
     // Vérifications de cohérence
@@ -320,66 +341,214 @@ class ThemeValidator {
   }
 
   /**
-   * Valide les missions
+   * Valide les missions v2.1
+   * Supporte: keyword-message, quiz, true-false, emoji-puzzle, wordle, hangman, unscramble
    * Note: Les missions exportées peuvent avoir keywords/questions vides si elles n'ont pas encore été configurées
    */
   validateMissions(missions) {
-    // Valider les missions keyword
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 1: keyword-message (stocke dans mission_keywords)
+    // ═══════════════════════════════════════════════════════════
     if (missions.keyword && Array.isArray(missions.keyword)) {
       missions.keyword.forEach((mission, index) => {
-        const prefix = `missions.keyword[${index}]`;
+        this.validateMissionBase(mission, `missions.keyword[${index}]`);
 
-        if (!mission.mission_id) {
-          this.errors.push(`${prefix}.mission_id est requis`);
-        }
-        if (!mission.name) {
-          this.errors.push(`${prefix}.name est requis`);
-        }
-        if (!mission.description) {
-          this.errors.push(`${prefix}.description est requis`);
-        }
         // Warning au lieu d'erreur pour missions sans keywords (peuvent être configurées après import)
         if (!mission.keywords || mission.keywords.length === 0) {
-          console.warn(`${prefix}: aucun mot-clé défini (peut être configuré après import)`);
+          console.warn(`missions.keyword[${index}]: aucun mot-clé défini (peut être configuré après import)`);
         } else {
           mission.keywords.forEach((kw, kwIndex) => {
             if (!kw.keyword) {
-              this.errors.push(`${prefix}.keywords[${kwIndex}].keyword est requis`);
+              this.errors.push(`missions.keyword[${index}].keywords[${kwIndex}].keyword est requis`);
             }
           });
         }
       });
     }
 
-    // Valider les missions quiz
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 2: quiz (stocke dans quiz_questions avec wrong_answers)
+    // ═══════════════════════════════════════════════════════════
     if (missions.quiz && Array.isArray(missions.quiz)) {
       missions.quiz.forEach((mission, index) => {
-        const prefix = `missions.quiz[${index}]`;
-
-        if (!mission.mission_id) {
-          this.errors.push(`${prefix}.mission_id est requis`);
-        }
-        if (!mission.name) {
-          this.errors.push(`${prefix}.name est requis`);
-        }
-        if (!mission.description) {
-          this.errors.push(`${prefix}.description est requis`);
-        }
-        // Warning au lieu d'erreur pour missions sans questions (peuvent être configurées après import)
-        if (!mission.questions || mission.questions.length === 0) {
-          console.warn(`${prefix}: aucune question définie (peut être configurée après import)`);
-        } else {
-          mission.questions.forEach((q, qIndex) => {
-            if (!q.question_text) {
-              this.errors.push(`${prefix}.questions[${qIndex}].question_text est requis`);
-            }
-            if (!q.correct_answer) {
-              this.errors.push(`${prefix}.questions[${qIndex}].correct_answer est requis`);
-            }
-          });
-        }
+        this.validateMissionBase(mission, `missions.quiz[${index}]`);
+        this.validateMissionQuestions(mission.questions, `missions.quiz[${index}]`, {
+          requireWrongAnswers: true
+        });
       });
     }
+
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 3: true-false (stocke dans quiz_questions)
+    // correct_answer doit être "vrai" ou "faux"
+    // ═══════════════════════════════════════════════════════════
+    if (missions['true-false'] && Array.isArray(missions['true-false'])) {
+      missions['true-false'].forEach((mission, index) => {
+        this.validateMissionBase(mission, `missions.true-false[${index}]`);
+        this.validateMissionQuestions(mission.questions, `missions.true-false[${index}]`, {
+          validAnswers: ['vrai', 'faux', 'true', 'false']
+        });
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 4: emoji-puzzle (stocke dans quiz_questions)
+    // question_text = emojis, correct_answer = réponse
+    // ═══════════════════════════════════════════════════════════
+    if (missions['emoji-puzzle'] && Array.isArray(missions['emoji-puzzle'])) {
+      missions['emoji-puzzle'].forEach((mission, index) => {
+        this.validateMissionBase(mission, `missions.emoji-puzzle[${index}]`);
+        this.validateMissionQuestions(mission.questions, `missions.emoji-puzzle[${index}]`, {
+          questionFieldName: 'question_text'  // Contient les emojis
+        });
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 5: wordle (stocke dans quiz_questions)
+    // question_text = "Wordle: MOT" ou juste le mot
+    // ═══════════════════════════════════════════════════════════
+    if (missions.wordle && Array.isArray(missions.wordle)) {
+      missions.wordle.forEach((mission, index) => {
+        this.validateMissionBase(mission, `missions.wordle[${index}]`);
+        this.validateMissionQuestions(mission.questions, `missions.wordle[${index}]`, {
+          minWordLength: 4,
+          maxWordLength: 8
+        });
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 6: hangman (stocke dans quiz_questions)
+    // question_text = "Mot à deviner" ou indice
+    // correct_answer = le mot
+    // ═══════════════════════════════════════════════════════════
+    if (missions.hangman && Array.isArray(missions.hangman)) {
+      missions.hangman.forEach((mission, index) => {
+        this.validateMissionBase(mission, `missions.hangman[${index}]`);
+        this.validateMissionQuestions(mission.questions, `missions.hangman[${index}]`);
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TYPE 7: unscramble (stocke dans quiz_questions)
+    // correct_answer = le mot à reconstituer
+    // ═══════════════════════════════════════════════════════════
+    if (missions.unscramble && Array.isArray(missions.unscramble)) {
+      missions.unscramble.forEach((mission, index) => {
+        this.validateMissionBase(mission, `missions.unscramble[${index}]`);
+        this.validateMissionQuestions(mission.questions, `missions.unscramble[${index}]`);
+      });
+    }
+  }
+
+  /**
+   * Valide la structure de base d'une mission
+   * @param {Object} mission - La mission à valider
+   * @param {string} prefix - Préfixe pour les messages d'erreur
+   */
+  validateMissionBase(mission, prefix) {
+    if (!mission.mission_id) {
+      this.errors.push(`${prefix}.mission_id est requis`);
+    }
+    if (!mission.name) {
+      this.errors.push(`${prefix}.name est requis`);
+    }
+    if (!mission.description) {
+      this.errors.push(`${prefix}.description est requis`);
+    }
+    // timeout optionnel mais doit être positif si présent
+    if (mission.timeout !== undefined && mission.timeout !== null) {
+      if (!Number.isInteger(mission.timeout) || mission.timeout < 1) {
+        this.errors.push(`${prefix}.timeout doit être un entier >= 1 seconde`);
+      }
+    }
+    // max_attempts optionnel mais doit être positif si présent
+    if (mission.max_attempts !== undefined && mission.max_attempts !== null) {
+      if (!Number.isInteger(mission.max_attempts) || mission.max_attempts < 1) {
+        this.errors.push(`${prefix}.max_attempts doit être un entier >= 1`);
+      }
+    }
+    // validation_data optionnel - doit être un objet si présent
+    if (mission.validation_data !== undefined && mission.validation_data !== null) {
+      if (typeof mission.validation_data !== 'object') {
+        this.errors.push(`${prefix}.validation_data doit être un objet`);
+      }
+    }
+    // reward_data optionnel - doit être un objet si présent
+    if (mission.reward_data !== undefined && mission.reward_data !== null) {
+      if (typeof mission.reward_data !== 'object') {
+        this.errors.push(`${prefix}.reward_data doit être un objet`);
+      }
+    }
+  }
+
+  /**
+   * Valide les questions d'une mission
+   * @param {Array} questions - Tableau de questions
+   * @param {string} prefix - Préfixe pour les messages d'erreur
+   * @param {Object} options - Options de validation spécifiques au type
+   */
+  validateMissionQuestions(questions, prefix, options = {}) {
+    const {
+      requireWrongAnswers = false,
+      validAnswers = null,
+      minWordLength = null,
+      maxWordLength = null,
+      questionFieldName = 'question_text'
+    } = options;
+
+    // Warning au lieu d'erreur pour missions sans questions
+    if (!questions || questions.length === 0) {
+      console.warn(`${prefix}: aucune question définie (peut être configurée après import)`);
+      return;
+    }
+
+    questions.forEach((q, qIndex) => {
+      const qPrefix = `${prefix}.questions[${qIndex}]`;
+
+      // question_text requis (sauf si optionnel pour certains types)
+      if (!q[questionFieldName] && questionFieldName === 'question_text') {
+        // Pour hangman/wordle/unscramble, question_text peut être optionnel
+        // (peut être généré à partir de correct_answer)
+      }
+
+      // correct_answer toujours requis
+      if (!q.correct_answer) {
+        this.errors.push(`${qPrefix}.correct_answer est requis`);
+      } else {
+        // Validation des réponses valides (true-false)
+        if (validAnswers && !validAnswers.includes(q.correct_answer.toLowerCase())) {
+          this.errors.push(`${qPrefix}.correct_answer doit être: ${validAnswers.join(' ou ')}`);
+        }
+
+        // Validation longueur mot (wordle)
+        if (minWordLength || maxWordLength) {
+          const wordLength = q.correct_answer.length;
+          if (minWordLength && wordLength < minWordLength) {
+            console.warn(`${qPrefix}: mot trop court (${wordLength} < ${minWordLength})`);
+          }
+          if (maxWordLength && wordLength > maxWordLength) {
+            console.warn(`${qPrefix}: mot trop long (${wordLength} > ${maxWordLength})`);
+          }
+        }
+      }
+
+      // wrong_answers requis pour quiz
+      if (requireWrongAnswers) {
+        if (!q.wrong_answers || !Array.isArray(q.wrong_answers) || q.wrong_answers.length === 0) {
+          console.warn(`${qPrefix}: wrong_answers recommandé pour les quiz`);
+        }
+      }
+
+      // difficulty optionnel mais doit être valide si présent
+      if (q.difficulty !== undefined && q.difficulty !== null) {
+        const validDifficulties = ['easy', 'medium', 'hard', 1, 2, 3];
+        if (!validDifficulties.includes(q.difficulty)) {
+          console.warn(`${qPrefix}: difficulty "${q.difficulty}" non standard`);
+        }
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -433,7 +602,8 @@ class ThemeValidator {
    * Valide daily_catchup_config
    */
   validateDailyCatchupConfig(config) {
-    const validPricingModes = ['linear', 'exponential', 'fixed'];
+    // 'increment' est un alias de 'linear' (valeur par défaut DB)
+    const validPricingModes = ['linear', 'exponential', 'fixed', 'increment'];
 
     // pricing_mode
     if (config.pricing_mode && !validPricingModes.includes(config.pricing_mode)) {
@@ -445,9 +615,9 @@ class ThemeValidator {
       this.errors.push('daily_catchup_config.base_price doit être un entier >= 0');
     }
 
-    // max_catchup_days
-    if (config.max_catchup_days !== undefined && (!Number.isInteger(config.max_catchup_days) || config.max_catchup_days < 1)) {
-      this.errors.push('daily_catchup_config.max_catchup_days doit être un entier >= 1');
+    // max_catchup_days (0 = pas de limite, donc >= 0)
+    if (config.max_catchup_days !== undefined && (!Number.isInteger(config.max_catchup_days) || config.max_catchup_days < 0)) {
+      this.errors.push('daily_catchup_config.max_catchup_days doit être un entier >= 0');
     }
   }
 
@@ -631,6 +801,112 @@ class ThemeValidator {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOUVELLES MÉTHODES DE VALIDATION v2.1 - FRAMES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Valide theme_profile_frames
+   * Structure: frame_number, name, description, frame_url, unlock_condition, bonus_type, bonus_value
+   */
+  validateProfileFrames(frames) {
+    const seenFrameNumbers = new Set();
+    const validUnlockTypes = ['collectibles_level', 'legendary_level', 'epic_level', 'rare_level', 'missions_completed', 'days_played'];
+    const validBonusTypes = ['xp_multiplier', 'currency_multiplier', 'luck_bonus', 'cooldown_reduction'];
+
+    frames.forEach((frame, index) => {
+      const prefix = `theme_profile_frames[${index}]`;
+
+      // frame_number (requis, 1-10)
+      if (!Number.isInteger(frame.frame_number) || frame.frame_number < 1 || frame.frame_number > 10) {
+        this.errors.push(`${prefix}.frame_number doit être un entier entre 1 et 10`);
+      } else {
+        if (seenFrameNumbers.has(frame.frame_number)) {
+          this.errors.push(`${prefix}.frame_number ${frame.frame_number} est dupliqué`);
+        }
+        seenFrameNumbers.add(frame.frame_number);
+      }
+
+      // name (requis)
+      if (!frame.name || frame.name.length < 1) {
+        this.errors.push(`${prefix}.name est requis`);
+      }
+
+      // frame_url (requis, doit être une URL valide)
+      if (!frame.frame_url) {
+        this.errors.push(`${prefix}.frame_url est requis`);
+      } else {
+        const urlPattern = /^https?:\/\/.+/i;
+        if (!urlPattern.test(frame.frame_url)) {
+          this.errors.push(`${prefix}.frame_url doit être une URL valide (http:// ou https://)`);
+        }
+      }
+
+      // unlock_condition (optionnel mais doit être un objet valide)
+      if (frame.unlock_condition) {
+        if (typeof frame.unlock_condition !== 'object') {
+          this.errors.push(`${prefix}.unlock_condition doit être un objet`);
+        } else {
+          // Valider le type de condition
+          if (frame.unlock_condition.type && !validUnlockTypes.includes(frame.unlock_condition.type)) {
+            console.warn(`${prefix}: unlock_condition.type "${frame.unlock_condition.type}" non standard`);
+          }
+          // Valider count si présent
+          if (frame.unlock_condition.count !== undefined) {
+            if (!Number.isInteger(frame.unlock_condition.count) || frame.unlock_condition.count < 1) {
+              this.errors.push(`${prefix}.unlock_condition.count doit être un entier >= 1`);
+            }
+          }
+        }
+      }
+
+      // bonus_type (optionnel)
+      if (frame.bonus_type && !validBonusTypes.includes(frame.bonus_type)) {
+        console.warn(`${prefix}: bonus_type "${frame.bonus_type}" non standard (peut être personnalisé)`);
+      }
+
+      // bonus_value (optionnel mais doit être un nombre si présent)
+      if (frame.bonus_value !== undefined && frame.bonus_value !== null) {
+        if (typeof frame.bonus_value !== 'number') {
+          this.errors.push(`${prefix}.bonus_value doit être un nombre`);
+        }
+      }
+    });
+  }
+
+  /**
+   * Valide theme_collectible_frames
+   * Structure: rarity, frame_url
+   */
+  validateCollectibleFrames(frames) {
+    const validRarities = ['common', 'rare', 'epic', 'legendary'];
+    const seenRarities = new Set();
+
+    frames.forEach((frame, index) => {
+      const prefix = `theme_collectible_frames[${index}]`;
+
+      // rarity (requis)
+      if (!frame.rarity || !validRarities.includes(frame.rarity)) {
+        this.errors.push(`${prefix}.rarity doit être: ${validRarities.join(', ')}`);
+      } else {
+        if (seenRarities.has(frame.rarity)) {
+          this.errors.push(`${prefix}.rarity "${frame.rarity}" est dupliquée`);
+        }
+        seenRarities.add(frame.rarity);
+      }
+
+      // frame_url (requis, doit être une URL valide)
+      if (!frame.frame_url) {
+        this.errors.push(`${prefix}.frame_url est requis`);
+      } else {
+        const urlPattern = /^https?:\/\/.+/i;
+        if (!urlPattern.test(frame.frame_url)) {
+          this.errors.push(`${prefix}.frame_url doit être une URL valide (http:// ou https://)`);
+        }
+      }
+    });
+  }
+
   /**
    * Validations de cohérence globales
    */
@@ -689,7 +965,8 @@ class ThemeValidator {
   }
 
   /**
-   * Liste tous les fichiers de thèmes disponibles
+   * Liste tous les fichiers de thèmes disponibles v2.1
+   * Inclut les compteurs pour tous les types de missions et frames
    * @returns {Array} Liste des fichiers avec leurs métadonnées
    */
   static listAvailableThemes() {
@@ -710,6 +987,37 @@ class ThemeValidator {
             const content = fs.readFileSync(filePath, 'utf8');
             const data = JSON.parse(content);
 
+            // Compter les missions par type (v2.1)
+            const missions = data.missions || {};
+            const missionsCount = {
+              keyword: missions.keyword?.length || 0,
+              quiz: missions.quiz?.length || 0,
+              'true-false': missions['true-false']?.length || 0,
+              'emoji-puzzle': missions['emoji-puzzle']?.length || 0,
+              wordle: missions.wordle?.length || 0,
+              hangman: missions.hangman?.length || 0,
+              unscramble: missions.unscramble?.length || 0
+            };
+            const totalMissions = Object.values(missionsCount).reduce((a, b) => a + b, 0);
+
+            // Compter les questions par type de mission
+            let totalQuestions = 0;
+            for (const type of ['quiz', 'true-false', 'emoji-puzzle', 'wordle', 'hangman', 'unscramble']) {
+              if (missions[type]) {
+                for (const m of missions[type]) {
+                  totalQuestions += m.questions?.length || 0;
+                }
+              }
+            }
+
+            // Compter les keywords
+            let totalKeywords = 0;
+            if (missions.keyword) {
+              for (const m of missions.keyword) {
+                totalKeywords += m.keywords?.length || 0;
+              }
+            }
+
             themes.push({
               file: file,
               path: filePath,
@@ -720,15 +1028,23 @@ class ThemeValidator {
               tags: data.metadata?.tags || [],
               preview_image: data.metadata?.preview_image || null,
               collectibles_count: data.collectibles?.length || 0,
-              missions_count: (data.missions?.keyword?.length || 0) + (data.missions?.quiz?.length || 0),
               traps_count: data.traps?.length || 0,
-              // Nouvelles données v2.0
+              // Missions v2.1 - détail par type
+              missions_count: totalMissions,
+              missions_by_type: missionsCount,
+              questions_count: totalQuestions,
+              keywords_count: totalKeywords,
+              // Données v2.0
               daily_rewards_count: data.daily_rewards_config?.length || 0,
               mystery_box_config_count: data.mystery_box_config?.length || 0,
               progression_roles_count: data.progression_roles?.length || 0,
               super_bonuses_count: data.super_bonuses?.length || 0,
               has_daily_catchup: !!data.daily_catchup_config,
-              has_announcement_templates: !!(data.announcement_templates?.length)
+              has_announcement_templates: !!(data.announcement_templates?.length),
+              announcement_templates_count: data.announcement_templates?.length || 0,
+              // Frames v2.1
+              profile_frames_count: data.theme_profile_frames?.length || 0,
+              collectible_frames_count: data.theme_collectible_frames?.length || 0
             });
           } catch (err) {
             console.warn(`Impossible de lire ${file}: ${err.message}`);

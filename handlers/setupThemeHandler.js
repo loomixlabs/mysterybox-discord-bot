@@ -1,6 +1,8 @@
 /**
  * Handler pour la sélection de thèmes préconfigurés dans /setup
  * Permet d'importer rapidement un thème depuis les presets disponibles
+ *
+ * v2.3 - Ajout des catégories, tags et prévisualisation détaillée
  */
 
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
@@ -11,110 +13,372 @@ const ThemeImporter = require('../utils/themeImporter');
 const BotRoleManager = require('../utils/botRoleManager');
 const db = require('../utils/database-pg');
 
-// Chemin vers les thèmes préconfigurés
+// Chemins vers les thèmes (presets, templates exportés, exports)
 const PRESETS_PATH = path.join(__dirname, '..', 'themes', 'presets');
+const TEMPLATES_PATH = path.join(__dirname, '..', 'themes', 'templates');
+const EXPORTS_PATH = path.join(__dirname, '..', 'themes', 'exports');
+
+// Catégories prédéfinies avec emojis
+const CATEGORIES = {
+  'all': { emoji: '📚', label: 'Tous les thèmes', description: 'Afficher tous les thèmes disponibles' },
+  'cinema': { emoji: '🎬', label: 'Cinéma & Films', description: 'Thèmes basés sur des films' },
+  'gaming': { emoji: '🎮', label: 'Jeux Vidéo', description: 'Thèmes basés sur des jeux' },
+  'anime': { emoji: '🎌', label: 'Anime & Manga', description: 'Thèmes basés sur des animes' },
+  'fantasy': { emoji: '🧙', label: 'Fantasy & Magie', description: 'Thèmes fantastiques' },
+  'scifi': { emoji: '🚀', label: 'Science-Fiction', description: 'Thèmes futuristes' },
+  'boardgames': { emoji: '🎲', label: 'Jeux de société', description: 'Monopoly, etc.' },
+  'holiday': { emoji: '🎄', label: 'Fêtes & Événements', description: 'Noël, Halloween, etc.' },
+  'custom': { emoji: '✨', label: 'Personnalisés', description: 'Thèmes créés par la communauté' }
+};
+
+// Mapping de mots-clés vers catégories (pour auto-détection)
+const CATEGORY_KEYWORDS = {
+  'cinema': ['harry', 'potter', 'disney', 'marvel', 'star wars', 'film', 'movie', 'avengers', 'blanche-neige', 'frozen'],
+  'gaming': ['pokemon', 'zelda', 'mario', 'minecraft', 'fortnite', 'league', 'valorant', 'gta', 'gaming'],
+  'anime': ['naruto', 'dragon ball', 'one piece', 'demon slayer', 'attack on titan', 'anime', 'manga', 'jujutsu'],
+  'fantasy': ['magic', 'wizard', 'dragon', 'medieval', 'fantasy', 'sorcerer', 'reliques', 'magie'],
+  'scifi': ['space', 'alien', 'robot', 'future', 'cyber', 'sci-fi', 'scifi'],
+  'boardgames': ['monopoly', 'catan', 'uno', 'board', 'dice', 'card game'],
+  'holiday': ['christmas', 'halloween', 'easter', 'noel', 'noël', 'valentine', 'new year']
+};
 
 /**
- * Récupérer la liste des thèmes préconfigurés disponibles
+ * Détecter automatiquement la catégorie d'un thème basé sur son nom et tags
+ * Version SYNCHRONE locale (pour getAvailablePresets qui est sync)
+ */
+function detectCategorySync(themeName, tags = []) {
+  const searchText = `${themeName} ${tags.join(' ')}`.toLowerCase();
+
+  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    for (const keyword of keywords) {
+      if (searchText.includes(keyword.toLowerCase())) {
+        return category;
+      }
+    }
+  }
+
+  return 'custom'; // Catégorie par défaut
+}
+
+/**
+ * Détecter automatiquement la catégorie d'un thème basé sur son nom et tags
+ * Version ASYNC qui utilise les keywords de la DB si disponibles
+ */
+async function detectCategory(themeName, tags = []) {
+  // Essayer d'utiliser la fonction DB (qui lit les keywords dynamiques)
+  try {
+    const dbCategory = await db.detectThemeCategory(themeName, tags);
+    if (dbCategory && dbCategory !== 'custom') {
+      return dbCategory;
+    }
+  } catch (error) {
+    console.warn('⚠️ Fallback sur détection locale des catégories:', error.message);
+  }
+
+  // Fallback sur les keywords locaux
+  return detectCategorySync(themeName, tags);
+}
+
+/**
+ * Récupérer la liste des thèmes disponibles depuis tous les dossiers
+ * (presets/, templates/, exports/)
  */
 function getAvailablePresets() {
   const presets = [];
+  const seenNames = new Set(); // Éviter les doublons par nom
 
-  try {
-    if (!fs.existsSync(PRESETS_PATH)) {
-      console.warn('⚠️ Dossier presets non trouvé:', PRESETS_PATH);
-      return presets;
+  // Fonction helper pour lire un dossier
+  const readThemesFromPath = (dirPath, source) => {
+    try {
+      if (!fs.existsSync(dirPath)) {
+        console.log(`ℹ️ Dossier ${source} non trouvé:`, dirPath);
+        return;
+      }
+
+      const files = fs.readdirSync(dirPath);
+
+      for (const file of files) {
+        if (!file.endsWith('.theme.json')) continue;
+
+        const filePath = path.join(dirPath, file);
+        try {
+          const content = fs.readFileSync(filePath, 'utf8');
+          const theme = JSON.parse(content);
+
+          const themeName = theme.metadata?.name || theme.theme?.name || file;
+
+          // Éviter les doublons (garder la version la plus récente par fichier modifié)
+          // On utilise le nom + source pour identifier
+          const uniqueKey = `${themeName}_${source}`;
+          if (seenNames.has(themeName)) {
+            // Un thème avec le même nom existe déjà, on skip
+            // sauf si c'est un export plus récent (garder le templates sur presets)
+            continue;
+          }
+          seenNames.add(themeName);
+
+          // Compter les missions (tous les types v2.1)
+          let missionCount = 0;
+          const missions = theme.missions || {};
+          for (const type of Object.keys(missions)) {
+            missionCount += Array.isArray(missions[type]) ? missions[type].length : 0;
+          }
+
+          // Extraire les tags existants ou en créer depuis les métadonnées
+          const existingTags = theme.metadata?.tags || [];
+          // Utiliser la catégorie définie dans le fichier, sinon détection locale synchrone
+          const detectedCategory = theme.metadata?.category || detectCategorySync(themeName, existingTags);
+
+          presets.push({
+            id: file.replace('.theme.json', ''),
+            file: file,
+            path: dirPath, // Stocker le chemin pour l'import
+            source: source, // presets, templates ou exports
+            name: themeName,
+            description: theme.metadata?.description || theme.theme?.description || 'Pas de description',
+            emoji: theme.metadata?.emoji || null, // Emoji personnalisé depuis le fichier
+            collectibles: theme.collectibles?.length || 0,
+            traps: theme.traps?.length || 0,
+            missions: missionCount,
+            difficulty: theme.metadata?.difficulty || 'medium',
+            tags: existingTags,
+            category: detectedCategory, // Catégorie détectée ou définie
+            version: theme.version || '1.0.0',
+            exportedAt: theme.metadata?.exported_at || theme.metadata?.created_at || null
+          });
+        } catch (parseError) {
+          console.warn(`⚠️ Erreur parsing ${file}:`, parseError.message);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Erreur lecture dossier ${source}:`, error);
     }
+  };
 
-    const files = fs.readdirSync(PRESETS_PATH);
+  // Lire les 3 dossiers (ordre de priorité: templates > presets > exports)
+  // Templates d'abord car c'est là que vont les exports depuis super-admin-panel
+  readThemesFromPath(TEMPLATES_PATH, 'templates');
+  readThemesFromPath(PRESETS_PATH, 'presets');
+  readThemesFromPath(EXPORTS_PATH, 'exports');
 
-    for (const file of files) {
-      if (!file.endsWith('.theme.json')) continue;
-
-      const filePath = path.join(PRESETS_PATH, file);
-      const content = fs.readFileSync(filePath, 'utf8');
-      const theme = JSON.parse(content);
-
-      presets.push({
-        id: file.replace('.theme.json', ''),
-        file: file,
-        name: theme.metadata?.name || theme.theme?.name || file,
-        description: theme.metadata?.description || 'Pas de description',
-        collectibles: theme.collectibles?.length || 0,
-        traps: theme.traps?.length || 0,
-        missions: (theme.missions?.quiz?.length || 0) + (theme.missions?.keyword?.length || 0),
-        difficulty: theme.metadata?.difficulty || 'medium',
-        tags: theme.metadata?.tags || []
-      });
+  // Trier par date d'export (plus récent en premier) puis par nom
+  presets.sort((a, b) => {
+    if (a.exportedAt && b.exportedAt) {
+      return new Date(b.exportedAt) - new Date(a.exportedAt);
     }
-  } catch (error) {
-    console.error('❌ Erreur lors de la lecture des presets:', error);
-  }
+    if (a.exportedAt) return -1;
+    if (b.exportedAt) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  console.log(`✅ ${presets.length} thèmes trouvés (templates: ${presets.filter(p => p.source === 'templates').length}, presets: ${presets.filter(p => p.source === 'presets').length}, exports: ${presets.filter(p => p.source === 'exports').length})`);
 
   return presets;
+
+}
+
+/**
+ * Récupérer les catégories disponibles avec leur compte de thèmes
+ * Version ASYNC qui charge les catégories depuis la DB
+ */
+async function getAvailableCategoriesAsync() {
+  const presets = getAvailablePresets();
+  const categoryCounts = {};
+
+  // Compter les thèmes par catégorie
+  for (const preset of presets) {
+    const cat = preset.category || 'custom';
+    categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+  }
+
+  // Essayer de charger les catégories depuis la DB
+  let dbCategories = [];
+  try {
+    dbCategories = await db.getThemeCategories();
+  } catch (error) {
+    console.warn('⚠️ Fallback sur catégories locales:', error.message);
+  }
+
+  // Si on a des catégories DB, les utiliser
+  if (dbCategories && dbCategories.length > 0) {
+    const availableCategories = [];
+
+    for (const dbCat of dbCategories) {
+      const count = dbCat.code === 'all' ? presets.length : (categoryCounts[dbCat.code] || 0);
+      // N'inclure que les catégories avec au moins 1 thème (ou 'all')
+      if (count > 0 || dbCat.code === 'all') {
+        availableCategories.push({
+          id: dbCat.code,
+          emoji: dbCat.emoji,
+          label: dbCat.label,
+          description: dbCat.description,
+          count: count
+        });
+      }
+    }
+
+    return availableCategories;
+  }
+
+  // Fallback sur les catégories locales
+  return getAvailableCategories();
+}
+
+/**
+ * Récupérer les catégories disponibles avec leur compte de thèmes
+ * Version SYNCHRONE (fallback)
+ */
+function getAvailableCategories() {
+  const presets = getAvailablePresets();
+  const categoryCounts = {};
+
+  // Compter les thèmes par catégorie
+  for (const preset of presets) {
+    const cat = preset.category || 'custom';
+    categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+  }
+
+  // Construire la liste des catégories avec au moins 1 thème
+  const availableCategories = [
+    { id: 'all', ...CATEGORIES['all'], count: presets.length }
+  ];
+
+  for (const [catId, catInfo] of Object.entries(CATEGORIES)) {
+    if (catId === 'all') continue;
+    if (categoryCounts[catId] && categoryCounts[catId] > 0) {
+      availableCategories.push({
+        id: catId,
+        ...catInfo,
+        count: categoryCounts[catId]
+      });
+    }
+  }
+
+  return availableCategories;
 }
 
 /**
  * Afficher l'écran de sélection des thèmes préconfigurés
+ * Avec navigation par catégorie
  */
-async function showThemeSelection(interaction) {
-  const presets = getAvailablePresets();
+async function showThemeSelection(interaction, categoryFilter = 'all') {
+  const allPresets = getAvailablePresets();
+
+  // Filtrer par catégorie si nécessaire
+  const presets = categoryFilter === 'all'
+    ? allPresets
+    : allPresets.filter(p => p.category === categoryFilter);
 
   // Vérifier si un thème est déjà actif
   const activeTheme = await db.getActiveTheme(interaction.guildId);
 
-  let description = '# Thèmes Préconfigurés\n\n';
+  // Récupérer les catégories disponibles (async pour DB)
+  const categories = await getAvailableCategoriesAsync();
+  // Chercher la catégorie actuelle dans la liste, fallback sur les constantes
+  const currentCategory = categories.find(c => c.id === categoryFilter) || CATEGORIES[categoryFilter] || CATEGORIES['all'];
+
+  let description = `# ${currentCategory.emoji} ${currentCategory.label}\n\n`;
 
   if (activeTheme) {
     description += `⚠️ **Thème actif:** ${activeTheme.name}\n`;
     description += `L'import d'un nouveau thème désactivera le thème actuel.\n\n`;
   }
 
-  description += 'Sélectionnez un thème préconfigé pour démarrer rapidement !\n';
-  description += 'Chaque thème inclut des collectibles, missions et pièges prêts à l\'emploi.\n\n';
+  if (categoryFilter === 'all') {
+    description += '📂 Sélectionnez une catégorie ou choisissez directement un thème.\n\n';
+  } else {
+    description += `📁 ${presets.length} thème(s) dans cette catégorie\n\n`;
+  }
 
-  // Afficher les stats des thèmes
-  for (const preset of presets) {
+  // Afficher les stats des thèmes avec leur source (max 6 pour éviter trop de texte)
+  const displayPresets = presets.slice(0, 6);
+  for (const preset of displayPresets) {
     const difficultyEmoji = preset.difficulty === 'easy' ? '🟢' :
                            preset.difficulty === 'medium' ? '🟡' :
                            preset.difficulty === 'hard' ? '🔴' : '⚪';
 
-    description += `**${getThemeEmoji(preset.id)} ${preset.name}**\n`;
+    // Indicateur de source
+    const sourceEmoji = preset.source === 'templates' ? '📂' :
+                        preset.source === 'exports' ? '💾' : '📦';
+
+    // Catégorie depuis la liste chargée ou fallback
+    const presetCat = categories.find(c => c.id === preset.category) || CATEGORIES[preset.category];
+    const catEmoji = presetCat?.emoji || '✨';
+    const catLabel = presetCat?.label || 'Personnalisé';
+
+    description += `**${getThemeEmoji(preset.id, preset.emoji)} ${preset.name}** ${sourceEmoji}\n`;
     description += `├─ ${preset.collectibles} collectibles | ${preset.missions} missions | ${preset.traps} pièges\n`;
-    description += `└─ Difficulté: ${difficultyEmoji} ${preset.difficulty}\n\n`;
+    description += `├─ ${catEmoji} ${catLabel}\n`;
+    description += `└─ ${difficultyEmoji} ${preset.difficulty} | v${preset.version}\n\n`;
+  }
+
+  if (presets.length > 6) {
+    description += `_... et ${presets.length - 6} autre(s) thème(s)_\n\n`;
+  }
+
+  if (presets.length === 0) {
+    description += `_Aucun thème dans cette catégorie._\n\n`;
   }
 
   const embed = new EmbedBuilder()
     .setTitle('🎨 Configuration - Choix du Thème')
     .setDescription(description)
     .setColor('#9B59B6')
-    .setFooter({ text: 'Vous pouvez créer un thème personnalisé plus tard dans /admin-panel' })
+    .setFooter({ text: '💡 Cliquez sur "👁️ Prévisualiser" après avoir sélectionné un thème' })
     .setTimestamp();
 
-  // Créer le menu de sélection des thèmes
-  const options = presets.map(preset => ({
-    label: preset.name,
-    value: preset.id,
-    description: `${preset.collectibles} items, ${preset.missions} missions`,
-    emoji: getThemeEmoji(preset.id)
-  }));
+  const components = [];
 
-  // Ajouter l'option "Pas de thème"
-  options.push({
-    label: 'Créer mon propre thème',
-    value: 'custom',
-    description: 'Ignorer les presets et créer manuellement',
-    emoji: '✨'
-  });
+  // Row 1: Menu de sélection des catégories (si plus de 2 catégories)
+  if (categories.length > 2) {
+    const categoryOptions = categories.map(cat => ({
+      label: `${cat.label} (${cat.count})`,
+      value: cat.id,
+      description: cat.description,
+      emoji: cat.emoji,
+      default: cat.id === categoryFilter
+    }));
 
-  const selectMenu = new StringSelectMenuBuilder()
-    .setCustomId('setup_theme_select')
-    .setPlaceholder('🎨 Choisir un thème préconfigurépour démarrer...')
-    .addOptions(options);
+    const categorySelect = new StringSelectMenuBuilder()
+      .setCustomId('setup_theme_category')
+      .setPlaceholder('📁 Filtrer par catégorie...')
+      .addOptions(categoryOptions);
 
-  const row1 = new ActionRowBuilder().addComponents(selectMenu);
+    components.push(new ActionRowBuilder().addComponents(categorySelect));
+  }
 
-  const row2 = new ActionRowBuilder().addComponents(
+  // Row 2: Menu de sélection des thèmes
+  if (presets.length > 0) {
+    const themeOptions = presets.slice(0, 25).map(preset => { // Max 25 options
+      const sourceLabel = preset.source === 'templates' ? '[T]' :
+                          preset.source === 'exports' ? '[E]' : '[P]';
+      const catEmoji = CATEGORIES[preset.category]?.emoji || '✨';
+      return {
+        label: `${preset.name} ${sourceLabel}`.slice(0, 100),
+        value: preset.id,
+        description: `${catEmoji} ${preset.collectibles} items, ${preset.missions} missions`.slice(0, 100),
+        emoji: getThemeEmoji(preset.id, preset.emoji)
+      };
+    });
+
+    // Ajouter l'option "Pas de thème"
+    themeOptions.push({
+      label: 'Créer mon propre thème',
+      value: 'custom',
+      description: 'Ignorer les presets et créer manuellement',
+      emoji: '✨'
+    });
+
+    const themeSelect = new StringSelectMenuBuilder()
+      .setCustomId('setup_theme_select')
+      .setPlaceholder('🎨 Choisir un thème pour voir la prévisualisation...')
+      .addOptions(themeOptions);
+
+    components.push(new ActionRowBuilder().addComponents(themeSelect));
+  }
+
+  // Row 3: Boutons de navigation
+  const navRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('setup_back_to_roles')
       .setLabel('← Retour aux Rôles')
@@ -124,11 +388,21 @@ async function showThemeSelection(interaction) {
       .setLabel('➡️ Passer cette étape')
       .setStyle(ButtonStyle.Secondary)
   );
+  components.push(navRow);
 
   await interaction.editReply({
     embeds: [embed],
-    components: [row1, row2]
+    components
   });
+}
+
+/**
+ * Gérer le changement de catégorie
+ */
+async function handleCategorySelect(interaction) {
+  await interaction.deferUpdate();
+  const selectedCategory = interaction.values[0];
+  await showThemeSelection(interaction, selectedCategory);
 }
 
 /**
@@ -151,6 +425,7 @@ async function handleThemeSelect(interaction) {
 
 /**
  * Afficher la confirmation avant import du thème
+ * Prévisualisation détaillée v2.3 avec collectibles, missions par type, pièges
  */
 async function showThemeConfirmation(interaction, themeId) {
   const presets = getAvailablePresets();
@@ -164,46 +439,134 @@ async function showThemeConfirmation(interaction, themeId) {
     });
   }
 
-  // Lire le fichier pour plus de détails
-  const filePath = path.join(PRESETS_PATH, preset.file);
+  // Lire le fichier pour plus de détails (utiliser le path stocké)
+  const filePath = path.join(preset.path, preset.file);
   const content = fs.readFileSync(filePath, 'utf8');
   const themeData = JSON.parse(content);
 
   // Compter les collectibles par rareté
-  const rarityCount = {};
+  const rarityCount = { legendary: [], epic: [], rare: [], common: [] };
   for (const c of themeData.collectibles || []) {
-    rarityCount[c.rarity] = (rarityCount[c.rarity] || 0) + 1;
-  }
-
-  let description = `# ${getThemeEmoji(themeId)} ${preset.name}\n\n`;
-  description += `${preset.description}\n\n`;
-  description += '## Contenu du thème\n\n';
-  description += `**Collectibles (${preset.collectibles}):**\n`;
-
-  if (rarityCount.legendary) description += `├─ Légendaires: ${rarityCount.legendary}\n`;
-  if (rarityCount.epic) description += `├─ Épiques: ${rarityCount.epic}\n`;
-  if (rarityCount.rare) description += `├─ Rares: ${rarityCount.rare}\n`;
-  if (rarityCount.common) description += `└─ Communs: ${rarityCount.common}\n`;
-
-  description += `\n**Missions:** ${preset.missions}\n`;
-  description += `**Pièges:** ${preset.traps}\n`;
-
-  // Progression roles
-  if (themeData.theme_config?.progression_roles) {
-    description += `\n**Rôles de progression:** ${themeData.theme_config.progression_roles.length}\n`;
-    for (const role of themeData.theme_config.progression_roles) {
-      description += `├─ ${role.name} (${role.percentage}%)\n`;
+    if (rarityCount[c.rarity]) {
+      rarityCount[c.rarity].push(c);
     }
   }
 
-  description += `\n**Durée:** ${themeData.theme?.duration_days || 30} jours\n`;
-  description += `**Items requis:** ${themeData.theme?.required_items || 20}\n`;
+  // Catégorie et tags
+  const catEmoji = CATEGORIES[preset.category]?.emoji || '✨';
+  const catLabel = CATEGORIES[preset.category]?.label || 'Personnalisé';
+  const tags = preset.tags?.length > 0 ? preset.tags.join(', ') : 'Aucun tag';
+
+  // Difficulté
+  const difficultyEmoji = preset.difficulty === 'easy' ? '🟢' :
+                          preset.difficulty === 'medium' ? '🟡' :
+                          preset.difficulty === 'hard' ? '🔴' : '⚪';
+
+  let description = `# ${getThemeEmoji(themeId, preset.emoji)} ${preset.name}\n\n`;
+  description += `*${preset.description}*\n\n`;
+  description += `${catEmoji} **Catégorie:** ${catLabel}\n`;
+  description += `🏷️ **Tags:** ${tags}\n`;
+  description += `${difficultyEmoji} **Difficulté:** ${preset.difficulty}\n\n`;
+
+  // === COLLECTIBLES DÉTAILLÉS ===
+  description += '## 📦 Collectibles\n\n';
+
+  // Légendaires
+  if (rarityCount.legendary.length > 0) {
+    description += `**🟡 Légendaires (${rarityCount.legendary.length}):**\n`;
+    const legendaryList = rarityCount.legendary.slice(0, 4).map(c => `${c.emoji || '🔶'} ${c.name}`).join(' • ');
+    description += `${legendaryList}`;
+    if (rarityCount.legendary.length > 4) description += ` _+${rarityCount.legendary.length - 4}_`;
+    description += '\n\n';
+  }
+
+  // Épiques
+  if (rarityCount.epic.length > 0) {
+    description += `**🟣 Épiques (${rarityCount.epic.length}):**\n`;
+    const epicList = rarityCount.epic.slice(0, 4).map(c => `${c.emoji || '🔷'} ${c.name}`).join(' • ');
+    description += `${epicList}`;
+    if (rarityCount.epic.length > 4) description += ` _+${rarityCount.epic.length - 4}_`;
+    description += '\n\n';
+  }
+
+  // Rares
+  if (rarityCount.rare.length > 0) {
+    description += `**🔵 Rares (${rarityCount.rare.length}):**\n`;
+    const rareList = rarityCount.rare.slice(0, 5).map(c => `${c.emoji || '🔹'} ${c.name}`).join(' • ');
+    description += `${rareList}`;
+    if (rarityCount.rare.length > 5) description += ` _+${rarityCount.rare.length - 5}_`;
+    description += '\n\n';
+  }
+
+  // Communs
+  if (rarityCount.common.length > 0) {
+    description += `**⚪ Communs (${rarityCount.common.length}):**\n`;
+    const commonList = rarityCount.common.slice(0, 5).map(c => `${c.emoji || '⬜'} ${c.name}`).join(' • ');
+    description += `${commonList}`;
+    if (rarityCount.common.length > 5) description += ` _+${rarityCount.common.length - 5}_`;
+    description += '\n\n';
+  }
+
+  // === MISSIONS DÉTAILLÉES ===
+  const missions = themeData.missions || {};
+  const missionTypes = Object.keys(missions).filter(type => Array.isArray(missions[type]) && missions[type].length > 0);
+
+  if (missionTypes.length > 0) {
+    description += '## 🎯 Missions\n\n';
+
+    const missionLabels = {
+      quiz: { emoji: '❓', label: 'Quiz' },
+      keyword: { emoji: '🔤', label: 'Mots-clés' },
+      truefalse: { emoji: '✅', label: 'Vrai/Faux' },
+      emoji_puzzle: { emoji: '🧩', label: 'Puzzle Emoji' },
+      unscramble: { emoji: '🔀', label: 'Lettres mélangées' },
+      hangman: { emoji: '💀', label: 'Le Pendu' },
+      wordle: { emoji: '🟩', label: 'Wordle' }
+    };
+
+    for (const type of missionTypes) {
+      const count = missions[type].length;
+      const info = missionLabels[type] || { emoji: '📋', label: type };
+      description += `${info.emoji} **${info.label}:** ${count} question(s)\n`;
+    }
+    description += '\n';
+  }
+
+  // === PIÈGES ===
+  const traps = themeData.traps || [];
+  if (traps.length > 0) {
+    description += '## ⚠️ Pièges\n\n';
+    const trapList = traps.slice(0, 4).map(t => `${t.emoji || '💣'} ${t.name}`).join(' • ');
+    description += `${trapList}`;
+    if (traps.length > 4) description += ` _+${traps.length - 4}_`;
+    description += '\n\n';
+  }
+
+  // === RÔLES DE PROGRESSION ===
+  if (themeData.theme_config?.progression_roles?.length > 0) {
+    description += '## 🏅 Rôles de progression\n\n';
+    for (const role of themeData.theme_config.progression_roles) {
+      description += `├─ **${role.name}** (${role.percentage}%)\n`;
+    }
+    description += '\n';
+  }
+
+  // === CONFIGURATION ===
+  description += '## ⚙️ Configuration\n\n';
+  description += `├─ **Durée:** ${themeData.theme?.duration_days || 30} jours\n`;
+  description += `├─ **Items requis:** ${themeData.theme?.required_items || 20}\n`;
+  description += `└─ **Version:** v${preset.version}\n`;
+
+  // Source du fichier
+  const sourceLabel = preset.source === 'templates' ? '📂 Templates' :
+                      preset.source === 'exports' ? '💾 Exports' : '📦 Presets';
+  description += `\n_Source: ${sourceLabel}_`;
 
   const embed = new EmbedBuilder()
-    .setTitle('Confirmer l\'import du thème')
+    .setTitle('👁️ Prévisualisation du thème')
     .setDescription(description)
-    .setColor('#E74C3C')
-    .setFooter({ text: 'Cliquez sur "Importer" pour commencer' })
+    .setColor('#9B59B6')
+    .setFooter({ text: '💡 Cliquez sur "Importer" pour installer ce thème' })
     .setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
@@ -229,11 +592,22 @@ async function showThemeConfirmation(interaction, themeId) {
 async function handleThemeImport(interaction, themeId) {
   await interaction.deferUpdate();
 
-  const filePath = path.join(PRESETS_PATH, `${themeId}.theme.json`);
+  // Chercher le fichier dans les 3 dossiers possibles
+  const fileName = `${themeId}.theme.json`;
+  let filePath = null;
 
-  if (!fs.existsSync(filePath)) {
+  // Ordre de priorité: templates > presets > exports
+  for (const dir of [TEMPLATES_PATH, PRESETS_PATH, EXPORTS_PATH]) {
+    const testPath = path.join(dir, fileName);
+    if (fs.existsSync(testPath)) {
+      filePath = testPath;
+      break;
+    }
+  }
+
+  if (!filePath) {
     return interaction.editReply({
-      content: `❌ Fichier thème non trouvé: ${themeId}.theme.json`,
+      content: `❌ Fichier thème non trouvé: ${fileName}\n\nRecherche effectuée dans:\n• templates/\n• presets/\n• exports/`,
       embeds: [],
       components: []
     });
@@ -278,8 +652,12 @@ async function handleThemeImport(interaction, themeId) {
     });
 
     if (!result.success) {
+      // result.errors est un tableau, pas result.error
+      const errorMessage = Array.isArray(result.errors)
+        ? result.errors.join('\n')
+        : (result.errors || 'Erreur inconnue');
       return interaction.editReply({
-        content: `❌ **Erreur lors de l'import:**\n\n${result.error}`,
+        content: `❌ **Erreur lors de l'import:**\n\n${errorMessage}`,
         embeds: [],
         components: []
       });
@@ -307,6 +685,7 @@ async function handleThemeImport(interaction, themeId) {
     const themeDifficulty = themeData.metadata?.difficulty || 'medium';
     const themeDuration = themeData.theme?.duration_days || 30;
     const themeRequiredItems = themeData.theme?.required_items || 20;
+    const themeEmoji = themeData.metadata?.emoji || null;
 
     // Compter les collectibles par rareté
     const rarityCount = {};
@@ -319,7 +698,7 @@ async function handleThemeImport(interaction, themeId) {
                            themeDifficulty === 'medium' ? '🟡' :
                            themeDifficulty === 'hard' ? '🔴' : '⚪';
 
-    let successMessage = `# ${getThemeEmoji(themeId)} ${themeName}\n\n`;
+    let successMessage = `# ${getThemeEmoji(themeId, themeEmoji)} ${themeName}\n\n`;
 
     if (themeDescription) {
       successMessage += `*${themeDescription}*\n\n`;
@@ -524,12 +903,21 @@ async function handleSkipTheme(interaction) {
 
 /**
  * Obtenir l'emoji correspondant au thème
+ * Priorité: emoji du preset > mapping hardcodé > emoji par défaut
  */
-function getThemeEmoji(themeId) {
+function getThemeEmoji(themeId, presetEmoji = null) {
+  // Priorité 1: Emoji personnalisé depuis les métadonnées du fichier
+  if (presetEmoji) {
+    return presetEmoji;
+  }
+
+  // Priorité 2: Mapping hardcodé pour les thèmes connus
   const emojis = {
     'monopoly': '🎩',
     'pokemon': '⚡',
     'harry-potter': '🪄',
+    'harry_potter': '🪄',
+    'harry_potter_reliques': '🪄',
     'blanche-neige': '🍎'
   };
   return emojis[themeId] || '🎨';
@@ -541,5 +929,9 @@ module.exports = {
   handleThemeImport,
   handleThemeBack,
   handleSkipTheme,
-  getAvailablePresets
+  handleCategorySelect,
+  getAvailablePresets,
+  getAvailableCategories,
+  getAvailableCategoriesAsync,
+  CATEGORIES
 };

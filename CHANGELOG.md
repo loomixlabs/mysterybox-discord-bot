@@ -5,6 +5,238 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.3.2] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Import Thème - Malformed Array]**: Correction du bug "malformed array literal: []" (2026-01-07)
+  - **Problème**: L'import de thèmes avec des missions quiz/true-false échouait avec l'erreur PostgreSQL "malformed array literal"
+  - **Cause**: `wrong_answers` est de type `text[]` (tableau PostgreSQL natif), mais le code utilisait `JSON.stringify()` produisant `"[]"` au lieu d'un tableau JS
+  - **Solution**: Passer directement le tableau JavaScript à node-postgres qui le convertit automatiquement en `text[]`
+  - **Fichier modifié**: `utils/themeImporter.js` (lignes 737-761)
+
+---
+
+## [2.3.1] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Import Thème - Affichage Erreur]**: Correction du bug "Erreur lors de l'import: undefined" (2026-01-07)
+  - **Problème**: Lors d'une erreur d'import, le message affichait "undefined" au lieu du vrai message d'erreur
+  - **Cause**: `ThemeImporter` retourne `result.errors` (tableau) mais `setupThemeHandler` utilisait `result.error` (singulier)
+  - **Solution**: Corrigé pour utiliser `result.errors` et le joindre en string si c'est un tableau
+  - **Fichier modifié**: `handlers/setupThemeHandler.js` (lignes 654-664)
+
+---
+
+## [2.3.0] - 2026-01-07
+
+### ✨ Added
+
+- **[Catégories Dynamiques en DB v2.3]**: Système complet de gestion des catégories de thèmes (2026-01-07)
+  - **Nouvelle table `theme_categories`**: Stockage des catégories avec code, emoji, label, description, keywords
+  - **9 catégories par défaut**: all, cinema, gaming, anime, fantasy, scifi, boardgames, holiday, custom
+  - **Auto-détection améliorée**: Keywords dynamiques lus depuis la DB pour catégoriser automatiquement
+  - **Fichiers modifiés**:
+    - `database/migrations/add-theme-categories.sql`: Migration pour créer la table
+    - `utils/database-pg.js`: Nouvelles fonctions `getThemeCategories()`, `getThemeCategoryByCode()`, `createThemeCategory()`, `updateThemeCategory()`, `deleteThemeCategory()`, `detectThemeCategory()`, `addKeywordToCategory()`, `removeKeywordFromCategory()`
+
+- **[CRUD Catégories Super-Admin v2.3]**: Interface complète de gestion des catégories (2026-01-07)
+  - **Panneau de gestion**: Accessible via "📋 Gérer Catégories" dans le panneau fichiers thèmes
+  - **Création**: Formulaire pour ajouter une nouvelle catégorie
+  - **Modification**: Édition de l'emoji, label, description, keywords
+  - **Suppression**: Avec confirmation (impossible si catégorie par défaut)
+  - **Visualisation détails**: Affichage des infos et nombre de thèmes utilisant la catégorie
+  - **Fichiers modifiés**:
+    - `handlers/superAdminHandler.js`: Fonctions `showCategoriesManagement()`, `showCategoryDetails()`, `showCategoryModal()`, `handleCategoryModalSubmit()`, `deleteCategoryConfirm()`, `deleteCategory()`, `showThemeCategorySelect()`, `setThemeCategory()`
+    - `events/interactionCreate.js`: Routing pour boutons, select menus et modals catégories
+
+- **[Choix Catégorie à l'Export v2.3]**: Sélection de la catégorie lors de l'export d'un thème (2026-01-07)
+  - **Select menu catégorie**: Apparaît dans l'écran d'export pour choisir la catégorie
+  - **Auto-détection**: La catégorie est détectée automatiquement mais modifiable
+  - **Sauvegarde dans metadata**: La catégorie est stockée dans `metadata.category` du JSON exporté
+  - **Version export bumped**: Format d'export passé à v2.3.0
+  - **Fichiers modifiés**:
+    - `handlers/superAdminHandler.js`: Modification de `handleThemeExport()`, `handleThemeExportDownload()`, `handleThemeExportToTemplates()`
+    - `utils/themeExporter.js`: Ajout du champ `metadata.category` dans l'export
+    - `events/interactionCreate.js`: Nouveaux handlers pour `superadmin_export_category:` et formats v2.3
+
+- **[Affichage Catégorie Fichiers Thèmes v2.3]**: Visualisation de la catégorie dans le détail d'un fichier (2026-01-07)
+  - **Catégorie affichée**: Avec emoji et label dans les détails du fichier thème
+  - **Bouton modification**: "📁 Catégorie" pour changer la catégorie du fichier
+  - **Fichier modifié**: `handlers/superAdminHandler.js` (fonction `showThemeFileDetails`)
+
+- **[Prévisualisation Thèmes v2.3]**: Prévisualisation détaillée avant import dans /setup (2026-01-07)
+  - **Collectibles détaillés**: Affichage par rareté avec emojis et noms (max 4-5 par catégorie)
+  - **Missions par type**: Détail des 7 types de missions (Quiz, Vrai/Faux, Pendu, Wordle, etc.)
+  - **Pièges**: Liste des pièges avec leurs emojis
+  - **Métadonnées**: Catégorie, tags, difficulté, version, source du fichier
+  - **Fichier modifié**: `handlers/setupThemeHandler.js` (fonction `showThemeConfirmation`)
+
+- **[Catégories et Navigation v2.3]**: Système de catégories pour organiser les thèmes dans /setup (2026-01-07)
+  - **Catégories dynamiques**: Chargement depuis la DB avec fallback sur constantes locales
+  - **Auto-détection hybride**: Utilise la DB si disponible, sinon keywords locaux
+  - **Navigation par catégorie**: Menu déroulant pour filtrer les thèmes par catégorie
+  - **Compteur dynamique**: Affichage du nombre de thèmes par catégorie
+  - **Fichiers modifiés**:
+    - `handlers/setupThemeHandler.js`: Ajout de `detectCategorySync()`, `getAvailableCategoriesAsync()`, mise à jour de `showThemeSelection()`
+    - `events/interactionCreate.js`: Routing pour `setup_theme_category`
+
+---
+
+## [2.2.4] - 2026-01-07
+
+### ✨ Added
+
+- **[Gestion Fichiers Thèmes v2.2]**: Nouveau panneau de gestion des fichiers thèmes dans /super-admin-panel (2026-01-07)
+  - **Nouveau bouton**: "📁 Gérer Fichiers Thèmes" dans le panneau principal
+  - **Fonctionnalités**:
+    - Liste tous les fichiers `.theme.json` depuis `templates/`, `presets/`, `exports/`
+    - Affichage détaillé: nom, emoji, theme_id, version, contenu (collectibles, missions, pièges)
+    - **Modification d'emoji**: Via message dans le chat Discord (awaitMessages)
+    - **Suppression de fichiers**: Avec confirmation avant suppression irréversible
+    - **Duplication de thèmes**: Crée une copie du fichier avec un nouvel ID pour éviter les conflits
+  - **Fichiers modifiés**:
+    - `handlers/superAdminHandler.js` (lignes 1778-2707): Nouvelles fonctions de gestion
+    - `events/interactionCreate.js`: Routage des boutons, select menus
+
+- **[Emoji personnalisable dans les thèmes]**: Ajout du champ `metadata.emoji` dans les exports (2026-01-07)
+  - L'emoji est stocké dans `metadata.emoji` du fichier `.theme.json`
+  - Utilisé automatiquement dans `/setup` (priorité sur le mapping hardcodé)
+  - Modifiable via le nouveau panneau de gestion des fichiers
+  - **Fichiers modifiés**:
+    - `utils/themeExporter.js` (ligne 166): Ajout du champ emoji
+    - `handlers/setupThemeHandler.js`:
+      - `getAvailablePresets()`: Extraction de l'emoji des métadonnées
+      - `getThemeEmoji()`: Priorité emoji fichier > mapping hardcodé > défaut
+
+- **[Contrôle d'ID de thème v2.2]**: Vérification des conflits d'ID avant export vers templates (2026-01-07)
+  - Détection automatique si un fichier avec le même `theme_id` existe déjà
+  - Options proposées en cas de conflit:
+    - "📝 Remplacer l'existant" (overwrite)
+    - "✏️ Renommer (ajouter timestamp)" (ajoute `_1234567890`)
+    - "❌ Annuler"
+  - **Fichiers modifiés**:
+    - `handlers/superAdminHandler.js`:
+      - `checkThemeIdConflict()`: Détection de conflit
+      - `handleThemeExportWithIdCheck()`: Gestion du workflow
+      - `executeThemeExportToTemplates()`: Export avec/sans timestamp
+    - `events/interactionCreate.js`: Nouveaux routages pour overwrite/rename
+
+### 🔧 Changed
+
+- **[Version Footer Export]**: Mise à jour v2.1 → v2.2 dans les embeds d'export
+
+---
+
+## [2.2.3] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Export - Comptage missions]**: Correction de l'affichage du nombre de missions dans le résumé d'export (2026-01-07)
+  - **Bug corrigé**: Le résumé d'export affichait "4 missions" au lieu de "10 missions"
+  - **Cause racine**: Le code ne comptait que `keyword` + `quiz`, ignorant les 5 autres types
+  - **Solution**: Utilisation de `Object.values(missions).reduce()` pour compter tous les 7 types
+  - **Fichier modifié**: `handlers/superAdminHandler.js` (ligne 1740)
+
+- **[Import - Validation daily_catchup_config]**: Correction des erreurs de validation lors de l'import de thèmes (2026-01-07)
+  - **Bug corrigé**: L'import échouait avec "pricing_mode doit être linear/exponential/fixed"
+  - **Cause racine**: La DB utilise `increment` comme valeur par défaut, non reconnu par le validateur
+  - **Solutions**:
+    - Ajout de `increment` comme mode de pricing valide (alias de `linear`)
+    - Modification de `max_catchup_days` pour accepter `0` (signifie "pas de limite")
+  - **Fichier modifié**: `utils/themeValidator.js` (lignes 605-621)
+
+- **[Export/Import - allowed_channels]**: Exclusion des IDs de salons de l'export (2026-01-07)
+  - **Bug corrigé**: L'import échouait avec "malformed array literal" sur `allowed_channels`
+  - **Cause racine**: Les IDs de salons sont spécifiques au serveur source et invalides sur un autre serveur
+  - **Solutions**:
+    - Export: `allowed_channels` n'est plus exporté (supprimé de `baseMission`)
+    - Import: Le champ est ignoré même si présent (pour compatibilité anciens exports)
+  - **Fichiers modifiés**:
+    - `utils/themeExporter.js` (lignes 385-397)
+    - `utils/themeImporter.js` (lignes 722-726)
+
+---
+
+## [2.2.2] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[/setup - Lecture des thèmes depuis templates/]**: Correction de la visibilité des thèmes exportés via /super-admin-panel (2026-01-07)
+  - **Bug corrigé**: Les thèmes exportés via `/super-admin-panel` n'apparaissaient PAS dans `/setup`
+  - **Cause racine**: `/setup` ne lisait QUE depuis `themes/presets/` alors que les exports allaient dans `themes/templates/`
+  - **Solution**: Modification de `getAvailablePresets()` pour lire depuis 3 dossiers:
+    - `themes/templates/` (exports récents via /super-admin-panel) - Priorité haute
+    - `themes/presets/` (thèmes préconfigurés) - Priorité moyenne
+    - `themes/exports/` (exports manuels) - Priorité basse
+  - **Améliorations UI**:
+    - Indicateur de source: 📂 templates | 📦 presets | 💾 exports
+    - Affichage de la version du thème
+    - Affichage de la date d'export si disponible
+    - Labels dans le menu: `[T]` templates, `[P]` presets, `[E]` exports
+  - **Infrastructure Docker**: Ajout du volume `./themes:/app/themes:rw` pour persister les exports
+  - **Fichiers modifiés**:
+    - `handlers/setupThemeHandler.js`:
+      - Refonte `getAvailablePresets()` (lignes 23-107): lecture multi-dossiers
+      - `showThemeSelection()` (lignes 125-147): affichage source + version + date
+      - `showThemeConfirmation()` (ligne 220): utilisation de `preset.path`
+      - `handleThemeImport()` (lignes 284-303): recherche dans 3 dossiers
+    - `docker-compose.yml` (VPS): Ajout volume themes pour persistance
+
+---
+
+## [2.2.1] - 2026-01-07
+
+### ✨ Added
+
+- **[Système Export/Import Thèmes v2.1]**: Support complet des 7 types de missions et des frames (2026-01-07)
+  - **Types de missions supportés**:
+    - ✅ `keyword-message` (mission_keywords)
+    - ✅ `quiz` (quiz_questions avec wrong_answers)
+    - ✅ `true-false` (quiz_questions)
+    - ✅ `emoji-puzzle` (quiz_questions)
+    - ✅ `wordle` (quiz_questions)
+    - ✅ `hangman` (quiz_questions)
+    - ✅ `unscramble` (quiz_questions)
+  - **Nouvelles données exportées/importées**:
+    - `validation_data` pour chaque mission (configuration spécifique)
+    - `reward_data` pour chaque mission
+    - `allowed_channels` pour chaque mission
+    - `theme_profile_frames` (cadres de profil personnalisés)
+    - `theme_collectible_frames` (cadres de collectibles par rareté)
+  - **Format d'export amélioré**:
+    - Version du format: 2.1.0
+    - Export structuré par type de mission
+    - Questions/mots exportés avec leurs métadonnées complètes
+  - **Fichiers modifiés**:
+    - `utils/themeExporter.js`:
+      - Refonte `formatMissions()` pour supporter 7 types
+      - Ajout `formatProfileFrame()` et `formatCollectibleFrame()`
+      - Export des frames et validation_data
+    - `utils/themeImporter.js`:
+      - Refonte `createMissions()` pour 7 types
+      - Ajout helper `createMissionBase()` et `createQuizQuestion()`
+      - Ajout `createProfileFrames()` et `createCollectibleFrames()`
+    - `utils/themeValidator.js`:
+      - Ajout validation pour 5 nouveaux types de missions
+      - Ajout `validateMissionBase()` et `validateMissionQuestions()`
+      - Ajout `validateProfileFrames()` et `validateCollectibleFrames()`
+      - Mise à jour `listAvailableThemes()` avec compteurs par type
+
+### 📊 Données du thème Harry Potter (référence)
+
+| Catégorie | Quantité |
+|-----------|----------|
+| Missions | 10 (7 types) |
+| quiz_questions | 177 |
+| mission_keywords | 100 |
+| theme_profile_frames | 2 |
+| collectibles | 22 |
+| traps | 4 |
+
+---
+
 ## [2.2.0] - 2026-01-06
 
 ### 🐛 Fixed
