@@ -332,23 +332,29 @@ class MysteryBoxHandler {
     console.log(`📊 Distribution pièges: S1=${bySeverity[1].length}, S2=${bySeverity[2].length}, S3=${bySeverity[3].length}, S4=${bySeverity[4].length}, S5=${bySeverity[5].length}`);
 
     // Sélection de la sévérité basée sur les pourcentages (probabilité cumulative)
+    // IMPORTANT: D'abord déterminer la sévérité théorique, puis appliquer le fallback
     const rand = Math.random() * 100;
     let cumulative = 0;
-    let selectedSeverity = 3; // Fallback: Medium
+    let theoreticalSeverity = 3; // Fallback: Medium
 
+    // Étape 1: Déterminer la sévérité théorique basée sur le random
     for (let severity = 1; severity <= 5; severity++) {
       cumulative += percentages[severity];
-      if (rand < cumulative && bySeverity[severity].length > 0) {
-        selectedSeverity = severity;
+      if (rand < cumulative) {
+        theoreticalSeverity = severity;
         break;
       }
     }
 
-    // Fallback: Si la sévérité sélectionnée n'a pas de pièges, descendre vers moins sévère
-    if (bySeverity[selectedSeverity].length === 0) {
-      console.log(`⚠️ Aucun piège de sévérité ${selectedSeverity}, recherche fallback...`);
+    // Étape 2: Si la sévérité théorique n'a pas de piège, DESCENDRE vers moins sévère
+    // C'est plus juste pour le joueur: si on devait avoir un piège S4 mais qu'il n'existe pas,
+    // on donne un piège moins grave (S3, S2, S1) plutôt que plus grave (S5)
+    let selectedSeverity = theoreticalSeverity;
 
-      // Chercher d'abord les sévérités inférieures (moins sévères)
+    if (bySeverity[selectedSeverity].length === 0) {
+      console.log(`⚠️ Aucun piège de sévérité ${selectedSeverity}, recherche fallback vers moins sévère...`);
+
+      // Chercher les sévérités inférieures (moins sévères) - TOUJOURS en priorité
       for (let s = selectedSeverity - 1; s >= 1; s--) {
         if (bySeverity[s].length > 0) {
           selectedSeverity = s;
@@ -357,12 +363,12 @@ class MysteryBoxHandler {
         }
       }
 
-      // Si toujours vide, chercher sévérités supérieures
+      // Seulement si AUCUNE sévérité inférieure n'existe, chercher supérieures
       if (bySeverity[selectedSeverity].length === 0) {
         for (let s = selectedSeverity + 1; s <= 5; s++) {
           if (bySeverity[s].length > 0) {
             selectedSeverity = s;
-            console.log(`✅ Fallback vers sévérité ${s} (plus sévère)`);
+            console.log(`⚠️ Fallback vers sévérité ${s} (plus sévère - aucun piège moins sévère)`);
             break;
           }
         }
@@ -1482,7 +1488,23 @@ class MysteryBoxHandler {
 
     // Créer la progression de mission AVANT d'envoyer le message
     // Cela garantit que même si thread.send() échoue, on a le mission_progress en base
-    await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id, gameState);
+    // 🔒 RACE CONDITION FIX: Si createMissionProgress retourne null, le joueur a déjà une mission active
+    const missionProgress = await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id, gameState);
+
+    if (!missionProgress) {
+      // Race condition détectée - le joueur a cliqué sur 2 boîtes en même temps
+      console.warn(`⚠️ [RACE CONDITION] Tentative de double mission bloquée pour joueur ${player.id}`);
+      // Supprimer le thread créé car la mission n'a pas pu être enregistrée
+      try {
+        await thread.delete();
+      } catch (e) {
+        console.error('Erreur suppression thread orphelin:', e);
+      }
+      return interaction.followUp({
+        content: `⚠️ **Tu as déjà une mission en cours !**\n\n💡 Termine-la avant d'en commencer une nouvelle.`,
+        flags: 64
+      });
+    }
 
     await thread.send({
       content: `<@${interaction.user.id}>`,

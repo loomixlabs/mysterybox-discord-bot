@@ -5,6 +5,18 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.3.4] - 2026-01-07
+
+### 🐛 Fixed
+
+- **[Pièges - Fallback Sévérité]**: Correction du fallback qui montait vers S5 au lieu de descendre (2026-01-07)
+  - **Problème**: Si le random tombe sur S4 (8%) mais qu'il n'y a pas de piège S4, le code montait vers S5 (Avada Kedavra)
+  - **Impact**: Avada Kedavra recevait ~10% des pièges au lieu de 2% (stats: 37 triggers au lieu de ~8 attendus)
+  - **Solution**: Le fallback descend TOUJOURS vers moins sévère d'abord (S3→S2→S1), puis monte seulement si aucun piège moins grave n'existe
+  - **Fichier modifié**: `handlers/mysteryBoxHandler.js` (lignes 334-386)
+
+---
+
 ## [2.3.3] - 2026-01-07
 
 ### 🐛 Fixed
