@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, AttachmentBuilder, PermissionFlagsBits } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, AttachmentBuilder } = require('discord.js');
 const path = require('path');
 const db = require('../utils/database-pg');
 const announcements = require('../utils/announcements');
@@ -9,6 +9,7 @@ const progressionRoleHandler = require('./progressionRoleHandler');
 const { SUPER_ADMINS } = require('../utils/permissions');
 const { getLoomixFooter, getLoomixFooterWithCustomText } = require('../utils/footerHelper');
 const imageGenerator = require('../utils/imageGenerator');
+const { buildCollectibleRewardEmbed, getLevelStars } = require('../utils/collectibleEmbedBuilder');
 
 /**
  * Base URL pour les images de mystery boxes par défaut
@@ -468,7 +469,7 @@ class MysteryBoxHandler {
     } else if (rand <= probCollectible + probMission) {
       // MISSION
       type = 'mission';
-      items = await db.getMissionsByTheme(guildId, themeId);
+      items = await db.getActiveMissionsByTheme(guildId, themeId); // Seulement les missions actives
 
     } else if (rand <= probCollectible + probMission + probTrap) {
       // PIÈGE
@@ -505,7 +506,7 @@ class MysteryBoxHandler {
         availableTypes.push({ type: 'collectible', items: collectibles });
       }
 
-      const missions = await db.getMissionsByTheme(guildId, themeId);
+      const missions = await db.getActiveMissionsByTheme(guildId, themeId);
       if (missions && missions.length > 0) {
         availableTypes.push({ type: 'mission', items: missions });
       }
@@ -950,196 +951,23 @@ class MysteryBoxHandler {
     // Incrémenter et récupérer progression globale
     const progress = await db.incrementProgress(interaction.guildId, player.id, collectible.theme_id);
 
-    // ========== GÉNÉRATION D'IMAGE AVEC FRAME ET MINT ==========
-    let attachments = [];
-    let generatedImageBuffer = null; // Stocker pour les annonces
-
-    // Mapping niveau → type de frame
-    // Niveau 1 = pas de frame, Niveau 2 = rare, Niveau 3 = epic, Niveau 4 = legendary
-    const levelToFrameRarity = {
-      1: null,      // Pas de frame
-      2: 'rare',
-      3: 'epic',
-      4: 'legendary'
-    };
-
-    const currentLevel = mainResult.newLevel || 1;
-    const frameRarityForLevel = levelToFrameRarity[currentLevel] || null;
-
-    // Générer image pour TOUS les cas (nouveau, fusion, restauré)
-    try {
-      if (mainResult.leveledUp) {
-        // Pour level up, générer l'image de transition
-        const oldFrameRarity = levelToFrameRarity[mainResult.oldLevel] || null;
-        const newFrameRarity = levelToFrameRarity[mainResult.newLevel] || null;
-
-        const [oldFrameUrl, newFrameUrl] = await Promise.all([
-          oldFrameRarity ? db.getCollectibleFrameUrl(interaction.guildId, collectible.theme_id, oldFrameRarity) : null,
-          newFrameRarity ? db.getCollectibleFrameUrl(interaction.guildId, collectible.theme_id, newFrameRarity) : null
-        ]);
-
-        generatedImageBuffer = await imageGenerator.generateLevelUpImage(
-          collectible.image_url,
-          {
-            oldFrameUrl,
-            newFrameUrl,
-            oldRarity: oldFrameRarity,
-            newRarity: newFrameRarity,
-            oldLevel: mainResult.oldLevel,
-            newLevel: mainResult.newLevel,
-            mintNumber: mainResult.mintNumber
-          }
-        );
-      } else {
-        // Pour nouveau collectible, fusion simple ou restauré : générer image avec frame/mint
-        const frameUrl = frameRarityForLevel
-          ? await db.getCollectibleFrameUrl(interaction.guildId, collectible.theme_id, frameRarityForLevel)
-          : null;
-
-        generatedImageBuffer = await imageGenerator.generateCollectibleWithFrame(
-          collectible.image_url,
-          frameUrl,
-          frameRarityForLevel,  // null pour niveau 1, sinon la rareté
-          {
-            level: currentLevel,
-            mintNumber: mainResult.mintNumber,
-            useCache: true
-          }
-        );
-      }
-
-      if (generatedImageBuffer) {
-        const attachmentName = mainResult.isNew ? 'new_collectible.png' :
-                               mainResult.leveledUp ? 'level_up.png' :
-                               mainResult.restored ? 'collectible_restored.png' : 'collectible_fusion.png';
-        const attachment = new AttachmentBuilder(generatedImageBuffer, { name: attachmentName });
-        attachments.push(attachment);
-      }
-    } catch (imgError) {
-      console.error('⚠️ [IMAGE] Erreur génération image:', imgError.message);
-      // Continuer sans image générée
-    }
-
-    // ========== CONSTRUCTION DU MESSAGE ==========
-
-    // Helper pour générer les étoiles de niveau
-    const getLevelStars = (level) => '★'.repeat(level) + '☆'.repeat(4 - level);
-
-    let title, description;
-    const embeds = [];
-
-    if (mainResult.isNew) {
-      // ===== NOUVEAU COLLECTIBLE =====
-      title = jackpotBonus ? '💰 JACKPOT X2 ACTIVÉ !' : '🎉 Nouveau Collectible !';
-
-      let successMessage = collectible.reveal_message ||
-        themeMessages?.collectible_obtained ||
-        `Félicitations ! Tu as trouvé **{name}** !`;
-
-      description = successMessage
-        .replace(/\{name\}/g, collectible.name)
-        .replace(/\{count\}/g, progress?.collected_count || '?')
-        .replace(/\{total\}/g, collectible.required_items || '?');
-
-      // Ajouter info mint si numéro bas
-      if (mainResult.mintNumber && mainResult.mintNumber <= 10) {
-        description += `\n\n🏆 **Mint #${mainResult.mintNumber}** - Tu fais partie des premiers !`;
-      }
-
-    } else if (mainResult.restored) {
-      // ===== COLLECTIBLE RESTAURÉ (Option B) =====
-      title = '🔮 Collectible Retrouvé !';
-      description = `Tu as récupéré **${collectible.name}** que tu avais perdu !\n\n` +
-        `${getLevelStars(mainResult.newLevel)} Niveau **${mainResult.newLevel}** conservé\n` +
-        `🏆 Mint **#${mainResult.mintNumber}** original`;
-
-      if (mainResult.currentXp > 0) {
-        description += `\n📊 XP: **${mainResult.currentXp}**`;
-      }
-
-    } else {
-      // ===== FUSION (doublon → XP) =====
-      if (mainResult.leveledUp) {
-        // Level Up !
-        title = '✨ LEVEL UP !';
-        description = `**${collectible.name}** passe au niveau **${mainResult.newLevel}** !\n\n` +
-          `${getLevelStars(mainResult.oldLevel)} → ${getLevelStars(mainResult.newLevel)}`;
-
-        // Récompense Loomix
-        if (mainResult.loomixReward > 0) {
-          description += `\n\n💰 **+${mainResult.loomixReward} Loomix** reçus !`;
-        }
-      } else {
-        // Fusion sans level up
-        title = '🔄 Fusion !';
-        const xpGained = mainResult.xpGained || 100;
-        const currentXp = mainResult.currentXp || 0;
-        const nextThreshold = mainResult.xpToNextLevel || 100;
-
-        description = `**${collectible.name}** gagne **+${xpGained} XP** !\n\n` +
-          `${getLevelStars(mainResult.newLevel)} Niveau ${mainResult.newLevel}\n` +
-          `📊 Progression: **${currentXp}/${nextThreshold}** XP`;
-      }
-    }
-
-    // Ajouter info Jackpot x2
-    if (bonusCollectible && bonusResult) {
-      const bonusInfo = bonusResult.isNew
-        ? `✨ Nouveau: **${bonusCollectible.name}** (${bonusCollectible.rarity})`
-        : `🔄 Fusion: **${bonusCollectible.name}** +${bonusResult.xpGained || 100} XP`;
-
-      description += `\n\n💰 **BONUS JACKPOT X2:**\n${bonusInfo}`;
-
-      if (bonusResult.leveledUp) {
-        description += ` → **LEVEL UP ${bonusResult.newLevel}!**`;
-        if (bonusResult.loomixReward > 0) {
-          description += ` (+${bonusResult.loomixReward} Loomix)`;
-        }
-      }
-    }
-
-    // Créer l'embed principal
-    const embed = new EmbedBuilder()
-      .setTitle(title)
-      .setDescription(description)
-      .setColor(collectible.role_color || rarityColors[collectible.rarity] || branding.secondary_color);
-
-    // Image (attachment ou URL)
-    if (attachments.length > 0) {
-      embed.setImage(`attachment://${attachments[0].name}`);
-    } else if (collectible.image_url && collectible.image_url.trim()) {
-      embed.setImage(collectible.image_url);
-    }
-
-    // Champ collectible principal
-    embed.addFields({
-      name: `${rarityEmojis[collectible.rarity]} ${collectible.name}`,
-      value: `┗━ Rareté: **${collectible.rarity.toUpperCase()}**\n` +
-        `┗━ Niveau: **${getLevelStars(mainResult.newLevel)}**\n` +
-        `┗━ Progression: **${progress?.collected_count || '?'}/${collectible.required_items || '?'}**` +
-        (mainResult.mintNumber && mainResult.mintNumber <= 100 ? `\n┗━ Mint: **#${mainResult.mintNumber}**` : ''),
-      inline: false
+    // ========== UTILISER LE BUILDER CENTRALISÉ ==========
+    const embedResult = await buildCollectibleRewardEmbed({
+      guildId: interaction.guildId,
+      collectible,
+      evolutionResult: mainResult,
+      progress,
+      themeMessages,
+      branding,
+      context: 'mystery_box',
+      bonusCollectible,
+      bonusResult,
+      jackpotBonus
     });
 
-    // Champ bonus Jackpot x2
-    if (bonusCollectible && bonusResult) {
-      embed.addFields({
-        name: `💰 ${rarityEmojis[bonusCollectible.rarity]} ${bonusCollectible.name} *(BONUS)*`,
-        value: `┗━ Rareté: **${bonusCollectible.rarity.toUpperCase()}**\n` +
-          `┗━ Niveau: **${getLevelStars(bonusResult.newLevel)}**\n` +
-          `┗━ Charges restantes: **${jackpotBonus.remaining_charges - 1}**`,
-        inline: false
-      });
-    }
-
-    embed.setFooter(getLoomixFooterWithCustomText(
-      mainResult.restored ? `Collectible récupéré ! Mint #${mainResult.mintNumber}` :
-      mainResult.leveledUp ? `Level Up ! ${getLevelStars(mainResult.newLevel)}` :
-      jackpotBonus ? '2 collectibles obtenus !' :
-      `Rareté: ${collectible.rarity}`
-    )).setTimestamp();
-
-    embeds.push(embed);
+    const embeds = embedResult.embeds;
+    const attachments = embedResult.attachments;
+    const generatedImageBuffer = embedResult.generatedImageBuffer;
 
     // ========== VÉRIFIER FRAMES DE PROFIL DÉBLOQUÉES ==========
     let unlockedFrames = [];
@@ -1350,46 +1178,40 @@ class MysteryBoxHandler {
       });
     }
 
-    // Vérifier si le joueur a la permission d'écrire dans le canal parent
-    // Si non, ajouter une permission temporaire sur le CANAL PARENT (pas le thread)
-    // Car Discord hérite les permissions du parent pour les threads
-    let tempPermissionAdded = false;
-    const parentChannel = interaction.channel;
+    // ==================== VÉRIFICATION DU CANAL MISSIONS ====================
+    // Le canal missions DOIT être configuré dans l'admin panel
+    // Les threads seront créés dans ce canal dédié
+    const missionChannelId = await db.getMissionChannel(interaction.guildId);
 
-    try {
-      // IMPORTANT: Utiliser interaction.member (GuildMember) et non interaction.user (User)
-      // pour vérifier correctement les permissions dans le contexte du serveur
-      const member = interaction.member;
-      const memberPermissions = parentChannel.permissionsFor(member);
-
-      const hasSendMessages = memberPermissions?.has(PermissionFlagsBits.SendMessages);
-      const hasSendMessagesInThreads = memberPermissions?.has(PermissionFlagsBits.SendMessagesInThreads);
-
-      console.log(`🔍 [PERMISSION DEBUG] Canal: #${parentChannel.name}, Joueur: ${interaction.user.tag}`);
-      console.log(`🔍 [PERMISSION DEBUG] SendMessages: ${hasSendMessages}, SendMessagesInThreads: ${hasSendMessagesInThreads}, ViewChannel: ${memberPermissions?.has(PermissionFlagsBits.ViewChannel)}`);
-
-      // Ajouter la permission si le joueur ne peut pas écrire dans le canal parent OU dans les threads
-      // Les deux sont nécessaires pour éviter l'affichage "lecture seule" dans le thread
-      if (!hasSendMessages || !hasSendMessagesInThreads) {
-        console.log(`🔐 [PERMISSION] Ajout permission temporaire pour ${interaction.user.tag} dans #${parentChannel.name}`);
-
-        await parentChannel.permissionOverwrites.create(interaction.user, {
-          SendMessages: true,
-          ViewChannel: true,
-          SendMessagesInThreads: true,
-          ReadMessageHistory: true
-        }, { reason: `Permission temporaire pour mission secrète - ${interaction.user.username}` });
-
-        tempPermissionAdded = true;
-      } else {
-        console.log(`✅ [PERMISSION] Joueur ${interaction.user.tag} a déjà toutes les permissions dans #${parentChannel.name}`);
-      }
-    } catch (permError) {
-      console.warn(`⚠️ [PERMISSION] Impossible d'ajouter permission temporaire:`, permError.message);
+    if (!missionChannelId) {
+      console.error(`🔴 [MISSION] Canal missions non configuré pour guild ${interaction.guildId}`);
+      return interaction.followUp({
+        content: '❌ **Canal des missions non configuré !**\n\n' +
+                 '> Un administrateur doit configurer le canal dédié aux missions.\n' +
+                 '> `/admin` → Gérer les missions → 📍 Canal Missions',
+        flags: 64
+      });
     }
 
-    // Créer un thread privé pour la mission
-    const thread = await interaction.channel.threads.create({
+    // Récupérer le canal missions
+    let missionChannel;
+    try {
+      missionChannel = await interaction.client.channels.fetch(missionChannelId);
+      if (!missionChannel || !missionChannel.isTextBased()) {
+        throw new Error('Canal invalide ou supprimé');
+      }
+    } catch (channelError) {
+      console.error(`🔴 [MISSION] Canal missions ${missionChannelId} introuvable:`, channelError.message);
+      return interaction.followUp({
+        content: '❌ **Le canal des missions configuré est introuvable !**\n\n' +
+                 '> Un administrateur doit reconfigurer le canal.\n' +
+                 '> `/admin` → Gérer les missions → 📍 Canal Missions',
+        flags: 64
+      });
+    }
+
+    // Créer un thread privé dans le canal missions dédié
+    const thread = await missionChannel.threads.create({
       name: `Mission Secrète - ${interaction.user.username}`,
       autoArchiveDuration: 1440,
       type: ChannelType.PrivateThread,
@@ -1451,15 +1273,25 @@ class MysteryBoxHandler {
 
     // Message mystérieux dans le thread
     // Convertir le timeout en unité appropriée
-    const timeoutSeconds = mission.timeout || 300;
+    // NOTE: mission.timeout est en MINUTES dans la table missions
+    // Pour Morpion (tictactoe), utiliser la config spécifique (en secondes)
+    let timeoutSeconds;
+    if (mission.type === 'tictactoe') {
+      const tttConfig = await db.getTictactoeConfig(interaction.guildId);
+      timeoutSeconds = tttConfig?.mission_timeout || 1800; // 30 min par défaut
+    } else {
+      // Autres missions: timeout est en minutes, convertir en secondes
+      timeoutSeconds = (mission.timeout || 5) * 60;
+    }
     const timeoutDisplay = timeoutSeconds >= 60 && timeoutSeconds % 60 === 0
       ? `${timeoutSeconds / 60} minute${timeoutSeconds / 60 > 1 ? 's' : ''}`
       : `${timeoutSeconds} seconde${timeoutSeconds > 1 ? 's' : ''}`;
 
-    // Message générique qui ne révèle PAS le type de mission
+    // Message générique qui ne révèle PAS le type de mission ni la durée
+    // L'image et le timeout seront révélés APRÈS que le joueur clique sur "Lancer"
     const msgConfig = {
       title: '🎯 MISSION SECRÈTE !',
-      description: `Une mission mystérieuse t'attend, **${interaction.user.username}** !\n\n📝 Complète-la pour gagner un collectible aléatoire !\n\n⏰ Tu auras **${timeoutDisplay}** pour l'accomplir.`,
+      description: `Une mission mystérieuse t'attend, **${interaction.user.username}** !\n\n📝 Complète-la pour gagner un collectible aléatoire !\n\n🔮 *Clique sur le bouton pour découvrir ta mission...*`,
       buttonLabel: '🎯 Lancer la mission',
       buttonEmoji: '📋'
     };
@@ -1470,9 +1302,8 @@ class MysteryBoxHandler {
       .setColor(branding.secondary_color)
       .setFooter(await getLoomixFooter(interaction.guildId));
 
-    if (mission.image_url) {
-      missionEmbed.setThumbnail(mission.image_url);
-    }
+    // NOTE: On ne met PAS le thumbnail ici pour garder le mystère
+    // L'image sera révélée quand le joueur lance la mission
 
     const button = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -1482,20 +1313,10 @@ class MysteryBoxHandler {
         .setEmoji(msgConfig.buttonEmoji)
     );
 
-    // Préparer le game_state avec les infos de permission temporaire si applicable
-    const gameState = tempPermissionAdded
-      ? {
-          tempPermission: {
-            channelId: parentChannel.id,
-            userId: interaction.user.id
-          }
-        }
-      : null;
-
     // Créer la progression de mission AVANT d'envoyer le message
     // Cela garantit que même si thread.send() échoue, on a le mission_progress en base
     // 🔒 RACE CONDITION FIX: Si createMissionProgress retourne null, le joueur a déjà une mission active
-    const missionProgress = await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id, gameState);
+    const missionProgress = await db.createMissionProgress(interaction.guildId, player.id, mission.id, thread.id, null);
 
     if (!missionProgress) {
       // Race condition détectée - le joueur a cliqué sur 2 boîtes en même temps
@@ -1878,9 +1699,18 @@ class MysteryBoxHandler {
     // CAS SPÉCIAL: MYSTERYBOX JOKER - RÉVÉLATION LÉGENDAIRE
     // ═══════════════════════════════════════════════════════════════════
     if (bonus.effect_type === 'joker') {
-      // Créer l'attachment pour le GIF personnalisé
+      // Créer l'attachment pour le GIF personnalisé avec vérification
       const jokerGifPath = path.join(__dirname, '..', 'assets', 'joker.gif');
-      const jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+      const fs = require('fs');
+      let jokerAttachment = null;
+
+      if (fs.existsSync(jokerGifPath)) {
+        const gifStats = fs.statSync(jokerGifPath);
+        console.log(`🃏 [JOKER REVEAL] GIF chargé: ${jokerGifPath} (${(gifStats.size / 1024 / 1024).toFixed(2)} MB)`);
+        jokerAttachment = new AttachmentBuilder(jokerGifPath, { name: 'joker-wow.gif' });
+      } else {
+        console.error(`🔴 [JOKER REVEAL] GIF non trouvé: ${jokerGifPath}`);
+      }
 
       const jokerEmbed = new EmbedBuilder()
         .setTitle('🃏✨ MYSTERYBOX JOKER OBTENU ! ✨🃏')
@@ -1903,38 +1733,60 @@ class MysteryBoxHandler {
           `│  💎 *Le pouvoir absolu est entre tes mains* 💎  │\n` +
           `╰─────────────────────────────────────────╯`
         )
-        .setColor('#FFD700') // Or légendaire
-        .setImage('attachment://joker-wow.gif') // GIF personnalisé attaché
-        .addFields(
-          {
-            name: '🏆 Rareté',
-            value: '🌟 **LÉGENDAIRE** 🌟',
-            inline: true
-          },
-          {
-            name: '⚡ Pouvoir',
-            value: '∞ **ILLIMITÉ** ∞',
-            inline: true
-          },
-          {
-            name: '🎯 Utilisation',
-            value: '1️⃣ **Unique**',
-            inline: true
-          }
-        )
-        .setFooter({ text: '🃏 MysteryBox Joker • Le bonus ultime des légendes' });
+        .setColor('#FFD700'); // Or légendaire
 
-      await interaction.followUp({ embeds: [jokerEmbed], files: [jokerAttachment], flags: 64 });
+      // Ajouter l'image seulement si le GIF existe
+      if (jokerAttachment) {
+        jokerEmbed.setImage('attachment://joker-wow.gif');
+      }
 
-      // Annonce publique ÉPIQUE du Joker (avec le même GIF attaché)
-      await announcements.announceSuperBonusWithAttachment(
-        interaction.client,
-        interaction.guildId,
-        interaction.user.username,
-        bonus.name,
-        bonus.icon,
-        jokerGifPath
-      );
+      jokerEmbed.addFields(
+        {
+          name: '🏆 Rareté',
+          value: '🌟 **LÉGENDAIRE** 🌟',
+          inline: true
+        },
+        {
+          name: '⚡ Pouvoir',
+          value: '∞ **ILLIMITÉ** ∞',
+          inline: true
+        },
+        {
+          name: '🎯 Utilisation',
+          value: '1️⃣ **Unique**',
+          inline: true
+        }
+      )
+      .setFooter({ text: '🃏 MysteryBox Joker • Le bonus ultime des légendes' });
+
+      // Envoyer avec ou sans GIF
+      const followUpOptions = { embeds: [jokerEmbed], flags: 64 };
+      if (jokerAttachment) {
+        followUpOptions.files = [jokerAttachment];
+      }
+      await interaction.followUp(followUpOptions);
+
+      // Annonce publique ÉPIQUE du Joker (avec le même GIF attaché si disponible)
+      if (fs.existsSync(jokerGifPath)) {
+        await announcements.announceSuperBonusWithAttachment(
+          interaction.client,
+          interaction.guildId,
+          interaction.user.username,
+          bonus.name,
+          bonus.icon,
+          jokerGifPath
+        );
+      } else {
+        // Fallback sans GIF
+        await announcements.announceSuperBonus(
+          interaction.client,
+          interaction.guildId,
+          interaction.user.username,
+          bonus.name,
+          bonus.icon,
+          null
+        );
+      }
 
       return;
     }

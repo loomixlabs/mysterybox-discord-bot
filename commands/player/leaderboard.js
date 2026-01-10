@@ -1,95 +1,179 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../../utils/database-pg');
 
-// Configuration des types de leaderboard
+// Configuration des types de leaderboard avec descriptions détaillées
+// scope: 'theme' = lié au thème actif, 'global' = tous thèmes confondus
 const LEADERBOARD_TYPES = {
   collection: {
     name: 'Collection',
     emoji: '🏆',
+    scope: 'theme',
     description: 'Progression dans la collection actuelle',
+    details: 'Classé par : complétion > date de fin > nombre d\'items collectés.',
     color: '#FFD700'
   },
   legendary: {
     name: 'Chasseurs Légendaires',
     emoji: '💎',
+    scope: 'global',
     description: 'Nombre de légendaires obtenus',
+    details: 'Total de collectibles légendaires en possession (non perdus).',
     color: '#9B59B6'
   },
   epic: {
     name: 'Chasseurs Épiques',
     emoji: '💜',
+    scope: 'global',
     description: 'Nombre d\'épiques obtenus',
+    details: 'Total de collectibles épiques en possession (non perdus).',
     color: '#8E44AD'
   },
   lucky: {
     name: 'Les Chanceux',
     emoji: '🍀',
+    scope: 'global',
     description: 'Meilleur ratio de légendaires',
+    details: 'Pourcentage de légendaires sur le total de collectibles. Min 5 items.',
     color: '#27AE60'
   },
   speedrunners: {
     name: 'Speedrunners',
     emoji: '⚡',
+    scope: 'global',
     description: 'Collection complétée le plus vite',
+    details: 'Record personnel : durée entre le 1er et dernier item d\'une collection.',
     color: '#F1C40F'
   },
   mission_accuracy: {
     name: 'Précision Missions',
     emoji: '🎯',
+    scope: 'global',
     description: 'Meilleur taux de réussite missions',
+    details: 'Ratio missions réussies / échouées. Min 3 missions terminées.',
     color: '#3498DB'
   },
   streak: {
     name: 'Streaks',
     emoji: '🔥',
+    scope: 'global',
     description: 'Jours consécutifs de connexion',
+    details: 'Nombre de jours consécutifs de claim au calendrier quotidien.',
     color: '#E74C3C'
   },
   mystery_boxes: {
     name: 'Mystery Boxes',
     emoji: '📦',
+    scope: 'global',
     description: 'Nombre de mystery boxes ouvertes',
+    details: 'Total de boxes ouvertes depuis le début.',
     color: '#3498DB'
   },
   missions: {
     name: 'Missions',
     emoji: '✅',
+    scope: 'global',
     description: 'Missions complétées avec succès',
+    details: 'Nombre total de missions réussies (quiz, keywords, etc.).',
     color: '#2ECC71'
   },
   badges: {
     name: 'Badges',
     emoji: '🎖️',
+    scope: 'global',
     description: 'Collection de badges',
+    details: 'Nombre total de badges débloqués sur le serveur.',
     color: '#F39C12'
   },
   traps_blocked: {
     name: 'Survivants',
     emoji: '🛡️',
+    scope: 'global',
     description: 'Pièges bloqués avec le bouclier',
+    details: 'Nombre de pièges évités grâce au super bonus Bouclier.',
     color: '#1ABC9C'
   },
   trap_victims: {
     name: 'Victimes des Pièges',
     emoji: '💀',
+    scope: 'global',
     description: 'Nombre de pièges déclenchés',
+    details: 'Total de pièges subis. Les plus malchanceux du serveur !',
     color: '#E74C3C'
   },
   joker_masters: {
     name: 'Maîtres du Joker',
     emoji: '🃏',
+    scope: 'global',
     description: 'Collectibles obtenus via Joker',
+    details: 'Nombre d\'items obtenus grâce au super bonus Joker.',
     color: '#E91E63'
   },
   veterans: {
     name: 'Vétérans',
     emoji: '⭐',
+    scope: 'global',
     description: 'Les plus anciens joueurs',
+    details: 'Classé par date d\'inscription sur le serveur.',
     color: '#95A5A6'
+  },
+  loomix: {
+    name: 'Riches en Loomix',
+    emoji: '💰',
+    scope: 'global',
+    description: 'Les plus grandes fortunes',
+    details: 'Classé par solde actuel de Loomix (monnaie du serveur).',
+    color: '#F1C40F'
+  },
+  finishers: {
+    name: 'Finishers',
+    emoji: '🏅',
+    scope: 'global',
+    description: 'Nombre de thèmes complétés',
+    details: 'Total de collections terminées. Les plus fidèles !',
+    color: '#9B59B6'
+  },
+  mint_masters: {
+    name: 'Mint #1 Masters',
+    emoji: '🥇',
+    scope: 'global',
+    description: 'Collectionneurs de Mint #1',
+    details: 'Nombre de collectibles obtenus en premier (Mint #1).',
+    color: '#FFD700'
+  },
+  tictactoe_wins: {
+    name: 'Champions Morpion',
+    emoji: '🎮',
+    scope: 'global',
+    description: 'Victoires au Morpion PvP',
+    details: 'Nombre de parties de Morpion gagnées contre d\'autres joueurs.',
+    color: '#5865F2'
+  },
+  tictactoe_winrate: {
+    name: 'Win Rate Morpion',
+    emoji: '📈',
+    scope: 'global',
+    description: 'Meilleur ratio victoires/défaites',
+    details: 'Pourcentage de victoires au Morpion. Min 5 parties jouées.',
+    color: '#2ECC71'
   }
 };
 
 const ITEMS_PER_PAGE = 10;
+
+// Helper pour construire le titre avec scope
+function buildTitle(config, themeName = null) {
+  const scopeEmoji = config.scope === 'theme' ? '🎭' : '🌍';
+  if (themeName) {
+    return `${config.emoji} ${config.name} ${scopeEmoji} • ${themeName}`;
+  }
+  return `${config.emoji} ${config.name} ${scopeEmoji}`;
+}
+
+// Helper pour construire l'en-tête descriptif
+function buildHeader(config) {
+  const scopeText = config.scope === 'theme' ? 'Thème actif' : 'Tous thèmes';
+  return `> ${config.description}\n> *${config.details}*\n> 📍 **Scope:** ${scopeText}\n`;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -297,12 +381,13 @@ async function buildLuckyLeaderboard(guildId, requesterId, config, page) {
     return `${medal} ${nameDisplay}\n┗ 🍀 **${player.ratio}%** ratio (${player.legendaries}💎 / ${player.total} total)`;
   });
 
+  const header = buildHeader(config);
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emoji} ${config.name}`)
+    .setTitle(buildTitle(config))
     .setColor(config.color)
-    .setDescription(lines.join('\n\n'))
+    .setDescription(header + '\n' + lines.join('\n\n'))
     .setTimestamp()
-    .setFooter({ text: `Page ${page + 1}/${totalPages} • Min 5 collectibles requis` });
+    .setFooter({ text: `Page ${page + 1}/${totalPages}` });
 
   // Position du joueur
   await addRequesterPosition(embed, guildId, requesterId, displayData, 'lucky', page);
@@ -310,25 +395,38 @@ async function buildLuckyLeaderboard(guildId, requesterId, config, page) {
   return { embed, totalPages, hasMore };
 }
 
-// Classement Speedrunners
+// Classement Speedrunners - Meilleur temps par joueur (tous thèmes confondus, sans doublons)
 async function buildSpeedrunnerLeaderboard(guildId, requesterId, config, page) {
   const offset = page * ITEMS_PER_PAGE;
 
+  // Récupérer le MEILLEUR temps de chaque joueur (un seul record par joueur)
   const data = await db.queryAll(`
-    SELECT p.username, p.discord_id, pp.started_at, pp.completed_at,
-           EXTRACT(EPOCH FROM (pp.completed_at - pp.started_at)) as seconds_to_complete
-    FROM player_progress pp
-    JOIN players p ON pp.player_id = p.id AND pp.guild_id = p.guild_id
-    WHERE pp.guild_id = $1 AND pp.is_completed = TRUE AND pp.completed_at IS NOT NULL
-    ORDER BY (pp.completed_at - pp.started_at) ASC
+    SELECT p.username, p.discord_id,
+           best.completed_at, best.seconds_to_complete,
+           t.name as theme_name
+    FROM (
+      SELECT player_id,
+             MIN(EXTRACT(EPOCH FROM (completed_at - started_at))) as seconds_to_complete
+      FROM player_progress
+      WHERE guild_id = $1 AND is_completed = TRUE AND completed_at IS NOT NULL
+      GROUP BY player_id
+    ) best_times
+    JOIN player_progress best ON best.player_id = best_times.player_id
+      AND best.guild_id = $1
+      AND best.is_completed = TRUE
+      AND EXTRACT(EPOCH FROM (best.completed_at - best.started_at)) = best_times.seconds_to_complete
+    JOIN players p ON best.player_id = p.id AND best.guild_id = p.guild_id
+    JOIN themes t ON best.theme_id = t.id
+    ORDER BY best_times.seconds_to_complete ASC
     LIMIT $2 OFFSET $3
   `, [guildId, ITEMS_PER_PAGE + 1, offset]);
 
   const hasMore = data.length > ITEMS_PER_PAGE;
   const displayData = data.slice(0, ITEMS_PER_PAGE);
 
+  // Compter le nombre de joueurs DISTINCTS qui ont complété au moins un thème
   const totalCount = await db.queryOne(`
-    SELECT COUNT(*) as count FROM player_progress
+    SELECT COUNT(DISTINCT player_id) as count FROM player_progress
     WHERE guild_id = $1 AND is_completed = TRUE AND completed_at IS NOT NULL
   `, [guildId]);
 
@@ -354,15 +452,16 @@ async function buildSpeedrunnerLeaderboard(guildId, requesterId, config, page) {
     const duration = formatDuration(player.seconds_to_complete);
     const completedDate = new Date(player.completed_at).toLocaleDateString('fr-FR');
 
-    return `${medal} ${nameDisplay}\n┗ ⚡ **${duration}** (terminé le ${completedDate})`;
+    return `${medal} ${nameDisplay}\n┗ ⚡ **${duration}** • ${player.theme_name} (${completedDate})`;
   });
 
+  const header = buildHeader(config);
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emoji} ${config.name}`)
+    .setTitle(buildTitle(config))
     .setColor(config.color)
-    .setDescription(lines.join('\n\n'))
+    .setDescription(header + '\n' + lines.join('\n\n'))
     .setTimestamp()
-    .setFooter({ text: `Page ${page + 1}/${totalPages} • Temps pour compléter la collection` });
+    .setFooter({ text: `Page ${page + 1}/${totalPages}` });
 
   return { embed, totalPages, hasMore };
 }
@@ -420,12 +519,13 @@ async function buildMissionAccuracyLeaderboard(guildId, requesterId, config, pag
     return `${medal} ${nameDisplay}\n┗ 🎯 **${player.success_rate || 0}%** (${player.completed}✅ / ${player.failed}❌)`;
   });
 
+  const header = buildHeader(config);
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emoji} ${config.name}`)
+    .setTitle(buildTitle(config))
     .setColor(config.color)
-    .setDescription(lines.join('\n\n'))
+    .setDescription(header + '\n' + lines.join('\n\n'))
     .setTimestamp()
-    .setFooter({ text: `Page ${page + 1}/${totalPages} • Min 3 missions terminées` });
+    .setFooter({ text: `Page ${page + 1}/${totalPages}` });
 
   return { embed, totalPages, hasMore };
 }
@@ -483,7 +583,8 @@ async function buildCollectionLeaderboard(guildId, requesterId, config, page) {
   const lines = displayData.map((player, index) => {
     const rank = offset + index;
     const medal = getMedal(rank);
-    const percentage = Math.round((player.collected_count / theme.required_items) * 100);
+    const requiredItems = theme.required_items || 1; // Éviter division par 0
+    const percentage = Math.min(100, Math.round((player.collected_count / requiredItems) * 100));
     const progressBar = buildProgressBar(percentage);
 
     const isRequester = player.discord_id === requesterId;
@@ -506,10 +607,11 @@ async function buildCollectionLeaderboard(guildId, requesterId, config, page) {
     WHERE guild_id = $1 AND theme_id = $2
   `, [guildId, theme.id]);
 
+  const header = buildHeader(config);
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emoji} Top Chasseurs - ${theme.name}`)
+    .setTitle(buildTitle(config, theme.name))
     .setColor(config.color)
-    .setDescription(lines.join('\n\n'))
+    .setDescription(header + '\n' + lines.join('\n\n'))
     .addFields({
       name: '📊 Statistiques du thème',
       value: [
@@ -543,39 +645,83 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
 
   switch (type) {
     case 'legendary':
+      // Tri par count DESC, puis par date du Nème collectible (pour avoir le premier à atteindre ce score)
+      // Note: On compte les collectibles UNIQUES jamais obtenus (même perdus puis récupérés = compte 1 seule fois)
       data = await db.queryAll(`
-        SELECT p.username, p.discord_id, COUNT(*)::integer as count
-        FROM collections c
-        JOIN players p ON c.player_id = p.id AND c.guild_id = p.guild_id
-        JOIN collectibles col ON c.collectible_id = col.id
-        WHERE c.guild_id = $1 AND col.rarity = 'legendary' AND c.lost_at IS NULL
-        GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        WITH player_counts AS (
+          SELECT p.id as player_id, p.username, p.discord_id,
+                 COUNT(DISTINCT c.collectible_id)::integer as count
+          FROM collections c
+          JOIN players p ON c.player_id = p.id AND c.guild_id = p.guild_id
+          JOIN collectibles col ON c.collectible_id = col.id
+          WHERE c.guild_id = $1 AND col.rarity = 'legendary'
+          GROUP BY p.id, p.username, p.discord_id
+        ),
+        nth_dates AS (
+          SELECT fo.player_id, MIN(fo.achieved_at) as first_collected_at
+          FROM (
+            SELECT c.player_id, c.collectible_id, MIN(c.collected_at) as achieved_at,
+                   ROW_NUMBER() OVER (PARTITION BY c.player_id ORDER BY MIN(c.collected_at)) as rn
+            FROM collections c
+            JOIN collectibles col ON c.collectible_id = col.id
+            WHERE c.guild_id = $1 AND col.rarity = 'legendary'
+            GROUP BY c.player_id, c.collectible_id
+          ) fo
+          JOIN player_counts pc ON pc.player_id = fo.player_id
+          WHERE fo.rn = pc.count
+          GROUP BY fo.player_id
+        )
+        SELECT pc.username, pc.discord_id, pc.count, COALESCE(nd.first_collected_at, NOW()) as achieved_at
+        FROM player_counts pc
+        LEFT JOIN nth_dates nd ON nd.player_id = pc.player_id
+        ORDER BY pc.count DESC, achieved_at ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
         SELECT COUNT(DISTINCT c.player_id) as count FROM collections c
         JOIN collectibles col ON c.collectible_id = col.id
-        WHERE c.guild_id = $1 AND col.rarity = 'legendary' AND c.lost_at IS NULL
+        WHERE c.guild_id = $1 AND col.rarity = 'legendary'
       `, [guildId]);
       statLine = (p) => `**${p.count}** légendaire${p.count > 1 ? 's' : ''} 💎`;
       break;
 
     case 'epic':
+      // Tri par count DESC, puis par date du Nème collectible (pour avoir le premier à atteindre ce score)
+      // Note: On compte les collectibles UNIQUES jamais obtenus (même perdus puis récupérés = compte 1 seule fois)
       data = await db.queryAll(`
-        SELECT p.username, p.discord_id, COUNT(*)::integer as count
-        FROM collections c
-        JOIN players p ON c.player_id = p.id AND c.guild_id = p.guild_id
-        JOIN collectibles col ON c.collectible_id = col.id
-        WHERE c.guild_id = $1 AND col.rarity = 'epic' AND c.lost_at IS NULL
-        GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        WITH player_counts AS (
+          SELECT p.id as player_id, p.username, p.discord_id,
+                 COUNT(DISTINCT c.collectible_id)::integer as count
+          FROM collections c
+          JOIN players p ON c.player_id = p.id AND c.guild_id = p.guild_id
+          JOIN collectibles col ON c.collectible_id = col.id
+          WHERE c.guild_id = $1 AND col.rarity = 'epic'
+          GROUP BY p.id, p.username, p.discord_id
+        ),
+        nth_dates AS (
+          SELECT fo.player_id, MIN(fo.achieved_at) as first_collected_at
+          FROM (
+            SELECT c.player_id, c.collectible_id, MIN(c.collected_at) as achieved_at,
+                   ROW_NUMBER() OVER (PARTITION BY c.player_id ORDER BY MIN(c.collected_at)) as rn
+            FROM collections c
+            JOIN collectibles col ON c.collectible_id = col.id
+            WHERE c.guild_id = $1 AND col.rarity = 'epic'
+            GROUP BY c.player_id, c.collectible_id
+          ) fo
+          JOIN player_counts pc ON pc.player_id = fo.player_id
+          WHERE fo.rn = pc.count
+          GROUP BY fo.player_id
+        )
+        SELECT pc.username, pc.discord_id, pc.count, COALESCE(nd.first_collected_at, NOW()) as achieved_at
+        FROM player_counts pc
+        LEFT JOIN nth_dates nd ON nd.player_id = pc.player_id
+        ORDER BY pc.count DESC, achieved_at ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
         SELECT COUNT(DISTINCT c.player_id) as count FROM collections c
         JOIN collectibles col ON c.collectible_id = col.id
-        WHERE c.guild_id = $1 AND col.rarity = 'epic' AND c.lost_at IS NULL
+        WHERE c.guild_id = $1 AND col.rarity = 'epic'
       `, [guildId]);
       statLine = (p) => `**${p.count}** épique${p.count > 1 ? 's' : ''} 💜`;
       break;
@@ -603,7 +749,7 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
         JOIN players p ON gl.winner_id = p.discord_id AND gl.guild_id = p.guild_id
         WHERE gl.guild_id = $1 AND gl.winner_id IS NOT NULL
         GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        ORDER BY count DESC, MIN(gl.created_at) ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
@@ -619,7 +765,7 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
         JOIN players p ON mp.player_id = p.id AND mp.guild_id = p.guild_id
         WHERE mp.guild_id = $1 AND mp.status = 'completed'
         GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        ORDER BY count DESC, MIN(mp.completed_at) ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
@@ -635,7 +781,7 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
         JOIN players p ON pb.player_id = p.id AND pb.guild_id = p.guild_id
         WHERE pb.guild_id = $1
         GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        ORDER BY count DESC, MIN(pb.unlocked_at) ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
@@ -665,7 +811,7 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
         JOIN players p ON tt.player_id = p.id AND tt.guild_id = p.guild_id
         WHERE tt.guild_id = $1
         GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        ORDER BY count DESC, MIN(tt.triggered_at) ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
@@ -681,7 +827,7 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
         JOIN players p ON c.player_id = p.id AND c.guild_id = p.guild_id
         WHERE c.guild_id = $1 AND c.source = 'joker' AND c.lost_at IS NULL
         GROUP BY p.id, p.username, p.discord_id
-        ORDER BY count DESC
+        ORDER BY count DESC, MIN(c.collected_at) ASC
         LIMIT $2 OFFSET $3
       `, [guildId, ITEMS_PER_PAGE + 1, offset]);
       totalCount = await db.queryOne(`
@@ -706,6 +852,90 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
       };
       break;
 
+    case 'loomix':
+      data = await db.queryAll(`
+        SELECT p.username, p.discord_id, pc.balance as count
+        FROM player_currency pc
+        JOIN players p ON pc.player_id = p.id AND pc.guild_id = p.guild_id
+        WHERE pc.guild_id = $1 AND pc.currency_type = 'loomix' AND pc.balance > 0
+        ORDER BY pc.balance DESC
+        LIMIT $2 OFFSET $3
+      `, [guildId, ITEMS_PER_PAGE + 1, offset]);
+      totalCount = await db.queryOne(`
+        SELECT COUNT(*) as count FROM player_currency
+        WHERE guild_id = $1 AND currency_type = 'loomix' AND balance > 0
+      `, [guildId]);
+      statLine = (p) => `**${p.count.toLocaleString('fr-FR')}** Loomix 💰`;
+      break;
+
+    case 'finishers':
+      data = await db.queryAll(`
+        SELECT p.username, p.discord_id, COUNT(*)::integer as count
+        FROM player_progress pp
+        JOIN players p ON pp.player_id = p.id AND pp.guild_id = p.guild_id
+        WHERE pp.guild_id = $1 AND pp.is_completed = TRUE
+        GROUP BY p.id, p.username, p.discord_id
+        ORDER BY count DESC, MIN(pp.completed_at) ASC
+        LIMIT $2 OFFSET $3
+      `, [guildId, ITEMS_PER_PAGE + 1, offset]);
+      totalCount = await db.queryOne(`
+        SELECT COUNT(DISTINCT player_id) as count FROM player_progress
+        WHERE guild_id = $1 AND is_completed = TRUE
+      `, [guildId]);
+      statLine = (p) => `**${p.count}** collection${p.count > 1 ? 's' : ''} complétée${p.count > 1 ? 's' : ''} 🏅`;
+      break;
+
+    case 'mint_masters':
+      data = await db.queryAll(`
+        SELECT p.username, p.discord_id, COUNT(*)::integer as count
+        FROM collections c
+        JOIN players p ON c.player_id = p.id AND c.guild_id = p.guild_id
+        WHERE c.guild_id = $1 AND c.mint_number = 1 AND c.lost_at IS NULL
+        GROUP BY p.id, p.username, p.discord_id
+        ORDER BY count DESC, MIN(c.collected_at) ASC
+        LIMIT $2 OFFSET $3
+      `, [guildId, ITEMS_PER_PAGE + 1, offset]);
+      totalCount = await db.queryOne(`
+        SELECT COUNT(DISTINCT player_id) as count FROM collections
+        WHERE guild_id = $1 AND mint_number = 1 AND lost_at IS NULL
+      `, [guildId]);
+      statLine = (p) => `**${p.count}** Mint #1 🥇`;
+      break;
+
+    case 'tictactoe_wins':
+      data = await db.queryAll(`
+        SELECT p.username, p.discord_id, ts.games_won as count, ts.games_lost, ts.games_draw, ts.games_played
+        FROM tictactoe_stats ts
+        JOIN players p ON ts.player_id = p.id AND ts.guild_id = p.guild_id
+        WHERE ts.guild_id = $1 AND ts.games_won > 0
+        ORDER BY ts.games_won DESC, ts.games_played ASC
+        LIMIT $2 OFFSET $3
+      `, [guildId, ITEMS_PER_PAGE + 1, offset]);
+      totalCount = await db.queryOne(`
+        SELECT COUNT(*) as count FROM tictactoe_stats
+        WHERE guild_id = $1 AND games_won > 0
+      `, [guildId]);
+      statLine = (p) => `**${p.count}** victoire${p.count > 1 ? 's' : ''} 🏆 (${p.games_played} parties)`;
+      break;
+
+    case 'tictactoe_winrate':
+      data = await db.queryAll(`
+        SELECT p.username, p.discord_id,
+               ts.games_won, ts.games_lost, ts.games_draw, ts.games_played,
+               ROUND(ts.games_won::numeric / NULLIF(ts.games_played, 0) * 100, 1) as winrate
+        FROM tictactoe_stats ts
+        JOIN players p ON ts.player_id = p.id AND ts.guild_id = p.guild_id
+        WHERE ts.guild_id = $1 AND ts.games_played >= 5
+        ORDER BY winrate DESC, ts.games_won DESC
+        LIMIT $2 OFFSET $3
+      `, [guildId, ITEMS_PER_PAGE + 1, offset]);
+      totalCount = await db.queryOne(`
+        SELECT COUNT(*) as count FROM tictactoe_stats
+        WHERE guild_id = $1 AND games_played >= 5
+      `, [guildId]);
+      statLine = (p) => `**${p.winrate}%** win rate 📊 (${p.games_won}W/${p.games_lost}L/${p.games_draw}D)`;
+      break;
+
     default:
       return {
         embed: new EmbedBuilder()
@@ -722,11 +952,12 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
   const totalPages = Math.ceil((totalCount?.count || 0) / ITEMS_PER_PAGE);
 
   if (displayData.length === 0) {
+    const header = buildHeader(config);
     return {
       embed: new EmbedBuilder()
-        .setTitle(`${config.emoji} ${config.name}`)
+        .setTitle(buildTitle(config))
         .setColor(config.color)
-        .setDescription('Aucune donnée disponible pour ce classement.'),
+        .setDescription(header + '\n*Aucune donnée disponible pour ce classement.*'),
       totalPages: 1,
       hasMore: false
     };
@@ -741,10 +972,11 @@ async function buildGenericLeaderboard(guildId, type, requesterId, config, page)
     return `${medal} ${nameDisplay}\n┗ ${statLine(player)}`;
   });
 
+  const header = buildHeader(config);
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emoji} ${config.name}`)
+    .setTitle(buildTitle(config))
     .setColor(config.color)
-    .setDescription(lines.join('\n\n'))
+    .setDescription(header + '\n' + lines.join('\n\n'))
     .setTimestamp()
     .setFooter({ text: `Page ${page + 1}/${totalPages} • ${totalCount?.count || 0} joueurs` });
 
@@ -762,7 +994,9 @@ function getMedal(index) {
 
 // Construire une barre de progression visuelle
 function buildProgressBar(percentage) {
-  const filled = Math.round(percentage / 10);
+  // Limiter le pourcentage entre 0 et 100
+  const clampedPercentage = Math.max(0, Math.min(100, percentage || 0));
+  const filled = Math.round(clampedPercentage / 10);
   const empty = 10 - filled;
   return `${'▓'.repeat(filled)}${'░'.repeat(empty)}`;
 }

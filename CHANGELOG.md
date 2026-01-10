@@ -5,6 +5,435 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+### 🐛 Fixed (2026-01-10)
+
+- **[Leaderboard - Doublons pagination]**: Correction des joueurs apparaissant plusieurs fois dans les catégories Legendary et Epic
+  - **Problème**: Les joueurs pouvaient apparaître sur plusieurs pages du leaderboard
+  - **Cause**: `ORDER BY count DESC` sans tri secondaire stable causait des résultats non-déterministes
+  - **Solution**:
+    - Ajout d'un tri secondaire par date d'obtention du score (`achieved_at ASC`)
+    - `COUNT(DISTINCT c.collectible_id)` pour compter les collectibles uniques (perdre et récupérer = 1 seul)
+    - Retrait du filtre `lost_at IS NULL` pour comptabiliser les performances historiques
+  - **Logique**: Le premier joueur à atteindre un score est classé avant les autres avec le même score
+  - **Fichier modifié**: `commands/player/leaderboard.js` (lignes 647-726)
+
+- **[Missions - Embed Mission Secrète]**: L'embed ne révèle plus la durée ni l'image avant le lancement
+  - **Problème**: L'embed "Mission Secrète" affichait le timeout et le thumbnail, révélant des infos
+  - **Solution**: Masquer la durée et l'image jusqu'à ce que le joueur clique sur "Lancer la mission"
+  - **Nouveau message**: "🔮 *Clique sur le bouton pour découvrir ta mission...*"
+  - **Fichier modifié**: `handlers/mysteryBoxHandler.js` (lignes 1290-1306)
+
+### ✨ Added (2026-01-10)
+
+- **[Frames - Embed Graphique Refonte Complète]**: Nouvel affichage visuel époustouflant dans `/profile` → Frames (2026-01-10)
+  - **Hero Section**: Encadré ANSI coloré avec la frame actuellement équipée
+  - **Vue d'ensemble**: Statistiques rapides (📦 disponibles • 🔓 débloquées • 🎭 par rôle)
+  - **Progression Thème**: Slots 1 (🥈 Intermédiaire) et 2 (🥇 Prestige) avec barres visuelles `[████████░░░░]`
+  - **Frames par Rôle**: Section dédiée aux frames accessibles via rôles Discord
+  - **Collection Globale**: Frames cross-serveur débloquées sur d'autres serveurs
+  - **Section Conseils**: Encadré explicatif pour les nouveaux joueurs
+  - **Fichier modifié**: `views/profileView.js` (fonction `showFrames()`, lignes 1730-2010)
+
+- **[Admin Panel - Réorganisation Bouton Frames]**: Bouton Frames déplacé vers Paramétrage (2026-01-10)
+  - **Ancien emplacement**: "🎨 Gérer les Thèmes" → supprimé
+  - **Nouvel emplacement**: "⚙️ Paramétrage" → dernière ligne en vert (`ButtonStyle.Success`)
+  - **Label renommé**: "🖼️ Frames de Profil" (plus explicite)
+  - **Avantage**: Accès direct depuis `/admin-panel` → Paramétrage sans passer par les thèmes
+  - **Fichier modifié**: `handlers/adminPanelHandler.js`
+    - `showThemesMenu()`: Bouton retiré (ligne 1137)
+    - `showSettingsMenu()`: Bouton ajouté en row4 (ligne 4150-4154)
+
+### 🐛 Fixed (2026-01-10)
+
+- **[Frames - Logique Statut Débloquée]**: Correction du bug affichant "DÉBLOQUÉE" incorrectement (2026-01-10)
+  - **Problème**: Les frames affichaient "DÉBLOQUÉE" même si la condition n'était pas remplie
+  - **Cause**: Le statut était basé sur `player_unlocked_frames` au lieu de la progression réelle
+  - **Solution**: Nouvelle logique basée sur `currentProgress >= requiredAmount` ET slot précédent débloqué
+  - **Nouveau statut**: "PRÊTE ⏳" quand condition remplie mais slot précédent non débloqué
+  - **Fichier modifié**: `views/profileView.js` (lignes 1844-1934)
+
+- **[Frames - Assignation Custom Frame]**: Correction erreur "Erreur lors de l'assignation de la frame" (2026-01-10)
+  - **Problème 1**: UPSERT avec `ON CONFLICT (guild_id, theme_id, frame_number)` mais contrainte inexistante
+    - **Solution**: Changé en UPDATE simple (le slot existe toujours via `getThemeProfileFrames`)
+  - **Problème 2**: Contrainte UNIQUE `(guild_id, theme_id, name)` violée lors de la copie du nom
+    - **Solution**: Ne plus copier le `name`, utiliser `source_frame_id` comme référence
+  - **Fichier modifié**: `handlers/framesConfigHandler.js` (fonction `handleFrameSelectionForSlot()`)
+
+- **[Frames - Affichage 3 Frames au lieu de 2]**: Correction du comptage des frames dans `/profile` (2026-01-10)
+  - **Problème**: Après assignation d'une custom frame, le profil affichait 3 frames de progression
+  - **Cause**: `getThemeProfileFrames()` retourne TOUTES les frames (y compris templates custom frame_number >= 3)
+  - **Solution**: Filtrage `progressionFrames = themeFrames.filter(f => f.frame_number === 1 || f.frame_number === 2)`
+  - **Bonus**: Affichage du nom de la frame custom assignée avec ✨ quand `source_frame_id` est défini
+  - **Fichier modifié**: `views/profileView.js` (fonction `showFrames()`)
+
+- **[Frames Config - Embed Amélioré]**: Nouvel embed explicatif dans le menu de configuration Frames (2026-01-10)
+  - **Nouvelles sections**:
+    - CONCEPT: Explique les 2 slots (Intermédiaire/Prestige)
+    - CONFIGURATION: Précise que les custom frames sont optionnelles + fallback Silver/Gold
+    - STATISTIQUES: Comptage des frames débloquées par slot
+    - RECOMMANDATIONS: Tips pour les admins
+  - **Fichier modifié**: `handlers/framesConfigHandler.js` (fonction `handleFramesConfigPanel()`)
+
+### ✨ Added (2026-01-09 - Frames & Audit)
+
+- **[Frames - Audit Expert et Corrections]**: Audit complet du système de frames avec corrections critiques (2026-01-09)
+  - **Audit réalisé** (fichier: `AUDIT-FRAMES-SYSTEM-EXPERT-2026-01.md`):
+    - 47 fonctions, 55 customIds, 50+ appels DB analysés
+    - Structure du handler `framesConfigHandler.js` (3564 lignes)
+    - Routing vérifié dans `interactionCreate.js` et `adminPanelHandler.js`
+  - **Corrections appliquées**:
+    - **`createRoleFrame()`**: Génération automatique du `frame_code` (format: `FRAME_XXXX_R_NNN`)
+    - **Routing doublé**: Suppression du routing en double pour `role_frame_wizard_select_role`
+    - **Permissions**: Ajout vérification `canAccessAdminPanel()` dans `framesConfigHandler.js`
+  - **Migration SQL créée** (`database/migrations/add-frames-constraints.sql`):
+    - Contrainte UNIQUE sur `(guild_id, theme_id, frame_number)`
+    - Index partiels pour frames de rôle et `player_unlocked_frames`
+    - Foreign keys avec `ON DELETE SET NULL`
+    - Index de performance pour bonus et frames actives
+  - **Fichiers modifiés**:
+    - `utils/database-pg.js`: `createRoleFrame()` avec génération frame_code
+    - `events/interactionCreate.js`: Suppression routing doublé ligne 733
+    - `handlers/framesConfigHandler.js`: Import et vérification `canAccessAdminPanel()`
+  - **Script migration**: `scripts/run-frames-constraints-migration.js`
+
+- **[Frames - Identification Unique (frame_code)]**: Système d'identification fiable cross-serveur (2026-01-09)
+  - **Objectif**: Identification unique des frames comme les collectibles (éviter les conflits de noms)
+  - **Nouvelle colonne `frame_code`** dans `theme_profile_frames` et `player_unlocked_frames`:
+    - Format: `FRAME_GUILDPREFIX_THEMEID_NUMBER` (ex: `FRAME_1248_68_001`)
+    - Généré automatiquement à la création de chaque frame
+    - Copié dans `player_unlocked_frames` lors du déblocage
+  - **Contraintes de sécurité**:
+    - UNIQUE sur `frame_code` (identification sans ambiguïté)
+    - UNIQUE sur `(guild_id, theme_id, name)` (pas de doublons de nom par thème)
+    - Index créés pour les performances
+  - **Avantages**:
+    - Deux serveurs peuvent avoir des frames avec le même nom sans conflit
+    - Identification fiable même si le nom change
+    - Compatible avec le futur marketplace
+  - **Fichiers modifiés**:
+    - `utils/database-pg.js`: `checkAndUnlockFrames()`, `equipFrame()`, `getUnlockedFrames()`, `setThemeProfileFrame()`, `getThemeProfileFrames()`
+    - `handlers/framesConfigHandler.js`: `confirmFrameCreation()`
+  - **Migration**:
+    - `database/migrations/add-frame-code-unique.sql`
+    - `scripts/run-frame-code-migration.js`
+  - **Compatible**: Local + VPS (déployé)
+
+- **[Frames - Système Professionnel de Propriété]**: Les frames appartiennent définitivement au joueur (2026-01-09)
+  - **Objectif**: Système de cosmétiques digne des jeux AAA (Fortnite, LoL, etc.)
+  - **Nouvelles colonnes dans `player_unlocked_frames`**:
+    - `frame_name`, `frame_url`, `frame_description` - Copie des données au déblocage
+    - `bonus_type`, `bonus_value` - Bonus préservés indépendamment de la source
+    - `source` - Origine: role, theme, marketplace, gift, event, achievement
+    - `purchased_price` - Pour futur marketplace avec Loomix
+  - **Comportement**:
+    - Données copiées au moment du déblocage (indépendantes de la source)
+    - Le joueur garde sa frame même si l'admin supprime l'originale
+    - Frames utilisables sur **tous les serveurs** où le bot est présent
+    - Compatible avec le **futur marketplace**
+  - **Fichiers modifiés**:
+    - `utils/database-pg.js`: `checkAndUnlockFrames()`, `equipFrame()`, `getUnlockedFrames()`, `getEquippedFrame()`
+  - **Migration**:
+    - `database/migrations/enrich-player-unlocked-frames.sql`
+    - `scripts/run-enrich-frames-migration.js`
+  - **Compatible**: Local + VPS (déployé)
+
+### 🐛 Fixed (2026-01-09)
+
+- **[Morpion - Couleurs Boutons Grille]**: Amélioration de la visibilité des boutons de jeu (2026-01-09)
+  - **Problème**: Croix rouge (❌) sur fond rouge (Danger) = quasi invisible
+  - **Solution**: Nouvelles couleurs avec meilleur contraste:
+    - X (❌) → fond bleu (`ButtonStyle.Primary`) au lieu de rouge
+    - O (⭕) → fond vert (`ButtonStyle.Success`) au lieu de bleu
+  - **Fichier modifié**: `utils/tictactoeRenderer.js` (ligne 500)
+  - **Compatible**: Local + VPS (déployé)
+
+- **[Morpion - Nettoyage Messages Matchmaking]**: Suppression des messages de recherche pour éviter la pollution du canal (2026-01-09)
+  - **Problème**: Les messages "Rechercher un adversaire" restaient dans le canal de matchmaking
+  - **Cas corrigés**:
+    - Quand un joueur rejoint la partie → message supprimé après 2s (via `setTimeout`)
+    - Quand le joueur 1 relance la recherche → ancien message supprimé immédiatement
+  - **Fichier modifié**: `handlers/tictactoeHandler.js`
+    - `handleJoinGame()`: Suppression via `channel.messages.fetch()` + `delete()` avec délai 2s (pattern mysteryBoxHandler)
+    - `handleResearch()`: Suppression de l'ancien message via `fetch()` + `delete()`
+  - **Logs ajoutés**: `🗑️ Message matchmaking supprimé` pour le debug
+  - **Compatible**: Local + VPS (déployé)
+
+### ✨ Added (2026-01-09 - Morpion & Missions)
+
+- **[Badges Morpion - 48 Badges Progressifs]**: Système complet de badges pour le jeu Morpion (2026-01-09)
+  - **11 catégories de badges** avec seuils progressifs élevés (durée de vie longue):
+    - 🏆 **Victoires** (7 badges): 1, 10, 25, 50, 100, 250, 500 victoires
+    - 🎮 **Parties jouées** (6 badges): 25, 50, 100, 250, 500, 1000 parties
+    - 🔥 **Win Streak** (6 badges): 3, 5, 7, 10, 15, 20 consécutives
+    - ✨ **Victoires propres** (4 badges): 25, 50, 100, 250 wins by play
+    - ⚡ **Victoire rapide** (3 badges): en 5, 4, 3 coups (inversé)
+    - 🤝 **Égalités** (3 badges): 10, 50, 100 draws
+    - 💪 **Résilience** (4 badges): 25, 50, 100, 250 défaites (persévérance)
+    - ⏳ **Patience** (3 badges): 5, 15, 30 wins par timeout
+    - 😈 **Intimidation** (3 badges): 5, 15, 30 wins par abandon adversaire
+    - 👣 **Expérience** (5 badges): 500, 1000, 2500, 5000, 10000 coups joués
+    - 📈 **Ratio W/L** (4 badges): ratio 1x, 2x, 3x, 5x (min parties)
+  - **Fichiers modifiés**:
+    - `handlers/badgeHandler.js`: Ajout `TICTACTOE_BADGES` + `onTictactoeGameComplete()`
+    - `handlers/tictactoeHandler.js`: Intégration hook après chaque fin de partie
+  - **Scripts créés**:
+    - `scripts/seed-tictactoe-badges.js`: Seeding 48 badges
+    - `scripts/add-tictactoe-badge-constraints.js`: Migration contraintes DB
+  - **Compatible**: Local + VPS (déployé et testé)
+
+- **[Embeds Collectibles Unifiés]**: Nouveau système centralisé pour les embeds de récompenses (2026-01-08)
+  - **Fichier créé**: `utils/collectibleEmbedBuilder.js`
+    - Fonction `buildCollectibleRewardEmbed()` pour générer des embeds riches
+    - Génération d'images avec frames/mint overlay
+    - Gestion complète: évolution, level up, fusion, nouveau collectible
+    - Paramètres contextuels: `mystery_box`, `mission`, `tictactoe`
+  - **Utilise**: `imageGenerator` pour les images composites
+
+- **[Missions Morpion - Embeds Époustouflants]**: Messages de fin de partie graphiques (2026-01-08)
+  - **3 nouveaux embeds graphiques** avec stats visuelles:
+    - `createTictactoeVictoryEmbed()`: Victoire classique (1 gagnant, 1 perdant)
+    - `createTictactoeDrawEmbed()`: Match nul (config `draw_none`)
+    - `createTictactoeBothWinEmbed()`: Double victoire (config `draw_both`)
+  - **Informations affichées**:
+    - Gagnant vs Perdant avec symboles (❌/⭕)
+    - Barres de statistiques visuelles (`█████░░░░░`)
+    - Grille finale colorée (🔴/🔵/⬛)
+    - Durée, coups totaux, manches jouées
+    - Raison de fin adaptée (win, timeout, abandon, draw_random)
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js`: 3 nouvelles méthodes + `completeMissionForTictactoeBothCase()`
+    - `handlers/tictactoeHandler.js`: Passe `game` à `completeMissionForTictactoe()`
+    - `handlers/mysteryBoxHandler.js`: Utilise le nouveau builder centralisé
+
+- **[Leaderboard - Morpion]**: Ajout de 2 nouveaux classements pour le jeu Morpion (2026-01-08)
+  - **🎮 Champions Morpion** (`tictactoe_wins`): Classement par nombre de victoires
+    - Affiche: victoires, nombre total de parties
+    - Ordre: victoires décroissantes, puis moins de parties (efficacité)
+  - **📈 Win Rate Morpion** (`tictactoe_winrate`): Classement par ratio victoires/défaites
+    - Minimum 5 parties jouées pour apparaître
+    - Affiche: pourcentage de victoires, W/L/D détaillé
+    - Ordre: win rate décroissant, puis victoires décroissantes
+  - **Fichier modifié**: `commands/player/leaderboard.js`
+    - Ajout des 2 entrées dans `LEADERBOARD_TYPES`
+    - Ajout des 2 cases dans `buildGenericLeaderboard()`
+  - **Utilise**: Table `tictactoe_stats` (déjà créée avec le système Morpion)
+
+- **[Missions - Morpion (Tic-Tac-Toe)]**: Nouveau type de mission PvP multijoueur (2026-01-08)
+  - **Concept**: Mission sociale où deux joueurs s'affrontent au morpion
+  - **Flow complet**:
+    1. Joueur ouvre une mystery box → obtient mission "Morpion"
+    2. Thread créé avec bouton "🔍 Chercher un adversaire"
+    3. Message matchmaking posté dans canal configurable
+    4. Autre joueur rejoint (protection anti-double-clic)
+    5. Les deux joueurs cliquent "✅ Prêt"
+    6. Partie en 3 rounds max avec timer 60s par tour
+    7. Gagnant récupère la récompense de la mission
+  - **Résolution des égalités**: 3 modes configurables
+    - `random`: Tirage au sort du gagnant
+    - `none`: Aucun gagnant, mission échoue
+    - `both`: Les deux joueurs gagnent (récompense partagée)
+  - **Base de données**:
+    - Table `tictactoe_config`: Configuration par serveur
+    - Table `tictactoe_games`: Parties en cours/terminées
+    - Table `tictactoe_stats`: Statistiques par joueur
+    - Colonne `tictactoe_result` dans `announcement_settings`
+    - Template `tictactoe_result` dans `announcement_templates`
+  - **Fichiers créés**:
+    - `handlers/tictactoeHandler.js`: Handler principal (~1300 lignes)
+    - `utils/tictactoeRenderer.js`: Rendu graphique plateau/embeds
+    - `scripts/add-tictactoe-migration.js`: Migration DB
+  - **Fichiers modifiés**:
+    - `events/interactionCreate.js`: Routing boutons `ttt_*`
+    - `handlers/missionHandler.js`: Case `tictactoe` + validateTictactoe()
+    - `handlers/adminPanelHandler.js`: Type mission + config canal matchmaking + toggle annonce
+    - `utils/announcements.js`: Méthode `announceTictactoeResult()`
+    - `utils/announcementDefaults.js`: Template par défaut + toggle `tictactoe_result`
+    - `utils/themeExporter.js`: Support export missions tictactoe
+    - `utils/themeImporter.js`: Support import missions tictactoe
+  - **Intégration systèmes existants**:
+    - ✅ Système d'évolution des collectibles (`addCollectibleWithLevels`)
+    - ✅ Annonces Level Up / Max Level
+    - ✅ Annonces Collectible Légendaire
+    - ✅ Progression Roles intermédiaires
+    - ✅ Collection complète + rôle final
+    - ✅ Badge tracking (missions)
+  - **Configuration admin**: `/admin` → Gérer les missions → 🎮 Config Morpion
+    - Canal matchmaking
+    - Timer par tour (10-600s)
+    - Timeout mission (60s-24h)
+    - Résolution égalité (Aléatoire / Aucun gagnant / Les deux gagnent)
+    - Max relances recherche (1-10)
+
+### 🐛 Fixed
+
+- **[Missions - Morpion]**: Fix 3 bugs dans le flow de rejointe de partie (2026-01-08)
+  - **Problème 1**: Le joueur 2 ne recevait pas de message avec le lien du thread après avoir rejoint
+  - **Problème 2**: Les boutons "Prêt" étaient dupliqués (nouveau message au lieu de mise à jour)
+  - **Problème 3**: Le joueur 1 avait une erreur en cliquant "Prêt" car il cliquait sur l'ancien message
+  - **Solution**:
+    - Ajout d'un followUp éphémère pour le joueur 2 avec le lien du thread
+    - Mise à jour du message existant dans le thread au lieu d'en créer un nouveau
+    - Recherche du message avec boutons du bot pour le mettre à jour
+  - **Fichier modifié**: `handlers/tictactoeHandler.js` (lignes 469-515)
+
+- **[Missions - Morpion]**: Implémentation complète du système d'expiration des missions (2026-01-08)
+  - **Problème 1**: Le timeout configuré (`mission_timeout`) n'était pas utilisé - les missions tictactoe restaient ouvertes indéfiniment
+  - **Problème 2**: Si le joueur ne lance pas la recherche, la mission n'expirait jamais
+  - **Solution**: Définition automatique de `expires_at` dès la création de la mission tictactoe
+  - **Comportement**:
+    - Quand une mission Morpion est créée → `expires_at` = NOW + `mission_timeout` (30 min par défaut)
+    - Le scheduler `checkExpiredMissions` vérifie toutes les 60s et expire les missions dépassées
+    - Quand la partie démarre vraiment (`playing`) → `expires_at` = NULL (le turn timer prend le relais)
+  - **Nettoyage à l'expiration**:
+    - Message dans le thread: "⏰ Temps écoulé ! Tu n'as pas trouvé d'adversaire à temps."
+    - Message matchmaking mis à jour avec "~~Recherche expirée~~"
+    - Partie marquée comme `cancelled` dans `tictactoe_games`
+    - Annonce "Mission échouée - Aucun adversaire trouvé"
+    - Thread archivé après 10 secondes
+  - **Fichiers modifiés**:
+    - `handlers/missionHandler.js`: `validateTictactoe()` définit `expires_at`, nouvelle méthode `_handleTictactoeExpiration()`
+    - `handlers/tictactoeHandler.js`: `startGame()` supprime `expires_at` quand la partie démarre
+
+- **[Missions - Morpion]**: Fix affichage timeout dans message de lancement mission (2026-01-08)
+  - **Problème**: Le message affichait "Tu auras 1 minute pour l'accomplir" au lieu du timeout réel (30 min)
+  - **Cause**: `mission.timeout` est en MINUTES dans la table `missions`, mais le code le traitait en secondes
+  - **Solution**: Pour tictactoe, utiliser `tictactoe_config.mission_timeout` (en secondes)
+  - **Fichier modifié**: `handlers/mysteryBoxHandler.js` (lignes 1446-1460)
+
+- **[Missions - Morpion]**: Fix affichage "undefined pièces" dans l'embed matchmaking (2026-01-08)
+  - **Problème**: L'embed affichait "Récompense: undefined pièces"
+  - **Cause 1**: `mission.reward_type` était `'random-collectible'` mais le code ne testait que `'collectible'`
+  - **Cause 2**: Le code utilisait `mission.reward_value` qui n'existe pas (la colonne est `reward_data`)
+  - **Solution**: Tester aussi `'random-collectible'` et utiliser `reward_data?.amount` avec fallback
+  - **Fichier modifié**: `utils/tictactoeRenderer.js` (lignes 127-128, 173-183)
+
+- **[Missions - Morpion]**: Fix erreur footer dans l'initialisation de partie (2026-01-08)
+  - **Problème**: Erreur "CombinedPropertyError: input.text MissingPropertyError" à l'initialisation
+  - **Cause**: `getLoomixFooter()` est async mais était appelé sans `await` et sans `guildId`
+  - **Solution**: Remplacer par `getLoomixFooterOnly()` (version synchrone)
+  - **Fichier modifié**: `utils/tictactoeRenderer.js` (ligne 7 + toutes les occurrences)
+
+- **[Missions - Morpion]**: Fix contrainte `missions_type_check` pour accepter le type `tictactoe` (2026-01-08)
+  - **Problème**: Erreur lors de la création d'une mission morpion via admin panel
+  - **Cause**: La contrainte CHECK dans PostgreSQL n'incluait pas `tictactoe`
+  - **Solution**: Script de migration `scripts/add-tictactoe-mission-type.js`
+  - **Appliqué**: Local ✅ + VPS ✅
+
+- **[Admin - Missions Morpion]**: Panneau de configuration complet pour missions tictactoe (2026-01-08)
+  - **Embed spécialisé**: Affichage de toutes les configurations dans les détails de mission
+    - 📍 Canal Matchmaking (avec avertissement si non configuré)
+    - ⏱️ Timer par tour (formaté en minutes/secondes)
+    - ⏰ Timeout recherche (formaté)
+    - 🎲 Résolution égalité (Tirage au sort / Aucun gagnant / Les deux gagnent)
+    - 🔄 Max relances (nombre)
+  - **Boutons de configuration** (4 boutons dédiés):
+    - `📍 Canal Matchmaking`: Sélecteur de canal avec options supprimer
+    - `⏱️ Timers`: Modal pour modifier timer tour + timeout recherche
+    - `🎲 Résolution Égalité`: Menu avec 3 options
+    - `🔄 Max Relances`: Modal pour modifier le nombre max
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js` (lignes 8382-8458, 8670-8691): Embed + boutons
+    - `handlers/tictactoeHandler.js` (lignes 1479-1754): Handlers admin config
+    - `handlers/modalHandler.js`: Routing modals `modal_ttt_timers_` et `modal_ttt_retries_`
+
+---
+
+## [2.4.2] - 2026-01-08
+
+### ✨ Added
+
+- **[Missions - Activation/Désactivation]**: Nouveau système pour activer/désactiver les missions (2026-01-08)
+  - **Bouton toggle**: Nouveau bouton "⏸️ Désactiver" / "▶️ Activer" dans les détails de mission
+  - **Comportement**: Une mission désactivée n'apparaît plus dans les tirages de mystery box
+  - **Différence avec suppression**: La mission reste en base de données (peut être réactivée)
+  - **Affichage**: Indicateurs visuels ✅/⏸️ dans la liste des missions
+  - **Stats**: Compteur des missions actives/inactives dans l'en-tête du menu
+  - **Base de données**: Nouvelle colonne `is_active` (BOOLEAN DEFAULT TRUE) dans `missions`
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`: Toggle button, handlers, affichage statut
+    - `utils/database-pg.js`: Nouvelle fonction `getActiveMissionsByTheme()`
+    - `handlers/mysteryBoxHandler.js`: Utilise `getActiveMissionsByTheme()` pour les tirages
+    - `database/migrations/add-mission-is-active.sql`: Migration pour la colonne
+
+- **[Missions - Confirmation Suppression]**: Demande de confirmation avant suppression (2026-01-08)
+  - **Problème**: Suppression accidentelle de missions en un clic
+  - **Solution**: Dialogue de confirmation avec boutons "Oui, supprimer" / "Annuler"
+  - **Affichage**: Embed de confirmation avec warning et nom de la mission
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`: Nouveaux handlers `handleDeleteMissionAsk`, `handleDeleteMissionConfirm`, `handleDeleteMissionCancel`
+
+---
+
+## [2.4.1] - 2026-01-08
+
+### 🐛 Fixed
+
+- **[Missions - Timeout Fuseau Horaire]**: Correction critique du calcul du délai d'expiration (2026-01-08)
+  - **Problème**: Les missions "Mot à deviner" expiraient avec +60 minutes de décalage
+    - Exemple: Mission de 2 min → expirait après 62 min au lieu de 2 min
+    - Exemple: Mission de 5 min → expirait après 65 min au lieu de 5 min
+  - **Cause racine**: Le container Docker Node.js est configuré en `Europe/Paris` (UTC+1)
+    - Le driver `pg` (PostgreSQL) convertissait les dates JavaScript en heure locale
+    - PostgreSQL stockait la date avec +1h de décalage par rapport à l'intention
+  - **Solution**: Utiliser `NOW() + INTERVAL` directement dans SQL au lieu de `new Date()`
+    - Avant: `expires_at = $4` avec `new Date(Date.now() + timeoutSeconds * 1000)`
+    - Après: `expires_at = NOW() + INTERVAL '${timeoutSeconds} seconds'`
+  - **Impact**: Les missions respectent maintenant exactement leur timeout configuré
+  - **Fichier corrigé**: `handlers/missionHandler.js` (lignes 458-469, 3439-3446)
+  - **Également corrigé**: Attribution des super bonus via missions
+
+---
+
+## [2.4.0] - 2026-01-08
+
+### ✨ Added
+
+- **[Missions - Canal Dédié]**: Nouveau système de canal dédié pour les threads de missions (2026-01-08)
+  - **Avant**: Les threads de missions étaient créés dans le canal où la mystery box était ouverte
+  - **Après**: Les threads sont créés dans un canal dédié configurable par l'administrateur
+  - **Avantages**:
+    - Centralisation de toutes les missions dans un seul canal
+    - Plus besoin de permissions temporaires (logique supprimée)
+    - Meilleure organisation du serveur
+  - **Configuration**: `/admin` → Gérer les missions → 📍 Canal Missions
+  - **Fichiers modifiés**:
+    - `utils/database-pg.js`: Nouvelles fonctions `getMissionChannel()`, `setMissionChannel()`, `clearMissionChannel()`
+    - `handlers/adminPanelHandler.js`: UI de configuration (bouton, sélecteur canal, suppression)
+    - `handlers/mysteryBoxHandler.js`: Création des threads dans le canal configuré
+    - `handlers/missionHandler.js`: Fonctions permissions devenues no-op
+    - `utils/threadManager.js`: Nettoyage de la logique permissions temporaires
+  - **Base de données**: Nouvelle colonne `mission_channel_id` dans `guild_config`
+  - **Important**: Si le canal n'est pas configuré, les missions seront bloquées avec un message d'erreur
+
+### 🗑️ Removed
+
+- **[Permissions Temporaires]**: Suppression complète du système de permissions temporaires
+  - Plus nécessaire avec le canal missions dédié
+  - Les fonctions `cleanupTempPermissionByThread()` et `cleanupOrphanedPermissions()` sont devenues no-op
+  - Simplification du code et meilleure maintenabilité
+
+---
+
+## [2.3.8] - 2026-01-07
+
+### 🔧 Improved
+
+- **[Joker GIF - Robustesse]**: Ajout de vérifications et logs pour le GIF Joker (2026-01-07)
+  - **Problème rapporté**: Le GIF Joker ne s'affichait pas sur certains serveurs
+  - **Cause potentielle**: Fichier `assets/joker.gif` manquant ou inaccessible dans certains cas
+  - **Solution**:
+    - Vérification de l'existence du fichier avant chargement
+    - Logs détaillés (`🃏 [JOKER] GIF chargé: path (size MB)`)
+    - Fallback gracieux: l'embed s'affiche même sans GIF
+  - **Fichiers modifiés**:
+    - `handlers/profileHandler.js`: 3 emplacements (sélection, succès, pagination)
+    - `handlers/mysteryBoxHandler.js`: 1 emplacement (révélation Joker)
+  - **Impact**: Meilleure traçabilité et robustesse du système Joker
+
+---
+
 ## [2.3.7] - 2026-01-07
 
 ### 🐛 Fixed
