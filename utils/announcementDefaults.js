@@ -89,6 +89,15 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     image_url: null,
     thumbnail_url: null
   },
+  {
+    type: 'trap_shame_nickname',
+    title: '🎭 PSEUDO MODIFIÉ !',
+    description: '**{userName}** est tombé dans **{trapName}** !\n\n🤡 Son pseudo a été changé en **"{shameNickname}"** !\n\n⏰ **Durée:** {duration}\n\n*Impossible de le changer... Bonne chance !*',
+    color: '#E91E63',
+    footer_text: 'Le pseudo sera restauré automatiquement',
+    image_url: null,
+    thumbnail_url: null
+  },
 
   // Missions
   {
@@ -213,6 +222,48 @@ const DEFAULT_ANNOUNCEMENT_TEMPLATES = [
     footer_text: 'Progression restaurée',
     image_url: null,
     thumbnail_url: null
+  },
+
+  // Morpion (Tic-Tac-Toe)
+  {
+    type: 'tictactoe_result',
+    title: '🎮 Fin de partie Morpion !',
+    description: '🏆 **Gagnant**: {winner}\n😔 **Perdant**: {loser}\n\n📊 **Statistiques**:\n• Coups joués: {moves}\n• Durée: {duration}\n• Résolution: {resolution}\n\n🎁 **Récompense**: {reward}',
+    color: '#5865F2',
+    footer_text: 'Mission Morpion',
+    image_url: null,
+    thumbnail_url: null
+  },
+
+  // Cadeau Mystère à un ami
+  {
+    type: 'mystery_gift_sent',
+    title: '🎁✨ CADEAU MYSTÈRE ENVOYÉ !',
+    description: '🎀 **GÉNÉROSITÉ EN ACTION** 🎀\n\n🎁 **{giverName}** a envoyé un cadeau mystère à **{recipientName}** !\n\n*Un thread privé a été créé pour la remise du cadeau...*\n\n✨ *Que contient ce mystérieux présent ?* ✨',
+    color: '#FF69B4',
+    footer_text: '🎁 Cadeau Mystère à un ami',
+    image_url: null,
+    thumbnail_url: null  // L'image du cadeau sera définie via giftImageUrl
+  },
+  {
+    type: 'mystery_gift_opened',
+    title: '🎉✨ CADEAU MYSTÈRE OUVERT !',
+    description: '🎁 **RÉVÉLATION DU CADEAU** 🎁\n\n🎉 **{recipientName}** a ouvert le cadeau de **{giverName}** !\n\n🎁 **Contenu:** {rarityEmoji} **{collectibleName}**\n📊 **Rareté:** {rarityLabel}\n\n*Merci pour cette générosité !* 💖',
+    color: '#2ecc71',
+    footer_text: '🎁 Cadeau Mystère à un ami • Ouvert !',
+    image_url: null,
+    thumbnail_url: null  // L'image générée du collectible sera attachée
+  },
+
+  // Recovery Bonus - Récupération massive de collectibles
+  {
+    type: 'all_collectibles_recovered',
+    title: '🔄 RÉCUPÉRATION MASSIVE !',
+    description: '**{userName}** a utilisé le super bonus **Recovery** !\n\n✨ **{restoredCount} collectible(s)** ont été restaurés avec leur progression intacte !\n\n📊 **Thèmes concernés:** {themesAffected}\n\n*Tous les efforts n\'ont pas été perdus !*',
+    color: '#2ecc71',
+    footer_text: '🔄 Super Bonus Recovery',
+    image_url: null,
+    thumbnail_url: null
   }
 ];
 
@@ -229,6 +280,7 @@ const DEFAULT_ANNOUNCEMENT_TOGGLES = {
   trap_public_shame: true,
   trap_empty_box: true,
   trap_lose_all_collectibles: true,
+  trap_shame_nickname: true,
   mission_word_guessed: true,
   mission_started: true,
   mission_completed: true,
@@ -242,7 +294,14 @@ const DEFAULT_ANNOUNCEMENT_TOGGLES = {
   // Évolution des collectibles
   collectible_level_up: true,
   collectible_max_level: true,
-  collectible_restored: true
+  collectible_restored: true,
+  // Morpion (Tic-Tac-Toe)
+  tictactoe_result: true,
+  // Cadeau Mystère à un ami
+  mystery_gift_sent: true,
+  mystery_gift_opened: true,
+  // Recovery Bonus
+  all_collectibles_recovered: true
 };
 
 /**

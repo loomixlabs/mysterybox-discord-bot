@@ -47,7 +47,8 @@ class TrapAdminHandler {
         `💀 **Perte collectible** - Fait perdre un collectible aléatoire\n` +
         `😱 **Shame public** - Message de honte dans un salon\n` +
         `📦 **Coffre vide** - Le joueur n'obtient rien\n` +
-        `☠️ **Perte totale** - Fait perdre TOUS les collectibles`
+        `☠️ **Perte totale** - Fait perdre TOUS les collectibles\n` +
+        `🎭 **Pseudo Honteux** - Change le pseudo du joueur temporairement`
       )
       .setColor('#e74c3c')
       .setFooter({ text: `Thème: ${theme.name}`, iconURL: interaction.guild.iconURL() })
@@ -60,7 +61,8 @@ class TrapAdminHandler {
         'lose-collectible': '💀 Perte collectible',
         'public-shame': '😱 Shame public',
         'empty-box': '📦 Coffre vide',
-        'lose-all-collectibles': '☠️ Perte totale'
+        'lose-all-collectibles': '☠️ Perte totale',
+        'shame-nickname': '🎭 Pseudo Honteux'
       };
 
       // Grouper par type
@@ -93,6 +95,10 @@ class TrapAdminHandler {
             details += `\n└─ Durée: ${trap.cooldown_duration} min`;
           } else if (trap.type === 'public-shame' && trap.shame_message) {
             details += `\n└─ ${trap.shame_message.substring(0, 50)}${trap.shame_message.length > 50 ? '...' : ''}`;
+          } else if (trap.type === 'shame-nickname' && trap.cooldown_duration) {
+            const nicknames = trap.shame_nicknames || [];
+            details += `\n└─ Durée: ${trap.cooldown_duration} min`;
+            details += `\n└─ ${nicknames.length} pseudo(s) configuré(s)`;
           }
 
           return details;
@@ -135,7 +141,8 @@ class TrapAdminHandler {
               'lose-collectible': '💀',
               'public-shame': '😱',
               'empty-box': '📦',
-              'lose-all-collectibles': '☠️'
+              'lose-all-collectibles': '☠️',
+              'shame-nickname': '🎭'
             };
 
             // Afficher la sévérité dans la description
@@ -333,7 +340,9 @@ class TrapAdminHandler {
         `📦 **Coffre vide**\n` +
         `└─ Le joueur n'obtient rien de sa mystery box\n\n` +
         `☠️ **Perte totale**\n` +
-        `└─ Fait perdre TOUS les collectibles du joueur`
+        `└─ Fait perdre TOUS les collectibles du joueur\n\n` +
+        `🎭 **Pseudo Honteux**\n` +
+        `└─ Change le pseudo du joueur temporairement (durée configurable)`
       )
       .setColor('#e74c3c');
 
@@ -370,6 +379,12 @@ class TrapAdminHandler {
           value: 'lose-all-collectibles',
           description: 'Fait perdre TOUS les collectibles',
           emoji: '☠️'
+        },
+        {
+          label: 'Pseudo Honteux',
+          value: 'shame-nickname',
+          description: 'Change le pseudo du joueur temporairement',
+          emoji: '🎭'
         }
       );
 
@@ -508,6 +523,11 @@ class TrapAdminHandler {
         description: 'Un piège catastrophique et dévastateur qui fait perdre TOUS les collectibles du joueur d\'un seul coup.',
         notifTitle: '💥 PIÈGE DÉVASTATEUR !',
         notifDesc: '**CATASTROPHE TOTALE !** Ce piège apocalyptique a effacé **TOUS TES COLLECTIBLES** !\n\n💔 **{count} objet(s) perdu(s)** d\'un seul coup...\n\n⚠️ Ta collection a été complètement anéantie !'
+      },
+      'shame-nickname': {
+        description: 'Un piège humiliant qui change temporairement le pseudo du joueur par un pseudo honteux. Impossible de le changer jusqu\'à expiration !',
+        notifTitle: '🎭 PSEUDO HONTEUX !',
+        notifDesc: '**Oh non !** Tu es victime du piège du Pseudo Honteux !\n\n🏷️ Ton nouveau pseudo: **{nickname}**\n⏰ Durée: **{duration} minutes**\n\n💡 Impossible de changer ton pseudo pendant la durée du piège !'
       }
     };
 
@@ -679,14 +699,24 @@ class TrapAdminHandler {
         typeData.shame_message = `🤡 {user} est tombé dans un piège !`; // Message par défaut
         typeData.shame_channel_id = process.env.ANNOUNCE_CHANNEL_ID || null;
       }
+      else if (trapType === 'shame-nickname') {
+        typeData.cooldown_duration = 60; // 60 minutes par défaut
+        typeData.shame_nicknames = [
+          '🐔 Poulet Piégé',
+          '🤡 Clown du Serveur',
+          '💩 Victime du Jour',
+          '🐌 Escargot Lent',
+          '🦆 Canard Malchanceux'
+        ];
+      }
 
       // Insérer le piège dans la base de données avec les champs de notification ET sévérité
       await db.query(
         `INSERT INTO traps (
           guild_id, theme_id, trap_id, name, type, severity, description, image_url,
           cooldown_duration, shame_message, shame_channel_id, malus_points, removes_collectible,
-          notif_title, notif_description, notif_color, notif_footer
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+          notif_title, notif_description, notif_color, notif_footer, shame_nicknames
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           interaction.guildId,
           theme.id,
@@ -704,7 +734,8 @@ class TrapAdminHandler {
           notifTitle,
           notifDescription,
           notifColor,
-          notifFooter
+          notifFooter,
+          typeData.shame_nicknames ? JSON.stringify(typeData.shame_nicknames) : null
         ]
       );
 
@@ -837,16 +868,34 @@ class TrapAdminHandler {
         .setDisabled(trap.is_default) // Désactiver si piège par défaut
     );
 
+    const components = [actionRow];
+
+    // Ajouter une ligne spéciale pour shame-nickname (gestion des pseudos + durée)
+    if (trap.type === 'shame-nickname') {
+      const nicknameRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`trap_manage_nicknames_${trapId}`)
+          .setLabel('🏷️ Gérer les Pseudos')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`trap_change_duration_${trapId}`)
+          .setLabel(`⏱️ Durée (${trap.cooldown_duration || 60} min)`)
+          .setStyle(ButtonStyle.Secondary)
+      );
+      components.push(nicknameRow);
+    }
+
     const backRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('admin_traps')
         .setLabel('🔙 Retour')
         .setStyle(ButtonStyle.Secondary)
     );
+    components.push(backRow);
 
     return interaction.update({
       embeds: [embed],
-      components: [actionRow, backRow]
+      components
     });
   }
 
@@ -1168,6 +1217,7 @@ class TrapAdminHandler {
 
       modal.addComponents(new ActionRowBuilder().addComponents(shameMessageInput));
     }
+    // Note: Pour shame-nickname, la durée se modifie via le bouton "⏱️ Durée" (pas dans le modal)
 
     return interaction.showModal(modal);
   }
@@ -1222,6 +1272,7 @@ class TrapAdminHandler {
         const message = interaction.fields.getTextInputValue('trap_shame_message').trim();
         updateData.shame_message = message;
       }
+      // Note: Pour shame-nickname, la durée se modifie via le bouton "⏱️ Durée" séparément
 
       // Construire la requête UPDATE dynamiquement
       const updateFields = [];
@@ -1493,6 +1544,512 @@ class TrapAdminHandler {
   }
 
   // ============================================
+  // GESTION DES PSEUDOS HONTEUX
+  // ============================================
+
+  /**
+   * Afficher l'interface de gestion des pseudos honteux
+   */
+  async showNicknameManager(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_manage_nicknames_', ''));
+    const trap = await db.queryOne(
+      'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+      [interaction.guildId, trapId]
+    );
+
+    if (!trap) {
+      return interaction.followUp({
+        content: '❌ Piège introuvable.',
+        flags: 64
+      });
+    }
+
+    // Parser les nicknames existants
+    let nicknames = [];
+    if (trap.shame_nicknames) {
+      nicknames = Array.isArray(trap.shame_nicknames)
+        ? trap.shame_nicknames
+        : (typeof trap.shame_nicknames === 'string' ? JSON.parse(trap.shame_nicknames) : []);
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('🏷️ GESTION DES PSEUDOS HONTEUX')
+      .setDescription(
+        `**Piège:** ${trap.name}\n` +
+        `**Durée:** ${trap.cooldown_duration || 60} minutes\n\n` +
+        `**Pseudos configurés (${nicknames.length}):**\n` +
+        (nicknames.length > 0
+          ? nicknames.map((n, i) => `${i + 1}. ${n}`).join('\n')
+          : '_Aucun pseudo configuré_'
+        ) +
+        `\n\n💡 **Astuce:** Un pseudo sera choisi aléatoirement dans cette liste quand le piège se déclenche.`
+      )
+      .setColor('#9b59b6')
+      .setThumbnail(trap.image_url || null)
+      .setFooter({ text: `Max: 20 pseudos | ${nicknames.length}/20` });
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`trap_add_nickname_${trapId}`)
+        .setLabel('➕ Ajouter')
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(nicknames.length >= 20),
+      new ButtonBuilder()
+        .setCustomId(`trap_remove_nickname_${trapId}`)
+        .setLabel('➖ Supprimer un')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(nicknames.length === 0),
+      new ButtonBuilder()
+        .setCustomId(`trap_clear_nicknames_${trapId}`)
+        .setLabel('🗑️ Tout vider')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(nicknames.length === 0),
+      new ButtonBuilder()
+        .setCustomId(`trap_reset_nicknames_${trapId}`)
+        .setLabel('🔄 Défauts')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`select_trap_cancel_${trapId}`)
+        .setLabel('🔙 Retour au piège')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      embeds: [embed],
+      components: [row1, backRow]
+    });
+  }
+
+  /**
+   * Demander l'ajout d'un pseudo via le chat
+   */
+  async promptAddNicknameViaChat(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_add_nickname_', ''));
+
+    // Récupérer le piège pour vérifier le nombre de pseudos
+    const trap = await db.queryOne(
+      'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+      [interaction.guildId, trapId]
+    );
+
+    if (!trap) {
+      return interaction.followUp({ content: '❌ Piège introuvable.', flags: 64 });
+    }
+
+    let nicknames = [];
+    if (trap.shame_nicknames) {
+      nicknames = Array.isArray(trap.shame_nicknames)
+        ? trap.shame_nicknames
+        : (typeof trap.shame_nicknames === 'string' ? JSON.parse(trap.shame_nicknames) : []);
+    }
+
+    if (nicknames.length >= 20) {
+      return interaction.followUp({ content: '❌ Maximum 20 pseudos atteint.', flags: 64 });
+    }
+
+    // Envoyer le message de demande
+    const promptMsg = await interaction.followUp({
+      content: `🏷️ **Ajouter un pseudo honteux**\n\n` +
+        `Écris le pseudo dans le chat (max 32 caractères).\n` +
+        `Tu peux utiliser des emojis ! Ex: \`🐔 Poulet Piégé\`\n\n` +
+        `⏱️ Tu as **2 minutes** pour répondre.\n` +
+        `📊 Pseudos actuels: ${nicknames.length}/20`,
+      flags: 64
+    });
+
+    // Créer un collecteur de messages
+    const filter = m => m.author.id === interaction.user.id;
+    const collector = interaction.channel.createMessageCollector({
+      filter,
+      time: 120000, // 2 minutes
+      max: 1
+    });
+
+    collector.on('collect', async (message) => {
+      const newNickname = message.content.trim().substring(0, 32);
+
+      // Supprimer le message de l'utilisateur
+      try {
+        await message.delete();
+      } catch (e) {
+        // Ignorer si pas les permissions
+      }
+
+      if (newNickname.length < 3) {
+        return interaction.followUp({
+          content: '❌ Le pseudo doit faire au moins 3 caractères.',
+          flags: 64
+        });
+      }
+
+      // Vérifier les doublons
+      if (nicknames.includes(newNickname)) {
+        return interaction.followUp({
+          content: '❌ Ce pseudo existe déjà dans la liste.',
+          flags: 64
+        });
+      }
+
+      // Ajouter le pseudo
+      nicknames.push(newNickname);
+
+      try {
+        await db.query(
+          'UPDATE traps SET shame_nicknames = $1 WHERE guild_id = $2 AND id = $3',
+          [JSON.stringify(nicknames), interaction.guildId, trapId]
+        );
+
+        await interaction.followUp({
+          content: `✅ Pseudo ajouté: **${newNickname}**\n📊 Total: ${nicknames.length}/20`,
+          flags: 64
+        });
+
+        // Rafraîchir l'interface
+        setTimeout(async () => {
+          try {
+            // Créer une fausse interaction pour rafraîchir
+            const fakeInteraction = {
+              ...interaction,
+              customId: `trap_manage_nicknames_${trapId}`,
+              deferUpdate: async () => {},
+              editReply: interaction.editReply.bind(interaction),
+              followUp: interaction.followUp.bind(interaction),
+              guildId: interaction.guildId,
+              guild: interaction.guild
+            };
+            await this.showNicknameManager(fakeInteraction);
+          } catch (e) {
+            console.warn('⚠️ Impossible de rafraîchir:', e.message);
+          }
+        }, 1000);
+
+      } catch (error) {
+        console.error('❌ Erreur ajout pseudo:', error);
+        return interaction.followUp({
+          content: `❌ Erreur: ${error.message}`,
+          flags: 64
+        });
+      }
+    });
+
+    collector.on('end', (collected, reason) => {
+      if (reason === 'time' && collected.size === 0) {
+        interaction.followUp({
+          content: '⏱️ Temps écoulé. Aucun pseudo ajouté.',
+          flags: 64
+        }).catch(() => {});
+      }
+    });
+  }
+
+  /**
+   * Demander le changement de durée via le chat
+   */
+  async promptChangeDurationViaChat(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_change_duration_', ''));
+
+    const trap = await db.queryOne(
+      'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+      [interaction.guildId, trapId]
+    );
+
+    if (!trap) {
+      return interaction.followUp({ content: '❌ Piège introuvable.', flags: 64 });
+    }
+
+    // Envoyer le message de demande
+    await interaction.followUp({
+      content: `⏱️ **Modifier la durée du piège**\n\n` +
+        `**Piège:** ${trap.name}\n` +
+        `**Durée actuelle:** ${trap.cooldown_duration || 60} minutes\n\n` +
+        `📝 Écris la nouvelle durée en **minutes** dans le chat.\n` +
+        `Exemples: \`30\`, \`60\`, \`120\`, \`1440\` (24h)\n\n` +
+        `⏱️ Tu as **2 minutes** pour répondre.`,
+      flags: 64
+    });
+
+    // Créer un collecteur de messages
+    const filter = m => m.author.id === interaction.user.id;
+    const collector = interaction.channel.createMessageCollector({
+      filter,
+      time: 120000, // 2 minutes
+      max: 1
+    });
+
+    collector.on('collect', async (message) => {
+      const input = message.content.trim();
+
+      // Supprimer le message de l'utilisateur
+      try {
+        await message.delete();
+      } catch (e) {
+        // Ignorer si pas les permissions
+      }
+
+      const newDuration = parseInt(input);
+
+      if (isNaN(newDuration) || newDuration < 1) {
+        return interaction.followUp({
+          content: '❌ La durée doit être un nombre positif (en minutes).',
+          flags: 64
+        });
+      }
+
+      if (newDuration > 43200) { // Max 30 jours
+        return interaction.followUp({
+          content: '❌ La durée maximale est de 43200 minutes (30 jours).',
+          flags: 64
+        });
+      }
+
+      try {
+        await db.query(
+          'UPDATE traps SET cooldown_duration = $1 WHERE guild_id = $2 AND id = $3',
+          [newDuration, interaction.guildId, trapId]
+        );
+
+        // Formater la durée pour l'affichage
+        let durationText = `${newDuration} minute(s)`;
+        if (newDuration >= 1440) {
+          const days = Math.floor(newDuration / 1440);
+          const hours = Math.floor((newDuration % 1440) / 60);
+          durationText = `${days}j ${hours}h (${newDuration} min)`;
+        } else if (newDuration >= 60) {
+          const hours = Math.floor(newDuration / 60);
+          const mins = newDuration % 60;
+          durationText = `${hours}h ${mins}min`;
+        }
+
+        await interaction.followUp({
+          content: `✅ Durée modifiée: **${durationText}**`,
+          flags: 64
+        });
+
+      } catch (error) {
+        console.error('❌ Erreur modification durée:', error);
+        return interaction.followUp({
+          content: `❌ Erreur: ${error.message}`,
+          flags: 64
+        });
+      }
+    });
+
+    collector.on('end', (collected, reason) => {
+      if (reason === 'time' && collected.size === 0) {
+        interaction.followUp({
+          content: '⏱️ Temps écoulé. Durée non modifiée.',
+          flags: 64
+        }).catch(() => {});
+      }
+    });
+  }
+
+  /**
+   * Afficher le select menu pour supprimer un pseudo
+   */
+  async showRemoveNicknameSelector(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_remove_nickname_', ''));
+    const trap = await db.queryOne(
+      'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+      [interaction.guildId, trapId]
+    );
+
+    if (!trap) {
+      return interaction.followUp({ content: '❌ Piège introuvable.', flags: 64 });
+    }
+
+    let nicknames = [];
+    if (trap.shame_nicknames) {
+      nicknames = Array.isArray(trap.shame_nicknames)
+        ? trap.shame_nicknames
+        : (typeof trap.shame_nicknames === 'string' ? JSON.parse(trap.shame_nicknames) : []);
+    }
+
+    if (nicknames.length === 0) {
+      return interaction.followUp({ content: '❌ Aucun pseudo à supprimer.', flags: 64 });
+    }
+
+    // Créer le select menu avec les pseudos (max 25 options)
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`trap_delete_nickname_${trapId}`)
+      .setPlaceholder('Sélectionne un pseudo à supprimer...')
+      .addOptions(
+        nicknames.slice(0, 25).map((nickname, index) => ({
+          label: nickname.substring(0, 100),
+          value: index.toString(),
+          description: `Pseudo #${index + 1}`,
+          emoji: '🗑️'
+        }))
+      );
+
+    const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+
+    const backRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`trap_manage_nicknames_${trapId}`)
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      content: '🗑️ **Sélectionne le pseudo à supprimer:**',
+      embeds: [],
+      components: [selectRow, backRow]
+    });
+  }
+
+  /**
+   * Supprimer un pseudo spécifique
+   */
+  async handleDeleteSingleNickname(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_delete_nickname_', ''));
+    const nicknameIndex = parseInt(interaction.values[0]);
+
+    const trap = await db.queryOne(
+      'SELECT * FROM traps WHERE guild_id = $1 AND id = $2',
+      [interaction.guildId, trapId]
+    );
+
+    if (!trap) {
+      return interaction.followUp({ content: '❌ Piège introuvable.', flags: 64 });
+    }
+
+    let nicknames = [];
+    if (trap.shame_nicknames) {
+      nicknames = Array.isArray(trap.shame_nicknames)
+        ? trap.shame_nicknames
+        : (typeof trap.shame_nicknames === 'string' ? JSON.parse(trap.shame_nicknames) : []);
+    }
+
+    if (nicknameIndex < 0 || nicknameIndex >= nicknames.length) {
+      return interaction.followUp({ content: '❌ Index invalide.', flags: 64 });
+    }
+
+    const deletedNickname = nicknames[nicknameIndex];
+    nicknames.splice(nicknameIndex, 1);
+
+    try {
+      await db.query(
+        'UPDATE traps SET shame_nicknames = $1 WHERE guild_id = $2 AND id = $3',
+        [JSON.stringify(nicknames), interaction.guildId, trapId]
+      );
+
+      await interaction.followUp({
+        content: `✅ Pseudo supprimé: **${deletedNickname}**\n📊 Restants: ${nicknames.length}/20`,
+        flags: 64
+      });
+
+      // Rafraîchir l'interface
+      setTimeout(async () => {
+        try {
+          interaction.customId = `trap_manage_nicknames_${trapId}`;
+          await this.showNicknameManager(interaction);
+        } catch (e) {
+          console.warn('⚠️ Impossible de rafraîchir:', e.message);
+        }
+      }, 1000);
+
+    } catch (error) {
+      console.error('❌ Erreur suppression pseudo:', error);
+      return interaction.followUp({ content: `❌ Erreur: ${error.message}`, flags: 64 });
+    }
+  }
+
+  /**
+   * Supprimer tous les pseudos
+   */
+  async handleClearNicknames(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_clear_nicknames_', ''));
+
+    try {
+      await db.query(
+        'UPDATE traps SET shame_nicknames = $1 WHERE guild_id = $2 AND id = $3',
+        [JSON.stringify([]), interaction.guildId, trapId]
+      );
+
+      await interaction.followUp({
+        content: '✅ Tous les pseudos ont été supprimés.',
+        flags: 64
+      });
+
+      // Rafraîchir l'interface
+      setTimeout(async () => {
+        try {
+          interaction.customId = `trap_manage_nicknames_${trapId}`;
+          await this.showNicknameManager(interaction);
+        } catch (e) {
+          console.warn('⚠️ Impossible de rafraîchir:', e.message);
+        }
+      }, 1500);
+
+    } catch (error) {
+      console.error('❌ Erreur suppression pseudos:', error);
+      return interaction.followUp({ content: `❌ Erreur: ${error.message}`, flags: 64 });
+    }
+  }
+
+  /**
+   * Réinitialiser aux pseudos par défaut
+   */
+  async handleResetNicknames(interaction) {
+    await interaction.deferUpdate();
+
+    const trapId = parseInt(interaction.customId.replace('trap_reset_nicknames_', ''));
+
+    const defaultNicknames = [
+      '🐔 Poulet Piégé',
+      '🤡 Clown du Serveur',
+      '💩 Victime du Jour',
+      '🐌 Escargot Lent',
+      '🦆 Canard Malchanceux',
+      '🐷 Petit Cochon',
+      '🐸 Grenouille Piégée',
+      '🦝 Raton Râleur'
+    ];
+
+    try {
+      await db.query(
+        'UPDATE traps SET shame_nicknames = $1 WHERE guild_id = $2 AND id = $3',
+        [JSON.stringify(defaultNicknames), interaction.guildId, trapId]
+      );
+
+      await interaction.followUp({
+        content: `✅ Pseudos réinitialisés aux valeurs par défaut (${defaultNicknames.length} pseudos).`,
+        flags: 64
+      });
+
+      // Rafraîchir l'interface
+      setTimeout(async () => {
+        try {
+          interaction.customId = `trap_manage_nicknames_${trapId}`;
+          await this.showNicknameManager(interaction);
+        } catch (e) {
+          console.warn('⚠️ Impossible de rafraîchir:', e.message);
+        }
+      }, 1500);
+
+    } catch (error) {
+      console.error('❌ Erreur reset pseudos:', error);
+      return interaction.followUp({ content: `❌ Erreur: ${error.message}`, flags: 64 });
+    }
+  }
+
+  // ============================================
   // MÉTHODES UTILITAIRES
   // ============================================
 
@@ -1505,7 +2062,8 @@ class TrapAdminHandler {
       'lose-collectible': 'Perte de collectible',
       'public-shame': 'Shame public',
       'empty-box': 'Coffre vide',
-      'lose-all-collectibles': 'Perte totale'
+      'lose-all-collectibles': 'Perte totale',
+      'shame-nickname': 'Pseudo Honteux'
     };
     return labels[type] || type;
   }
@@ -1519,7 +2077,8 @@ class TrapAdminHandler {
       'lose-collectible': '💀',
       'public-shame': '😱',
       'empty-box': '📦',
-      'lose-all-collectibles': '☠️'
+      'lose-all-collectibles': '☠️',
+      'shame-nickname': '🎭'
     };
     return emojis[type] || '⚠️';
   }
@@ -1538,6 +2097,20 @@ class TrapAdminHandler {
       return `📦 **Effet:** Le joueur n'obtient rien de la mystery box`;
     } else if (type === 'lose-all-collectibles') {
       return `☠️ **Effet:** Retire TOUS les collectibles du joueur`;
+    } else if (type === 'shame-nickname') {
+      const nicknames = data.shame_nicknames || [];
+      const nicknamesList = Array.isArray(nicknames) ? nicknames : (typeof nicknames === 'string' ? JSON.parse(nicknames) : []);
+      let text = `🎭 **Durée:** ${data.cooldown_duration || 60} minute${(data.cooldown_duration || 60) > 1 ? 's' : ''}`;
+      text += `\n🏷️ **Pseudos (${nicknamesList.length}):**`;
+      if (nicknamesList.length > 0) {
+        text += `\n${nicknamesList.slice(0, 5).map(n => `└─ ${n}`).join('\n')}`;
+        if (nicknamesList.length > 5) {
+          text += `\n└─ _... et ${nicknamesList.length - 5} autres_`;
+        }
+      } else {
+        text += `\n└─ _Aucun (utilise les défauts du serveur)_`;
+      }
+      return text;
     }
     return '';
   }
@@ -1584,7 +2157,29 @@ class TrapAdminHandler {
       else if (customId === 'thread_cancel_trap') {
         await this.handleThreadCancel(interaction);
       }
+      // Gestion des pseudos honteux (shame-nickname)
+      else if (customId.startsWith('trap_manage_nicknames_')) {
+        await this.showNicknameManager(interaction);
+      }
+      else if (customId.startsWith('trap_add_nickname_')) {
+        await this.promptAddNicknameViaChat(interaction);
+      }
+      else if (customId.startsWith('trap_clear_nicknames_')) {
+        await this.handleClearNicknames(interaction);
+      }
+      else if (customId.startsWith('trap_reset_nicknames_')) {
+        await this.handleResetNicknames(interaction);
+      }
+      else if (customId.startsWith('trap_remove_nickname_')) {
+        await this.showRemoveNicknameSelector(interaction);
+      }
+      else if (customId.startsWith('trap_change_duration_')) {
+        await this.promptChangeDurationViaChat(interaction);
+      }
       // Select menus
+      else if (customId.startsWith('trap_delete_nickname_')) {
+        await this.handleDeleteSingleNickname(interaction);
+      }
       else if (customId === 'select_trap') {
         await this.handleTrapSelection(interaction);
       }

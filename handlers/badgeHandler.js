@@ -360,6 +360,94 @@ const LUCK_BADGES = {
   ]
 };
 
+/**
+ * Mapping pour les badges Tictactoe (Morpion PvP)
+ * V1: Badges progressifs pour toutes les stats de morpion
+ */
+const TICTACTOE_BADGES = {
+  // Victoires (games_won)
+  wins: [
+    { code: 'TICTACTOE_FIRST_WIN', threshold: 1 },
+    { code: 'TICTACTOE_WINNER_10', threshold: 10 },
+    { code: 'TICTACTOE_WINNER_25', threshold: 25 },
+    { code: 'TICTACTOE_WINNER_50', threshold: 50 },
+    { code: 'TICTACTOE_WINNER_100', threshold: 100 },
+    { code: 'TICTACTOE_WINNER_250', threshold: 250 },
+    { code: 'TICTACTOE_WINNER_500', threshold: 500 }
+  ],
+  // Parties jouées (games_played)
+  games_played: [
+    { code: 'TICTACTOE_PLAYER_25', threshold: 25 },
+    { code: 'TICTACTOE_PLAYER_50', threshold: 50 },
+    { code: 'TICTACTOE_PLAYER_100', threshold: 100 },
+    { code: 'TICTACTOE_PLAYER_250', threshold: 250 },
+    { code: 'TICTACTOE_PLAYER_500', threshold: 500 },
+    { code: 'TICTACTOE_PLAYER_1000', threshold: 1000 }
+  ],
+  // Win Streak (best_win_streak)
+  win_streak: [
+    { code: 'TICTACTOE_STREAK_3', threshold: 3 },
+    { code: 'TICTACTOE_STREAK_5', threshold: 5 },
+    { code: 'TICTACTOE_STREAK_7', threshold: 7 },
+    { code: 'TICTACTOE_STREAK_10', threshold: 10 },
+    { code: 'TICTACTOE_STREAK_15', threshold: 15 },
+    { code: 'TICTACTOE_STREAK_20', threshold: 20 }
+  ],
+  // Victoires propres (wins_by_play)
+  clean_wins: [
+    { code: 'TICTACTOE_CLEAN_WIN_25', threshold: 25 },
+    { code: 'TICTACTOE_CLEAN_WIN_50', threshold: 50 },
+    { code: 'TICTACTOE_CLEAN_WIN_100', threshold: 100 },
+    { code: 'TICTACTOE_CLEAN_WIN_250', threshold: 250 }
+  ],
+  // Victoire rapide (fastest_win_moves) - inversé: moins = mieux
+  fast_wins: [
+    { code: 'TICTACTOE_FAST_WIN_5', threshold: 5 },
+    { code: 'TICTACTOE_FAST_WIN_4', threshold: 4 },
+    { code: 'TICTACTOE_FAST_WIN_3', threshold: 3 }
+  ],
+  // Égalités (games_draw)
+  draws: [
+    { code: 'TICTACTOE_DRAW_10', threshold: 10 },
+    { code: 'TICTACTOE_DRAW_50', threshold: 50 },
+    { code: 'TICTACTOE_DRAW_100', threshold: 100 }
+  ],
+  // Résilience - défaites (games_lost)
+  resilience: [
+    { code: 'TICTACTOE_RESILIENT_25', threshold: 25 },
+    { code: 'TICTACTOE_RESILIENT_50', threshold: 50 },
+    { code: 'TICTACTOE_RESILIENT_100', threshold: 100 },
+    { code: 'TICTACTOE_RESILIENT_250', threshold: 250 }
+  ],
+  // Patience - victoires par timeout (wins_by_timeout)
+  patience: [
+    { code: 'TICTACTOE_PATIENT_5', threshold: 5 },
+    { code: 'TICTACTOE_PATIENT_15', threshold: 15 },
+    { code: 'TICTACTOE_PATIENT_30', threshold: 30 }
+  ],
+  // Intimidation - victoires par abandon (wins_by_abandon)
+  intimidation: [
+    { code: 'TICTACTOE_INTIMIDATOR_5', threshold: 5 },
+    { code: 'TICTACTOE_INTIMIDATOR_15', threshold: 15 },
+    { code: 'TICTACTOE_INTIMIDATOR_30', threshold: 30 }
+  ],
+  // Expérience - coups joués (total_moves_played)
+  moves: [
+    { code: 'TICTACTOE_MOVES_500', threshold: 500 },
+    { code: 'TICTACTOE_MOVES_1000', threshold: 1000 },
+    { code: 'TICTACTOE_MOVES_2500', threshold: 2500 },
+    { code: 'TICTACTOE_MOVES_5000', threshold: 5000 },
+    { code: 'TICTACTOE_MOVES_10000', threshold: 10000 }
+  ],
+  // Ratio W/L (calculé: games_won / games_lost avec min parties)
+  ratio: [
+    { code: 'TICTACTOE_RATIO_POSITIVE', minGames: 20, ratioMultiplier: 1 },
+    { code: 'TICTACTOE_RATIO_DOMINANT', minGames: 50, ratioMultiplier: 2 },
+    { code: 'TICTACTOE_RATIO_ELITE', minGames: 100, ratioMultiplier: 3 },
+    { code: 'TICTACTOE_RATIO_GOD', minGames: 200, ratioMultiplier: 5 }
+  ]
+};
+
 // ================================================================================
 // SECTION 2: BADGE UNLOCKING & PROGRESS
 // ================================================================================
@@ -1830,6 +1918,240 @@ async function onSuperBonusReceived(guildId, playerId, bonusType, client = null)
   }
 }
 
+/**
+ * 🎮 Hook: Partie de Morpion terminée
+ * Vérifie et débloque tous les badges Tictactoe basés sur les stats du joueur
+ *
+ * @param {string} guildId - ID du serveur
+ * @param {number} playerId - ID du joueur
+ * @param {Object} stats - Stats du joueur depuis tictactoe_stats
+ * @param {Object} client - Client Discord
+ */
+async function onTictactoeGameComplete(guildId, playerId, stats, client = null) {
+  try {
+    console.log(`🎮 [Badge] Tictactoe game complete - Player ${playerId}`);
+
+    if (!stats) {
+      console.warn('⚠️ [Badge] Stats tictactoe manquantes pour player', playerId);
+      return;
+    }
+
+    // 1. Badges Victoires (games_won)
+    for (const badge of TICTACTOE_BADGES.wins) {
+      if (stats.games_won >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.games_won, client);
+      }
+    }
+
+    // 2. Badges Parties jouées (games_played)
+    for (const badge of TICTACTOE_BADGES.games_played) {
+      if (stats.games_played >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.games_played, client);
+      }
+    }
+
+    // 3. Badges Win Streak (best_win_streak)
+    for (const badge of TICTACTOE_BADGES.win_streak) {
+      if (stats.best_win_streak >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.best_win_streak, client);
+      }
+    }
+
+    // 4. Badges Victoires propres (wins_by_play)
+    for (const badge of TICTACTOE_BADGES.clean_wins) {
+      if (stats.wins_by_play >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.wins_by_play, client);
+      }
+    }
+
+    // 5. Badges Victoire rapide (fastest_win_moves) - inversé: moins = mieux
+    // On ne check que si le joueur a un fastest_win_moves valide (>0)
+    if (stats.fastest_win_moves && stats.fastest_win_moves > 0) {
+      for (const badge of TICTACTOE_BADGES.fast_wins) {
+        if (stats.fastest_win_moves <= badge.threshold) {
+          // Pour les fast wins, on passe 1 car c'est un badge binaire (atteint ou non)
+          await updateBadgeProgress(guildId, playerId, badge.code, 1, client);
+        }
+      }
+    }
+
+    // 6. Badges Égalités (games_draw)
+    for (const badge of TICTACTOE_BADGES.draws) {
+      if (stats.games_draw >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.games_draw, client);
+      }
+    }
+
+    // 7. Badges Résilience - défaites (games_lost)
+    for (const badge of TICTACTOE_BADGES.resilience) {
+      if (stats.games_lost >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.games_lost, client);
+      }
+    }
+
+    // 8. Badges Patience - victoires par timeout (wins_by_timeout)
+    for (const badge of TICTACTOE_BADGES.patience) {
+      if (stats.wins_by_timeout >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.wins_by_timeout, client);
+      }
+    }
+
+    // 9. Badges Intimidation - victoires par abandon (wins_by_abandon)
+    for (const badge of TICTACTOE_BADGES.intimidation) {
+      if (stats.wins_by_abandon >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.wins_by_abandon, client);
+      }
+    }
+
+    // 10. Badges Expérience - coups joués (total_moves_played)
+    for (const badge of TICTACTOE_BADGES.moves) {
+      if (stats.total_moves_played >= badge.threshold) {
+        await updateBadgeProgress(guildId, playerId, badge.code, stats.total_moves_played, client);
+      }
+    }
+
+    // 11. Badges Ratio W/L (calculé)
+    // Éviter division par zéro
+    const losses = stats.games_lost || 1; // Minimum 1 pour éviter division par zéro
+    const ratio = stats.games_won / losses;
+
+    for (const badge of TICTACTOE_BADGES.ratio) {
+      if (stats.games_played >= badge.minGames && ratio >= badge.ratioMultiplier) {
+        // Pour les ratios, on passe 1 car c'est un badge binaire (atteint ou non)
+        await updateBadgeProgress(guildId, playerId, badge.code, 1, client);
+      }
+    }
+
+    console.log(`✅ [Badge] Tictactoe badges checked for player ${playerId}`);
+
+  } catch (error) {
+    console.error('🔴 Erreur hook onTictactoeGameComplete:', error);
+  }
+}
+
+/**
+ * 🎭 Hook appelé quand un piège "Shame Nickname" est déclenché
+ * @param {string} guildId - ID du serveur
+ * @param {number} playerId - ID du joueur
+ * @param {string} shameNickname - Le pseudo honteux attribué
+ * @param {number} durationMinutes - Durée du piège en minutes
+ * @param {Object} client - Client Discord
+ */
+async function onShameNicknameTriggered(guildId, playerId, shameNickname, durationMinutes, client = null) {
+  try {
+    console.log(`🎭 [Badge] Shame Nickname déclenché - Player ${playerId}, pseudo: ${shameNickname}, durée: ${durationMinutes}min`);
+
+    // Compter le nombre total de fois piégé
+    const trapCount = await db.queryOne(`
+      SELECT COUNT(*) as count FROM player_shame_nickname
+      WHERE guild_id = $1 AND player_id = $2
+    `, [guildId, playerId]);
+
+    const count = trapCount ? parseInt(trapCount.count) : 0;
+
+    // Mettre à jour les badges basés sur le nombre de fois piégé
+    const shameBadges = [
+      { code: 'SHAME_FIRST_VICTIM', threshold: 1 },
+      { code: 'SHAME_REGULAR_VICTIM', threshold: 5 },
+      { code: 'SHAME_SERIAL_VICTIM', threshold: 15 },
+      { code: 'SHAME_ETERNAL_VICTIM', threshold: 50 }
+    ];
+
+    for (const badge of shameBadges) {
+      await updateBadgeProgress(guildId, playerId, badge.code, count, client);
+    }
+
+    // Badge spécial "Roi des Clowns" si le pseudo contient "Clown"
+    if (shameNickname && shameNickname.toLowerCase().includes('clown')) {
+      const clownCount = await db.queryOne(`
+        SELECT COUNT(*) as count FROM player_shame_nickname
+        WHERE guild_id = $1 AND player_id = $2 AND LOWER(shame_nickname) LIKE '%clown%'
+      `, [guildId, playerId]);
+
+      if (clownCount) {
+        await updateBadgeProgress(guildId, playerId, 'SHAME_CLOWN_KING', parseInt(clownCount.count), client);
+      }
+    }
+
+    console.log(`✅ [Badge] Shame nickname badges checked for player ${playerId}`);
+
+  } catch (error) {
+    console.error('🔴 Erreur hook onShameNicknameTriggered:', error);
+  }
+}
+
+/**
+ * 🏃 Hook appelé quand un joueur tente de changer son pseudo honteux
+ * @param {string} guildId - ID du serveur
+ * @param {number} playerId - ID du joueur
+ * @param {number} totalAttempts - Nombre total de tentatives cumulées
+ * @param {Object} client - Client Discord
+ */
+async function onShameNicknameEscapeAttempt(guildId, playerId, totalAttempts, client = null) {
+  try {
+    console.log(`🏃 [Badge] Tentative de fuite - Player ${playerId}, total: ${totalAttempts}`);
+
+    // Mettre à jour les badges de tentatives de fuite
+    const escapeBadges = [
+      { code: 'SHAME_FIRST_ESCAPE_ATTEMPT', threshold: 1 },
+      { code: 'SHAME_PERSISTENT_ESCAPEE', threshold: 10 },
+      { code: 'SHAME_DESPERATE_ESCAPEE', threshold: 50 },
+      { code: 'SHAME_ESCAPE_LEGEND', threshold: 200 }
+    ];
+
+    for (const badge of escapeBadges) {
+      await updateBadgeProgress(guildId, playerId, badge.code, totalAttempts, client);
+    }
+
+    console.log(`✅ [Badge] Escape attempt badges checked for player ${playerId}`);
+
+  } catch (error) {
+    console.error('🔴 Erreur hook onShameNicknameEscapeAttempt:', error);
+  }
+}
+
+/**
+ * ⏰ Hook appelé quand un piège "Shame Nickname" expire
+ * Met à jour les badges de durée totale
+ * @param {string} guildId - ID du serveur
+ * @param {number} playerId - ID du joueur
+ * @param {number} durationMinutes - Durée du piège qui vient d'expirer (en minutes)
+ * @param {Object} client - Client Discord
+ */
+async function onShameNicknameExpired(guildId, playerId, durationMinutes, client = null) {
+  try {
+    console.log(`⏰ [Badge] Shame Nickname expiré - Player ${playerId}, durée: ${durationMinutes}min`);
+
+    // Calculer la durée totale passée en pseudo honteux
+    const totalDuration = await db.queryOne(`
+      SELECT COALESCE(SUM(
+        EXTRACT(EPOCH FROM (LEAST(expires_at, NOW()) - started_at)) / 60
+      )::integer, 0) as total_minutes
+      FROM player_shame_nickname
+      WHERE guild_id = $1 AND player_id = $2
+    `, [guildId, playerId]);
+
+    const totalMinutes = totalDuration ? parseInt(totalDuration.total_minutes) : 0;
+
+    // Mettre à jour les badges de survie
+    const survivorBadges = [
+      { code: 'SHAME_HOUR_SURVIVOR', threshold: 60 },      // 1 heure
+      { code: 'SHAME_DAY_SURVIVOR', threshold: 1440 },     // 24 heures
+      { code: 'SHAME_WEEK_SURVIVOR', threshold: 10080 },   // 7 jours
+      { code: 'SHAME_MONTH_SURVIVOR', threshold: 43200 }   // 30 jours
+    ];
+
+    for (const badge of survivorBadges) {
+      await updateBadgeProgress(guildId, playerId, badge.code, totalMinutes, client);
+    }
+
+    console.log(`✅ [Badge] Shame nickname survivor badges checked for player ${playerId}, total: ${totalMinutes}min`);
+
+  } catch (error) {
+    console.error('🔴 Erreur hook onShameNicknameExpired:', error);
+  }
+}
+
 // ================================================================================
 // EXPORTS
 // ================================================================================
@@ -1856,6 +2178,7 @@ module.exports = {
   THEME_BADGES,
   MINT_BADGES,
   LUCK_BADGES,
+  TICTACTOE_BADGES,
 
   // Core functions
   unlockBadge,
@@ -1906,5 +2229,13 @@ module.exports = {
   onFavoritesSet,
   onWinStreak,
   onLegendariesIn24h,
-  onSuperBonusReceived
+  onSuperBonusReceived,
+
+  // Integration hooks (Tictactoe/Morpion V3)
+  onTictactoeGameComplete,
+
+  // Integration hooks (Shame Nickname V4)
+  onShameNicknameTriggered,
+  onShameNicknameEscapeAttempt,
+  onShameNicknameExpired
 };

@@ -582,12 +582,23 @@ class DatabaseWrapper {
   }
 
   /**
-   * Récupérer toutes les missions d'un thème
+   * Récupérer toutes les missions d'un thème (pour admin panel)
    */
   async getMissionsByTheme(guildId, themeId) {
     guildId = this._getGuildId(guildId);
     return this.queryAll(
       'SELECT * FROM missions WHERE guild_id = $1 AND theme_id = $2',
+      [guildId, themeId]
+    );
+  }
+
+  /**
+   * Récupérer les missions ACTIVES d'un thème (pour le gameplay)
+   */
+  async getActiveMissionsByTheme(guildId, themeId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryAll(
+      'SELECT * FROM missions WHERE guild_id = $1 AND theme_id = $2 AND is_active = TRUE',
       [guildId, themeId]
     );
   }
@@ -1872,9 +1883,12 @@ class DatabaseWrapper {
         collection_lost, trap_curse, trap_cooldown, trap_lose_collectible,
         trap_public_shame, trap_malus_points, mission_word_guessed, theme_expired,
         theme_expiring_soon, mission_started, mission_completed, mission_failed,
-        mission_approved, mission_rejected, trap_lose_all_collectibles
+        mission_approved, mission_rejected, trap_lose_all_collectibles,
+        legendary_super_bonus, collectible_level_up, collectible_max_level,
+        collectible_restored, tictactoe_result, mystery_gift_sent, mystery_gift_opened,
+        super_bonus_joker_used, trap_empty_box, all_collectibles_recovered, trap_shame_nickname
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
        ON CONFLICT (guild_id) DO UPDATE
          SET legendary_collectible = EXCLUDED.legendary_collectible,
              collection_completed = EXCLUDED.collection_completed,
@@ -1894,19 +1908,30 @@ class DatabaseWrapper {
              mission_approved = EXCLUDED.mission_approved,
              mission_rejected = EXCLUDED.mission_rejected,
              trap_lose_all_collectibles = EXCLUDED.trap_lose_all_collectibles,
+             legendary_super_bonus = EXCLUDED.legendary_super_bonus,
+             collectible_level_up = EXCLUDED.collectible_level_up,
+             collectible_max_level = EXCLUDED.collectible_max_level,
+             collectible_restored = EXCLUDED.collectible_restored,
+             tictactoe_result = EXCLUDED.tictactoe_result,
+             mystery_gift_sent = EXCLUDED.mystery_gift_sent,
+             mystery_gift_opened = EXCLUDED.mystery_gift_opened,
+             super_bonus_joker_used = EXCLUDED.super_bonus_joker_used,
+             trap_empty_box = EXCLUDED.trap_empty_box,
+             all_collectibles_recovered = EXCLUDED.all_collectibles_recovered,
+             trap_shame_nickname = EXCLUDED.trap_shame_nickname,
              updated_at = NOW()`,
       [
         guildId,
-        settings.legendary_collectible,
-        settings.collection_completed,
-        settings.collection_traded,
-        settings.collection_lost,
-        settings.trap_curse,
+        settings.legendary_collectible ?? false,
+        settings.collection_completed ?? false,
+        settings.collection_traded ?? false,
+        settings.collection_lost ?? false,
+        settings.trap_curse ?? false,
         settings.trap_cooldown ?? true,
         settings.trap_lose_collectible ?? true,
         settings.trap_public_shame ?? true,
         settings.trap_malus_points ?? true,
-        settings.mission_word_guessed,
+        settings.mission_word_guessed ?? false,
         settings.theme_expired ?? false,
         settings.theme_expiring_soon ?? false,
         settings.mission_started ?? false,
@@ -1914,7 +1939,18 @@ class DatabaseWrapper {
         settings.mission_failed ?? false,
         settings.mission_approved ?? false,
         settings.mission_rejected ?? false,
-        settings.trap_lose_all_collectibles ?? true
+        settings.trap_lose_all_collectibles ?? true,
+        settings.legendary_super_bonus ?? false,
+        settings.collectible_level_up ?? false,
+        settings.collectible_max_level ?? false,
+        settings.collectible_restored ?? false,
+        settings.tictactoe_result ?? false,
+        settings.mystery_gift_sent ?? false,
+        settings.mystery_gift_opened ?? false,
+        settings.super_bonus_joker_used ?? false,
+        settings.trap_empty_box ?? false,
+        settings.all_collectibles_recovered ?? false,
+        settings.trap_shame_nickname ?? true
       ]
     );
   }
@@ -2066,6 +2102,7 @@ class DatabaseWrapper {
         trap_public_shame: true,
         trap_malus_points: true,
         trap_lose_all_collectibles: true,
+        trap_shame_nickname: true,
         mission_word_guessed: false,
         theme_expired: false,
         theme_expiring_soon: false
@@ -2141,6 +2178,142 @@ class DatabaseWrapper {
 
     console.log(`🗑️ Collectible perdu: ${collection.name} (player=${playerId}, guild=${guildId}, nouveau compteur=${realCount?.count || 0})`);
     return collection;
+  }
+
+  /**
+   * Récupère les collectibles perdus d'un joueur pour le thème actif uniquement
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur (player_id, pas discord_id)
+   * @returns {Array} Liste des collectibles perdus avec détails
+   */
+  async getLostCollectibles(guildId, playerId) {
+    guildId = this._getGuildId(guildId);
+
+    // Récupérer le thème actif
+    const activeTheme = await this.getActiveTheme(guildId);
+    if (!activeTheme) {
+      console.log(`⚠️ Aucun thème actif pour guild=${guildId}`);
+      return [];
+    }
+
+    return this.queryAll(
+      `SELECT c.*, col.name, col.rarity, col.image_url, col.theme_id, t.name as theme_name
+       FROM collections c
+       JOIN collectibles col ON c.collectible_id = col.id
+       LEFT JOIN themes t ON col.theme_id = t.id
+       WHERE c.guild_id = $1 AND c.player_id = $2 AND c.lost_at IS NOT NULL AND col.theme_id = $3
+       ORDER BY c.lost_at DESC`,
+      [guildId, playerId, activeTheme.id]
+    );
+  }
+
+  /**
+   * Récupère les collectibles perdus d'un joueur pour le thème actif et les restaure
+   * Super Bonus "Recovery" - Inverse du piège lose-all-collectibles
+   * Limité au thème actif uniquement
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur (player_id, pas discord_id)
+   * @param {string} source - Source de la restauration (ex: 'super_bonus_recovery')
+   * @returns {Object} { restoredCount, collectibles[], themeStats, themeName }
+   */
+  async recoverAllLostCollectibles(guildId, playerId, source = 'recovery') {
+    guildId = this._getGuildId(guildId);
+
+    // Récupérer le thème actif
+    const activeTheme = await this.getActiveTheme(guildId);
+    if (!activeTheme) {
+      console.log(`⚠️ Aucun thème actif pour guild=${guildId}`);
+      return {
+        restoredCount: 0,
+        collectibles: [],
+        themeStats: {},
+        themeName: null,
+        error: 'NO_ACTIVE_THEME'
+      };
+    }
+
+    // 1. Récupérer les collectibles perdus du thème actif
+    const lostCollectibles = await this.getLostCollectibles(guildId, playerId);
+
+    if (lostCollectibles.length === 0) {
+      console.log(`⚠️ Aucun collectible perdu à restaurer pour le thème "${activeTheme.name}" (player=${playerId}, guild=${guildId})`);
+      return {
+        restoredCount: 0,
+        collectibles: [],
+        themeStats: {},
+        themeName: activeTheme.name
+      };
+    }
+
+    // 2. Restaurer tous les collectibles (SET lost_at = NULL)
+    const collectionIds = lostCollectibles.map(c => c.id);
+
+    await this.query(
+      `UPDATE collections
+       SET lost_at = NULL, source = $1
+       WHERE id = ANY($2) AND guild_id = $3`,
+      [source, collectionIds, guildId]
+    );
+
+    // 3. Regrouper par thème pour recalculer les compteurs
+    const themeStats = {};
+    for (const collectible of lostCollectibles) {
+      const themeId = collectible.theme_id;
+      if (!themeStats[themeId]) {
+        themeStats[themeId] = {
+          themeName: collectible.theme_name,
+          restoredCount: 0,
+          collectibles: []
+        };
+      }
+      themeStats[themeId].restoredCount++;
+      themeStats[themeId].collectibles.push({
+        name: collectible.name,
+        rarity: collectible.rarity,
+        level: collectible.level,
+        xp: collectible.xp,
+        mintNumber: collectible.mint_number
+      });
+    }
+
+    // 4. Recalculer les compteurs player_progress pour chaque thème affecté
+    for (const themeId of Object.keys(themeStats)) {
+      const realCount = await this.queryOne(
+        `SELECT COUNT(DISTINCT c.collectible_id) as count
+         FROM collections c
+         JOIN collectibles col ON c.collectible_id = col.id
+         WHERE c.player_id = $1 AND c.guild_id = $2 AND col.theme_id = $3 AND c.lost_at IS NULL`,
+        [playerId, guildId, parseInt(themeId)]
+      );
+
+      await this.query(
+        `UPDATE player_progress
+         SET collected_count = $1
+         WHERE player_id = $2 AND guild_id = $3 AND theme_id = $4`,
+        [parseInt(realCount?.count || 0), playerId, guildId, parseInt(themeId)]
+      );
+
+      themeStats[themeId].newTotalCount = parseInt(realCount?.count || 0);
+    }
+
+    console.log(`🔄 ${lostCollectibles.length} collectible(s) restauré(s) pour le thème "${activeTheme.name}" (player=${playerId}, guild=${guildId})`);
+
+    return {
+      restoredCount: lostCollectibles.length,
+      collectibles: lostCollectibles.map(c => ({
+        id: c.collectible_id,
+        name: c.name,
+        rarity: c.rarity,
+        level: c.level,
+        xp: c.xp,
+        mintNumber: c.mint_number,
+        themeId: c.theme_id,
+        themeName: c.theme_name,
+        lostAt: c.lost_at
+      })),
+      themeStats,
+      themeName: activeTheme.name
+    };
   }
 
   // ==================== GUILD BRANDING ====================
@@ -2280,6 +2453,57 @@ class DatabaseWrapper {
     );
 
     return { [setting]: value };
+  }
+
+  // ==================== MISSION CHANNEL ====================
+
+  /**
+   * Récupérer le canal de missions configuré pour une guild
+   * @param {string} guildId - ID du serveur
+   * @returns {string|null} - ID du canal ou null si non configuré
+   */
+  async getMissionChannel(guildId) {
+    guildId = this._getGuildId(guildId);
+
+    const result = await this.queryOne(
+      `SELECT mission_channel_id FROM guild_config WHERE guild_id = $1`,
+      [guildId]
+    );
+
+    return result?.mission_channel_id || null;
+  }
+
+  /**
+   * Définir le canal de missions pour une guild
+   * @param {string} guildId - ID du serveur
+   * @param {string} channelId - ID du canal Discord
+   * @returns {Object} - Résultat de la mise à jour
+   */
+  async setMissionChannel(guildId, channelId) {
+    guildId = this._getGuildId(guildId);
+
+    await this.query(
+      `UPDATE guild_config SET mission_channel_id = $1 WHERE guild_id = $2`,
+      [channelId, guildId]
+    );
+
+    console.log(`📍 [DB] Canal missions configuré: ${channelId} (guild: ${guildId})`);
+    return { mission_channel_id: channelId };
+  }
+
+  /**
+   * Supprimer la configuration du canal de missions
+   * @param {string} guildId - ID du serveur
+   */
+  async clearMissionChannel(guildId) {
+    guildId = this._getGuildId(guildId);
+
+    await this.query(
+      `UPDATE guild_config SET mission_channel_id = NULL WHERE guild_id = $1`,
+      [guildId]
+    );
+
+    console.log(`🗑️ [DB] Canal missions supprimé (guild: ${guildId})`);
   }
 
   // ==================== SUPER BONUS INSTALLATION ====================
@@ -5196,20 +5420,25 @@ class DatabaseWrapper {
       return [];
     }
 
-    // Insérer les frames par défaut pour ce thème
+    // Insérer les frames par défaut pour ce thème avec génération automatique du frame_code
     const createdFrames = [];
     for (const df of defaultFrames) {
+      // Générer le frame_code: FRAME_GUILDPREFIX_THEMEID_NUMBER
+      const guildPrefix = guildId.substring(0, 4);
+      const frameCode = `FRAME_${guildPrefix}_${themeId}_${String(df.frame_number).padStart(3, '0')}`;
+
       const created = await this.queryOne(
         `INSERT INTO theme_profile_frames
-         (guild_id, theme_id, frame_number, name, description, frame_url, unlock_condition, bonus_type, bonus_value)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (guild_id, theme_id, frame_number, name, description, frame_url, unlock_condition, bonus_type, bonus_value, frame_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (guild_id, theme_id, frame_number) DO UPDATE SET
            name = EXCLUDED.name,
            description = EXCLUDED.description,
            frame_url = EXCLUDED.frame_url,
-           unlock_condition = EXCLUDED.unlock_condition
+           unlock_condition = EXCLUDED.unlock_condition,
+           frame_code = COALESCE(theme_profile_frames.frame_code, EXCLUDED.frame_code)
          RETURNING *`,
-        [guildId, themeId, df.frame_number, df.name, df.description, df.frame_url, JSON.stringify(df.unlock_condition), df.bonus_type, df.bonus_value]
+        [guildId, themeId, df.frame_number, df.name, df.description, df.frame_url, JSON.stringify(df.unlock_condition), df.bonus_type, df.bonus_value, frameCode]
       );
       createdFrames.push(created);
     }
@@ -5220,14 +5449,20 @@ class DatabaseWrapper {
 
   /**
    * Crée ou met à jour une frame de profil pour un thème
+   * Génère automatiquement un frame_code unique si absent
    */
   async setThemeProfileFrame(guildId, themeId, frameNumber, name, description, frameUrl, unlockCondition, bonusType = null, bonusValue = null) {
     guildId = this._getGuildId(guildId);
 
+    // Générer le frame_code: FRAME_GUILDPREFIX_THEMEID_NUMBER
+    const guildPrefix = guildId.substring(0, 4);
+    const themeCode = themeId ? themeId : 'R'; // 'R' pour frames de rôle sans thème
+    const frameCode = `FRAME_${guildPrefix}_${themeCode}_${String(frameNumber).padStart(3, '0')}`;
+
     return this.queryOne(
       `INSERT INTO theme_profile_frames
-       (guild_id, theme_id, frame_number, name, description, frame_url, unlock_condition, bonus_type, bonus_value)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (guild_id, theme_id, frame_number, name, description, frame_url, unlock_condition, bonus_type, bonus_value, frame_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (guild_id, theme_id, frame_number)
        DO UPDATE SET
          name = EXCLUDED.name,
@@ -5236,9 +5471,10 @@ class DatabaseWrapper {
          unlock_condition = EXCLUDED.unlock_condition,
          bonus_type = EXCLUDED.bonus_type,
          bonus_value = EXCLUDED.bonus_value,
+         frame_code = COALESCE(theme_profile_frames.frame_code, EXCLUDED.frame_code),
          updated_at = NOW()
        RETURNING *`,
-      [guildId, themeId, frameNumber, name, description, frameUrl, JSON.stringify(unlockCondition), bonusType, bonusValue]
+      [guildId, themeId, frameNumber, name, description, frameUrl, JSON.stringify(unlockCondition), bonusType, bonusValue, frameCode]
     );
   }
 
@@ -5326,16 +5562,29 @@ class DatabaseWrapper {
       const meetsCondition = await this.checkFrameUnlockCondition(guildId, playerId, frame.id);
 
       if (meetsCondition) {
-        // Débloquer la frame
+        // Débloquer la frame avec COPIE des données (système professionnel)
+        // Ainsi le joueur garde sa frame même si l'admin supprime l'originale
+        // Le frame_code assure l'identification unique cross-serveur
         await this.query(
-          `INSERT INTO player_unlocked_frames (discord_id, frame_id, unlocked_on_guild)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (discord_id, frame_id) DO NOTHING`,
-          [discordId, frame.id, guildId]
+          `INSERT INTO player_unlocked_frames (
+             discord_id, frame_id, unlocked_on_guild,
+             frame_code, frame_name, frame_url, frame_description, bonus_type, bonus_value, source
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'theme')
+           ON CONFLICT (discord_id, frame_id) DO UPDATE SET
+             frame_code = COALESCE(player_unlocked_frames.frame_code, EXCLUDED.frame_code),
+             frame_name = COALESCE(player_unlocked_frames.frame_name, EXCLUDED.frame_name),
+             frame_url = COALESCE(player_unlocked_frames.frame_url, EXCLUDED.frame_url),
+             frame_description = COALESCE(player_unlocked_frames.frame_description, EXCLUDED.frame_description),
+             bonus_type = COALESCE(player_unlocked_frames.bonus_type, EXCLUDED.bonus_type),
+             bonus_value = COALESCE(player_unlocked_frames.bonus_value, EXCLUDED.bonus_value),
+             source = COALESCE(player_unlocked_frames.source, EXCLUDED.source)`,
+          [discordId, frame.id, guildId, frame.frame_code, frame.name, frame.frame_url, frame.description, frame.bonus_type, frame.bonus_value || 0]
         );
         newlyUnlocked.push(frame);
         // Ajouter à la liste des débloquées pour permettre le déblocage de la suivante dans cette même vérification
         unlockedFrameNumbers.add(frame.frame_number);
+        console.log(`🖼️ Frame thème #${frame.id} [${frame.frame_code}] "${frame.name}" débloquée avec données copiées pour ${discordId}`);
       }
     }
 
@@ -5344,15 +5593,46 @@ class DatabaseWrapper {
 
   /**
    * Récupère toutes les frames débloquées par un joueur (multi-serveur)
+   * Utilise les données COPIÉES dans player_unlocked_frames (indépendantes de la source)
+   * Ainsi le joueur garde ses frames même si l'admin supprime l'originale
+   * Fallback vers theme_profile_frames pour les anciennes frames sans données copiées
+   * Le frame_code assure l'identification unique cross-serveur
    */
   async getUnlockedFrames(discordId) {
     return this.queryAll(
-      `SELECT puf.*, tpf.name, tpf.description, tpf.frame_url, tpf.bonus_type, tpf.bonus_value,
-              t.name as theme_name, t.id as theme_id
+      `SELECT
+         puf.id,
+         puf.discord_id,
+         puf.frame_id,
+         puf.unlocked_at,
+         puf.unlocked_on_guild,
+         puf.source,
+         puf.purchased_price,
+         -- Identifiant unique (priorité à la copie locale)
+         COALESCE(puf.frame_code, tpf.frame_code) as frame_code,
+         -- Utiliser les données copiées EN PRIORITÉ, sinon fallback vers source
+         COALESCE(puf.frame_name, tpf.name) as name,
+         COALESCE(puf.frame_description, tpf.description) as description,
+         COALESCE(puf.frame_url, tpf.frame_url) as frame_url,
+         COALESCE(puf.bonus_type, tpf.bonus_type) as bonus_type,
+         COALESCE(puf.bonus_value, tpf.bonus_value, 0) as bonus_value,
+         -- Infos source (peut être NULL si supprimée)
+         tpf.role_id,
+         CASE
+           WHEN puf.source = 'role' THEN 'Frame de Rôle'
+           WHEN puf.source = 'marketplace' THEN 'Marketplace'
+           WHEN puf.source = 'gift' THEN 'Cadeau'
+           WHEN puf.source = 'event' THEN 'Événement'
+           WHEN puf.source = 'achievement' THEN 'Succès'
+           ELSE COALESCE(t.name, 'Thème')
+         END as theme_name,
+         t.id as theme_id
        FROM player_unlocked_frames puf
-       JOIN theme_profile_frames tpf ON puf.frame_id = tpf.id
-       JOIN themes t ON tpf.theme_id = t.id
+       LEFT JOIN theme_profile_frames tpf ON puf.frame_id = tpf.id
+       LEFT JOIN themes t ON tpf.theme_id = t.id
        WHERE puf.discord_id = $1
+       -- Ne montrer que les frames avec des données valides
+       AND (puf.frame_name IS NOT NULL OR tpf.id IS NOT NULL)
        ORDER BY puf.unlocked_at DESC`,
       [discordId]
     );
@@ -5362,17 +5642,49 @@ class DatabaseWrapper {
    * Équipe une frame de profil
    * guildId = null pour équiper globalement
    */
-  async equipFrame(discordId, frameId, guildId = null) {
+  async equipFrame(discordId, frameId, guildId = null, memberRoleIds = []) {
     const guildValue = guildId || '__global__';
 
-    // Vérifier que le joueur a débloqué cette frame
+    // Vérifier que le joueur a débloqué cette frame OU que c'est une frame par rôle
     const unlocked = await this.queryOne(
       `SELECT * FROM player_unlocked_frames WHERE discord_id = $1 AND frame_id = $2`,
       [discordId, frameId]
     );
 
+    // Si pas débloquée, vérifier si c'est une frame par rôle que le joueur possède
     if (!unlocked) {
-      throw new Error('Frame not unlocked');
+      const roleFrame = await this.queryOne(
+        `SELECT * FROM theme_profile_frames
+         WHERE id = $1 AND role_id IS NOT NULL AND guild_id = $2`,
+        [frameId, guildId]
+      );
+
+      // Si c'est une frame par rôle, vérifier que le joueur a le rôle
+      if (roleFrame && memberRoleIds.includes(roleFrame.role_id)) {
+        // ✅ Le joueur a le rôle requis
+        // 🎁 DÉBLOQUER DÉFINITIVEMENT la frame avec COPIE des données (système professionnel)
+        // Ainsi il la garde même s'il perd le rôle, et peut l'utiliser sur d'autres serveurs
+        // Le frame_code assure l'identification unique cross-serveur
+        await this.query(
+          `INSERT INTO player_unlocked_frames (
+             discord_id, frame_id, unlocked_on_guild,
+             frame_code, frame_name, frame_url, frame_description, bonus_type, bonus_value, source
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'role')
+           ON CONFLICT (discord_id, frame_id) DO UPDATE SET
+             frame_code = COALESCE(player_unlocked_frames.frame_code, EXCLUDED.frame_code),
+             frame_name = COALESCE(player_unlocked_frames.frame_name, EXCLUDED.frame_name),
+             frame_url = COALESCE(player_unlocked_frames.frame_url, EXCLUDED.frame_url),
+             frame_description = COALESCE(player_unlocked_frames.frame_description, EXCLUDED.frame_description),
+             bonus_type = COALESCE(player_unlocked_frames.bonus_type, EXCLUDED.bonus_type),
+             bonus_value = COALESCE(player_unlocked_frames.bonus_value, EXCLUDED.bonus_value),
+             source = COALESCE(player_unlocked_frames.source, EXCLUDED.source)`,
+          [discordId, frameId, guildId, roleFrame.frame_code, roleFrame.name, roleFrame.frame_url, roleFrame.description, roleFrame.bonus_type, roleFrame.bonus_value || 0]
+        );
+        console.log(`🖼️ Frame de rôle #${frameId} [${roleFrame.frame_code}] "${roleFrame.name}" débloquée avec données copiées pour ${discordId}`);
+      } else {
+        throw new Error('Frame not unlocked');
+      }
     }
 
     return this.queryOne(
@@ -5388,14 +5700,20 @@ class DatabaseWrapper {
   /**
    * Récupère la frame équipée d'un joueur
    * Cherche d'abord la frame spécifique au serveur, puis la globale
+   * Utilise les données copiées dans player_unlocked_frames (indépendantes)
    */
   async getEquippedFrame(discordId, guildId = null) {
     // Chercher frame spécifique au serveur
     if (guildId) {
       const serverFrame = await this.queryOne(
-        `SELECT pef.*, tpf.name, tpf.frame_url, tpf.bonus_type, tpf.bonus_value
+        `SELECT pef.*,
+                COALESCE(puf.frame_name, tpf.name) as name,
+                COALESCE(puf.frame_url, tpf.frame_url) as frame_url,
+                COALESCE(puf.bonus_type, tpf.bonus_type) as bonus_type,
+                COALESCE(puf.bonus_value, tpf.bonus_value, 0) as bonus_value
          FROM player_equipped_frame pef
-         JOIN theme_profile_frames tpf ON pef.frame_id = tpf.id
+         LEFT JOIN player_unlocked_frames puf ON pef.discord_id = puf.discord_id AND pef.frame_id = puf.frame_id
+         LEFT JOIN theme_profile_frames tpf ON pef.frame_id = tpf.id
          WHERE pef.discord_id = $1 AND pef.guild_id = $2`,
         [discordId, guildId]
       );
@@ -5404,9 +5722,14 @@ class DatabaseWrapper {
 
     // Fallback: frame globale
     return this.queryOne(
-      `SELECT pef.*, tpf.name, tpf.frame_url, tpf.bonus_type, tpf.bonus_value
+      `SELECT pef.*,
+              COALESCE(puf.frame_name, tpf.name) as name,
+              COALESCE(puf.frame_url, tpf.frame_url) as frame_url,
+              COALESCE(puf.bonus_type, tpf.bonus_type) as bonus_type,
+              COALESCE(puf.bonus_value, tpf.bonus_value, 0) as bonus_value
        FROM player_equipped_frame pef
-       JOIN theme_profile_frames tpf ON pef.frame_id = tpf.id
+       LEFT JOIN player_unlocked_frames puf ON pef.discord_id = puf.discord_id AND pef.frame_id = puf.frame_id
+       LEFT JOIN theme_profile_frames tpf ON pef.frame_id = tpf.id
        WHERE pef.discord_id = $1 AND pef.guild_id = '__global__'`,
       [discordId]
     );
@@ -5790,6 +6113,747 @@ class DatabaseWrapper {
       WHERE id = $1
       RETURNING *
     `, [categoryId, keyword.toLowerCase()]);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TICTACTOE - CONFIGURATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Récupère la configuration Morpion d'un serveur
+   * @param {string} guildId - ID du serveur
+   * @returns {Object|null} Configuration ou null
+   */
+  async getTictactoeConfig(guildId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryOne(`
+      SELECT * FROM tictactoe_config WHERE guild_id = $1
+    `, [guildId]);
+  }
+
+  /**
+   * Crée ou met à jour la configuration Morpion
+   * @param {string} guildId - ID du serveur
+   * @param {Object} config - Configuration à appliquer
+   * @returns {Object} Configuration mise à jour
+   */
+  async upsertTictactoeConfig(guildId, config) {
+    guildId = this._getGuildId(guildId);
+    return this.queryOne(`
+      INSERT INTO tictactoe_config (guild_id, matchmaking_channel_id, turn_timeout, mission_timeout, draw_resolution, max_search_retries, search_cooldown, is_enabled, max_rounds)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (guild_id) DO UPDATE SET
+        matchmaking_channel_id = COALESCE($2, tictactoe_config.matchmaking_channel_id),
+        turn_timeout = COALESCE($3, tictactoe_config.turn_timeout),
+        mission_timeout = COALESCE($4, tictactoe_config.mission_timeout),
+        draw_resolution = COALESCE($5, tictactoe_config.draw_resolution),
+        max_search_retries = COALESCE($6, tictactoe_config.max_search_retries),
+        search_cooldown = COALESCE($7, tictactoe_config.search_cooldown),
+        is_enabled = COALESCE($8, tictactoe_config.is_enabled),
+        max_rounds = COALESCE($9, tictactoe_config.max_rounds),
+        updated_at = NOW()
+      RETURNING *
+    `, [
+      guildId,
+      config.matchmaking_channel_id || null,
+      config.turn_timeout || null,
+      config.mission_timeout || null,
+      config.draw_resolution || null,
+      config.max_search_retries || null,
+      config.search_cooldown || null,
+      config.is_enabled !== undefined ? config.is_enabled : null,
+      config.max_rounds || null
+    ]);
+  }
+
+  /**
+   * Récupère le canal de matchmaking Morpion
+   * @param {string} guildId - ID du serveur
+   * @returns {string|null} ID du canal ou null
+   */
+  async getTictactoeMatchmakingChannel(guildId) {
+    guildId = this._getGuildId(guildId);
+    const config = await this.queryOne(`
+      SELECT matchmaking_channel_id FROM tictactoe_config WHERE guild_id = $1
+    `, [guildId]);
+    return config?.matchmaking_channel_id || null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TICTACTOE - GAMES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Crée une nouvelle partie de Morpion
+   * @param {string} guildId - ID du serveur
+   * @param {number} player1Id - ID du joueur 1 (créateur)
+   * @param {number} missionProgressId - ID de la progression de mission
+   * @param {string} threadId - ID du thread Discord
+   * @returns {Object} Partie créée
+   */
+  async createTictactoeGame(guildId, player1Id, missionProgressId, threadId) {
+    guildId = this._getGuildId(guildId);
+
+    // Récupérer la config pour les valeurs par défaut
+    const config = await this.getTictactoeConfig(guildId);
+
+    return this.queryOne(`
+      INSERT INTO tictactoe_games (guild_id, player1_id, mission_progress_id, thread_id, turn_timeout, max_searches, max_rounds)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [
+      guildId,
+      player1Id,
+      missionProgressId,
+      threadId,
+      config?.turn_timeout || 60,
+      config?.max_search_retries || 3,
+      config?.max_rounds || 3
+    ]);
+  }
+
+  /**
+   * Récupère une partie par ID
+   * @param {number} gameId - ID de la partie
+   * @returns {Object|null} Partie ou null
+   */
+  async getTictactoeGame(gameId) {
+    return this.queryOne(`
+      SELECT g.*,
+        p1.username as player1_username, p1.discord_id as player1_discord_id,
+        p2.username as player2_username, p2.discord_id as player2_discord_id
+      FROM tictactoe_games g
+      LEFT JOIN players p1 ON g.player1_id = p1.id
+      LEFT JOIN players p2 ON g.player2_id = p2.id
+      WHERE g.id = $1
+    `, [gameId]);
+  }
+
+  /**
+   * Récupère une partie par thread ID
+   * @param {string} threadId - ID du thread Discord
+   * @returns {Object|null} Partie ou null
+   */
+  async getTictactoeGameByThread(threadId) {
+    return this.queryOne(`
+      SELECT g.*,
+        p1.username as player1_username, p1.discord_id as player1_discord_id,
+        p2.username as player2_username, p2.discord_id as player2_discord_id
+      FROM tictactoe_games g
+      LEFT JOIN players p1 ON g.player1_id = p1.id
+      LEFT JOIN players p2 ON g.player2_id = p2.id
+      WHERE g.thread_id = $1
+    `, [threadId]);
+  }
+
+  /**
+   * Récupère une partie par message de matchmaking
+   * @param {string} messageId - ID du message de matchmaking
+   * @returns {Object|null} Partie ou null
+   */
+  async getTictactoeGameByMatchmakingMessage(messageId) {
+    return this.queryOne(`
+      SELECT g.*,
+        p1.username as player1_username, p1.discord_id as player1_discord_id,
+        p2.username as player2_username, p2.discord_id as player2_discord_id
+      FROM tictactoe_games g
+      LEFT JOIN players p1 ON g.player1_id = p1.id
+      LEFT JOIN players p2 ON g.player2_id = p2.id
+      WHERE g.matchmaking_message_id = $1
+    `, [messageId]);
+  }
+
+  /**
+   * Met à jour une partie
+   * @param {number} gameId - ID de la partie
+   * @param {Object} updates - Champs à mettre à jour
+   * @returns {Object} Partie mise à jour
+   */
+  async updateTictactoeGame(gameId, updates) {
+    const fields = [];
+    const values = [];
+    let paramIndex = 1;
+
+    for (const [key, value] of Object.entries(updates)) {
+      fields.push(`${key} = $${paramIndex}`);
+      values.push(value);
+      paramIndex++;
+    }
+
+    values.push(gameId);
+
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET ${fields.join(', ')}
+      WHERE id = $${paramIndex}
+      RETURNING *
+    `, values);
+  }
+
+  /**
+   * Joueur 2 rejoint la partie
+   * @param {number} gameId - ID de la partie
+   * @param {number} player2Id - ID du joueur 2
+   * @returns {Object} Partie mise à jour
+   */
+  async joinTictactoeGame(gameId, player2Id) {
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET player2_id = $2, status = 'waiting_ready'
+      WHERE id = $1 AND player2_id IS NULL
+      RETURNING *
+    `, [gameId, player2Id]);
+  }
+
+  /**
+   * Met à jour l'état "Prêt" d'un joueur
+   * @param {number} gameId - ID de la partie
+   * @param {number} playerNum - 1 ou 2
+   * @returns {Object} Partie mise à jour
+   */
+  async setTictactoePlayerReady(gameId, playerNum) {
+    const field = playerNum === 1 ? 'player1_ready' : 'player2_ready';
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET ${field} = TRUE
+      WHERE id = $1
+      RETURNING *
+    `, [gameId]);
+  }
+
+  /**
+   * Démarre la partie (tirage au sort des symboles)
+   * @param {number} gameId - ID de la partie
+   * @returns {Object} Partie mise à jour avec symboles assignés
+   */
+  async startTictactoeGame(gameId) {
+    // Tirage au sort: qui joue X (commence)
+    const player1StartsWithX = Math.random() < 0.5;
+
+    // Récupérer d'abord les player IDs pour déterminer qui commence
+    const game = await this.queryOne(
+      'SELECT player1_id, player2_id FROM tictactoe_games WHERE id = $1',
+      [gameId]
+    );
+
+    if (!game) return null;
+
+    // X commence toujours, donc le joueur avec X commence
+    const startingPlayerId = player1StartsWithX ? game.player1_id : game.player2_id;
+
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET status = 'playing',
+          player1_symbol = $2::char(1),
+          player2_symbol = $3::char(1),
+          current_turn_player_id = $4,
+          turn_started_at = NOW(),
+          started_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, player1StartsWithX ? 'X' : 'O', player1StartsWithX ? 'O' : 'X', startingPlayerId]);
+  }
+
+  /**
+   * Joue un coup
+   * @param {number} gameId - ID de la partie
+   * @param {number} position - Position (0-8)
+   * @param {string} symbol - Symbole ('X' ou 'O')
+   * @returns {Object} Partie mise à jour
+   */
+  async playTictactoeMove(gameId, position, symbol) {
+    // Récupérer le board actuel
+    const game = await this.getTictactoeGame(gameId);
+    if (!game) return null;
+
+    // Mettre à jour le board
+    const boardArray = game.board.split('');
+    boardArray[position] = symbol;
+    const newBoard = boardArray.join('');
+
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET board = $2, total_moves = total_moves + 1
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, newBoard]);
+  }
+
+  /**
+   * Change de tour
+   * @param {number} gameId - ID de la partie
+   * @param {number} nextPlayerId - ID du prochain joueur
+   * @returns {Object} Partie mise à jour
+   */
+  async switchTictactoeTurn(gameId, nextPlayerId) {
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET current_turn_player_id = $2, turn_started_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, nextPlayerId]);
+  }
+
+  /**
+   * Enregistre le résultat d'une manche
+   * @param {number} gameId - ID de la partie
+   * @param {number} roundNum - Numéro de la manche
+   * @param {number|null} winnerId - ID du gagnant ou null pour égalité
+   * @returns {Object} Partie mise à jour
+   */
+  async recordTictactoeRound(gameId, roundNum, winnerId) {
+    const game = await this.getTictactoeGame(gameId);
+    if (!game) return null;
+
+    const roundResults = game.round_results || [];
+    roundResults.push({ round: roundNum, winner_id: winnerId });
+
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET round_results = $2::jsonb
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, JSON.stringify(roundResults)]);
+  }
+
+  /**
+   * Prépare une nouvelle manche (reset board, swap symbols)
+   * @param {number} gameId - ID de la partie
+   * @returns {Object} Partie mise à jour
+   */
+  async prepareTictactoeNextRound(gameId) {
+    const game = await this.getTictactoeGame(gameId);
+    if (!game) return null;
+
+    // Swap symbols pour la prochaine manche
+    const newPlayer1Symbol = game.player1_symbol === 'X' ? 'O' : 'X';
+    const newPlayer2Symbol = game.player2_symbol === 'X' ? 'O' : 'X';
+
+    // Celui qui a X commence
+    const starterPlayerId = newPlayer1Symbol === 'X' ? game.player1_id : game.player2_id;
+
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET board = '---------',
+          current_round = current_round + 1,
+          player1_symbol = $2,
+          player2_symbol = $3,
+          current_turn_player_id = $4,
+          turn_started_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, newPlayer1Symbol, newPlayer2Symbol, starterPlayerId]);
+  }
+
+  /**
+   * Termine la partie
+   * @param {number} gameId - ID de la partie
+   * @param {number|null} winnerId - ID du gagnant ou null
+   * @param {string} endReason - Raison de fin
+   * @returns {Object} Partie mise à jour
+   */
+  async endTictactoeGame(gameId, winnerId, endReason) {
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET status = 'finished', winner_id = $2, end_reason = $3, ended_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, winnerId, endReason]);
+  }
+
+  /**
+   * Met à jour le message de matchmaking
+   * @param {number} gameId - ID de la partie
+   * @param {string} messageId - ID du nouveau message
+   * @param {string} channelId - ID du canal
+   * @returns {Object} Partie mise à jour
+   */
+  async updateTictactoeMatchmaking(gameId, messageId, channelId) {
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET matchmaking_message_id = $2,
+          matchmaking_channel_id = $3,
+          search_count = search_count + 1,
+          last_search_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, messageId, channelId]);
+  }
+
+  /**
+   * Met à jour le message de jeu
+   * @param {number} gameId - ID de la partie
+   * @param {string} messageId - ID du message de jeu
+   * @returns {Object} Partie mise à jour
+   */
+  async updateTictactoeGameMessage(gameId, messageId) {
+    return this.queryOne(`
+      UPDATE tictactoe_games
+      SET game_message_id = $2
+      WHERE id = $1
+      RETURNING *
+    `, [gameId, messageId]);
+  }
+
+  /**
+   * Récupère les parties actives (non terminées) d'un serveur
+   * @param {string} guildId - ID du serveur
+   * @returns {Array} Liste des parties
+   */
+  async getActiveTictactoeGames(guildId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryAll(`
+      SELECT g.*,
+        p1.username as player1_username,
+        p2.username as player2_username
+      FROM tictactoe_games g
+      LEFT JOIN players p1 ON g.player1_id = p1.id
+      LEFT JOIN players p2 ON g.player2_id = p2.id
+      WHERE g.guild_id = $1 AND g.status != 'finished'
+      ORDER BY g.created_at DESC
+    `, [guildId]);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TICTACTOE - STATS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Récupère ou crée les stats d'un joueur
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @returns {Object} Stats du joueur
+   */
+  async getOrCreateTictactoeStats(guildId, playerId) {
+    guildId = this._getGuildId(guildId);
+
+    // Essayer de récupérer les stats existantes
+    let stats = await this.queryOne(`
+      SELECT * FROM tictactoe_stats WHERE guild_id = $1 AND player_id = $2
+    `, [guildId, playerId]);
+
+    // Créer si n'existe pas
+    if (!stats) {
+      stats = await this.queryOne(`
+        INSERT INTO tictactoe_stats (guild_id, player_id)
+        VALUES ($1, $2)
+        RETURNING *
+      `, [guildId, playerId]);
+    }
+
+    return stats;
+  }
+
+  /**
+   * Met à jour les stats après une victoire
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @param {string} winType - Type de victoire (play, timeout, abandon, random)
+   * @param {number} movesPlayed - Nombre de coups joués par ce joueur
+   * @returns {Object} Stats mises à jour
+   */
+  async recordTictactoeWin(guildId, playerId, winType, movesPlayed) {
+    guildId = this._getGuildId(guildId);
+    await this.getOrCreateTictactoeStats(guildId, playerId);
+
+    const winColumn = `wins_by_${winType}`;
+
+    return this.queryOne(`
+      UPDATE tictactoe_stats
+      SET games_played = games_played + 1,
+          games_won = games_won + 1,
+          ${winColumn} = ${winColumn} + 1,
+          total_moves_played = total_moves_played + $3,
+          current_win_streak = current_win_streak + 1,
+          best_win_streak = GREATEST(best_win_streak, current_win_streak + 1),
+          fastest_win_moves = CASE
+            WHEN fastest_win_moves IS NULL OR $3 < fastest_win_moves THEN $3
+            ELSE fastest_win_moves
+          END,
+          last_game_at = NOW(),
+          updated_at = NOW()
+      WHERE guild_id = $1 AND player_id = $2
+      RETURNING *
+    `, [guildId, playerId, movesPlayed]);
+  }
+
+  /**
+   * Met à jour les stats après une défaite
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @param {string} lossType - Type de défaite (play, timeout, abandon, random)
+   * @param {number} movesPlayed - Nombre de coups joués par ce joueur
+   * @returns {Object} Stats mises à jour
+   */
+  async recordTictactoeLoss(guildId, playerId, lossType, movesPlayed) {
+    guildId = this._getGuildId(guildId);
+    await this.getOrCreateTictactoeStats(guildId, playerId);
+
+    const lossColumn = `losses_by_${lossType}`;
+
+    return this.queryOne(`
+      UPDATE tictactoe_stats
+      SET games_played = games_played + 1,
+          games_lost = games_lost + 1,
+          ${lossColumn} = ${lossColumn} + 1,
+          total_moves_played = total_moves_played + $3,
+          current_win_streak = 0,
+          last_game_at = NOW(),
+          updated_at = NOW()
+      WHERE guild_id = $1 AND player_id = $2
+      RETURNING *
+    `, [guildId, playerId, movesPlayed]);
+  }
+
+  /**
+   * Met à jour les stats après une égalité (draw_both)
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @param {number} movesPlayed - Nombre de coups joués
+   * @returns {Object} Stats mises à jour
+   */
+  async recordTictactoeDraw(guildId, playerId, movesPlayed) {
+    guildId = this._getGuildId(guildId);
+    await this.getOrCreateTictactoeStats(guildId, playerId);
+
+    return this.queryOne(`
+      UPDATE tictactoe_stats
+      SET games_played = games_played + 1,
+          games_draw = games_draw + 1,
+          total_moves_played = total_moves_played + $3,
+          last_game_at = NOW(),
+          updated_at = NOW()
+      WHERE guild_id = $1 AND player_id = $2
+      RETURNING *
+    `, [guildId, playerId, movesPlayed]);
+  }
+
+  /**
+   * Récupère le leaderboard Morpion
+   * @param {string} guildId - ID du serveur
+   * @param {number} limit - Nombre max de résultats
+   * @returns {Array} Classement
+   */
+  async getTictactoeLeaderboard(guildId, limit = 10) {
+    guildId = this._getGuildId(guildId);
+    return this.queryAll(`
+      SELECT s.*, p.username, p.discord_id,
+        CASE WHEN s.games_played > 0 THEN ROUND((s.games_won::numeric / s.games_played) * 100, 1) ELSE 0 END as win_rate
+      FROM tictactoe_stats s
+      JOIN players p ON s.player_id = p.id
+      WHERE s.guild_id = $1 AND s.games_played > 0
+      ORDER BY s.games_won DESC, s.best_win_streak DESC, win_rate DESC
+      LIMIT $2
+    `, [guildId, limit]);
+  }
+
+  /**
+   * Récupère les stats d'un joueur pour le profil
+   * @param {string} guildId - ID du serveur
+   * @param {number} playerId - ID du joueur
+   * @returns {Object|null} Stats ou null
+   */
+  async getTictactoeStatsForPlayer(guildId, playerId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryOne(`
+      SELECT *,
+        CASE WHEN games_played > 0 THEN ROUND((games_won::numeric / games_played) * 100, 1) ELSE 0 END as win_rate
+      FROM tictactoe_stats
+      WHERE guild_id = $1 AND player_id = $2
+    `, [guildId, playerId]);
+  }
+
+  // ==========================================
+  // ROLE FRAMES (Frames liées aux rôles Discord)
+  // ==========================================
+  // NOTE: Les frames de rôle utilisent la table theme_profile_frames
+  // avec theme_id = NULL et role_id = ID du rôle Discord
+  // Cela permet de réutiliser les bonus et fonctionnalités existantes
+
+  /**
+   * Crée une nouvelle frame de rôle
+   * Utilise theme_profile_frames avec theme_id = NULL
+   * @param {string} guildId - ID du serveur
+   * @param {string} roleId - ID du rôle Discord
+   * @param {string} name - Nom de la frame
+   * @param {string} frameUrl - URL de l'image
+   * @param {string} description - Description optionnelle
+   * @returns {Object} Frame créée
+   */
+  async createRoleFrame(guildId, roleId, name, frameUrl, description = null) {
+    guildId = this._getGuildId(guildId);
+
+    // Trouver le prochain frame_number disponible pour les frames de rôle
+    const maxFrameNumber = await this.queryOne(`
+      SELECT COALESCE(MAX(frame_number), 100) as max_num
+      FROM theme_profile_frames
+      WHERE guild_id = $1 AND role_id IS NOT NULL
+    `, [guildId]);
+
+    const nextFrameNumber = (maxFrameNumber?.max_num || 100) + 1;
+
+    // Générer le frame_code: FRAME_GUILDPREFIX_R_NUMBER (R = Rôle)
+    const guildPrefix = guildId.substring(0, 4);
+    const frameCode = `FRAME_${guildPrefix}_R_${String(nextFrameNumber).padStart(3, '0')}`;
+
+    // Pour les frames de rôle, unlock_condition = objet vide (la colonne a une contrainte NOT NULL)
+    // Le rôle Discord suffit pour débloquer automatiquement
+    return this.queryOne(`
+      INSERT INTO theme_profile_frames
+        (guild_id, theme_id, role_id, frame_number, name, description, frame_url, unlock_condition, frame_code)
+      VALUES ($1, NULL, $2, $3, $4, $5, $6, '{"type": "role"}'::jsonb, $7)
+      RETURNING *
+    `, [guildId, roleId, nextFrameNumber, name, description, frameUrl, frameCode]);
+  }
+
+  /**
+   * Met à jour une frame de rôle
+   * @param {number} frameId - ID de la frame
+   * @param {string} name - Nouveau nom
+   * @param {string} frameUrl - Nouvelle URL
+   * @returns {Object} Frame mise à jour
+   */
+  async updateRoleFrame(frameId, name, frameUrl) {
+    return this.queryOne(`
+      UPDATE theme_profile_frames
+      SET name = $2, frame_url = $3, updated_at = NOW()
+      WHERE id = $1 AND role_id IS NOT NULL
+      RETURNING *
+    `, [frameId, name, frameUrl]);
+  }
+
+  /**
+   * Supprime une frame de rôle
+   * @param {number} frameId - ID de la frame
+   * @returns {boolean} Succès
+   */
+  async deleteRoleFrame(frameId) {
+    // Supprimer aussi les débloquages associés
+    await this.query(`DELETE FROM player_unlocked_frames WHERE frame_id = $1`, [frameId]);
+
+    const result = await this.query(`
+      DELETE FROM theme_profile_frames
+      WHERE id = $1 AND role_id IS NOT NULL
+    `, [frameId]);
+    return result.length >= 0;
+  }
+
+  /**
+   * Récupère toutes les frames de rôle d'un serveur
+   * @param {string} guildId - ID du serveur
+   * @returns {Array} Liste des frames
+   */
+  async getRoleFrames(guildId) {
+    guildId = this._getGuildId(guildId);
+    return this.queryAll(`
+      SELECT * FROM theme_profile_frames
+      WHERE guild_id = $1 AND role_id IS NOT NULL
+      ORDER BY created_at DESC
+    `, [guildId]);
+  }
+
+  /**
+   * Récupère une frame de rôle par son ID
+   * @param {number} frameId - ID de la frame
+   * @returns {Object|null} Frame ou null
+   */
+  async getRoleFrameById(frameId) {
+    return this.queryOne(`
+      SELECT * FROM theme_profile_frames
+      WHERE id = $1 AND role_id IS NOT NULL
+    `, [frameId]);
+  }
+
+  /**
+   * Récupère les frames disponibles pour un joueur selon ses rôles
+   * @param {string} guildId - ID du serveur
+   * @param {Array<string>} roleIds - Liste des IDs de rôles du membre
+   * @returns {Array} Frames disponibles
+   */
+  async getAvailableRoleFrames(guildId, roleIds) {
+    guildId = this._getGuildId(guildId);
+    if (!roleIds || roleIds.length === 0) return [];
+
+    return this.queryAll(`
+      SELECT * FROM theme_profile_frames
+      WHERE guild_id = $1 AND role_id = ANY($2)
+      ORDER BY name
+    `, [guildId, roleIds]);
+  }
+
+  /**
+   * Récupère la frame équipée avec support des frames de rôle
+   * @param {string} discordId - ID Discord du joueur
+   * @param {string} guildId - ID du serveur
+   * @param {Array<string>} memberRoleIds - IDs des rôles du membre (pour vérifier l'éligibilité)
+   * @returns {Object|null} Frame équipée ou null
+   */
+  async getEquippedFrameWithRole(discordId, guildId, memberRoleIds = []) {
+    // Chercher frame spécifique au serveur d'abord
+    if (guildId) {
+      const serverFrame = await this.queryOne(`
+        SELECT pef.*, tpf.name, tpf.frame_url, tpf.bonus_type, tpf.bonus_value,
+               tpf.role_id, tpf.theme_id,
+               CASE WHEN tpf.role_id IS NOT NULL THEN 'role' ELSE 'theme' END as frame_type
+        FROM player_equipped_frame pef
+        JOIN theme_profile_frames tpf ON pef.frame_id = tpf.id
+        WHERE pef.discord_id = $1 AND pef.guild_id = $2
+      `, [discordId, guildId]);
+
+      if (serverFrame) {
+        // Vérifier que si c'est une frame de rôle, le joueur a toujours le rôle
+        if (serverFrame.frame_type === 'role' && memberRoleIds.length > 0) {
+          if (!memberRoleIds.includes(serverFrame.role_id)) {
+            // Le joueur n'a plus le rôle, retirer la frame
+            await this.unequipFrame(discordId, guildId);
+            return null;
+          }
+        }
+        return serverFrame;
+      }
+    }
+
+    // Fallback: frame globale
+    const globalFrame = await this.queryOne(`
+      SELECT pef.*, tpf.name, tpf.frame_url, tpf.bonus_type, tpf.bonus_value,
+             tpf.role_id, tpf.theme_id,
+             CASE WHEN tpf.role_id IS NOT NULL THEN 'role' ELSE 'theme' END as frame_type
+      FROM player_equipped_frame pef
+      JOIN theme_profile_frames tpf ON pef.frame_id = tpf.id
+      WHERE pef.discord_id = $1 AND pef.guild_id = '__global__'
+    `, [discordId]);
+
+    return globalFrame || null;
+  }
+
+  /**
+   * Récupère toutes les frames d'un serveur (thèmes actifs/passés + rôles)
+   * @param {string} guildId - ID du serveur
+   * @returns {Object} { themeFrames, roleFrames, allFrames }
+   */
+  async getAllServerFrames(guildId) {
+    guildId = this._getGuildId(guildId);
+
+    // Frames de thèmes (actifs et passés) - theme_id NOT NULL
+    const themeFrames = await this.queryAll(`
+      SELECT tpf.*, t.name as theme_name, t.is_active
+      FROM theme_profile_frames tpf
+      JOIN themes t ON tpf.theme_id = t.id
+      WHERE tpf.guild_id = $1 AND tpf.theme_id IS NOT NULL
+      ORDER BY t.is_active DESC, t.name, tpf.frame_number
+    `, [guildId]);
+
+    // Frames de rôles - role_id NOT NULL
+    const roleFrames = await this.getRoleFrames(guildId);
+
+    return {
+      themeFrames,
+      roleFrames,
+      allFrames: [
+        ...themeFrames.map(f => ({ ...f, source: 'theme' })),
+        ...roleFrames.map(rf => ({ ...rf, source: 'role' }))
+      ]
+    };
   }
 }
 

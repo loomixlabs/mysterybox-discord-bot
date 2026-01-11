@@ -15,6 +15,8 @@ const mysteryBoxConfigHandler = require('../handlers/mysteryBoxConfigHandler');
 const craftingHandler = require('../handlers/craftingHandler');
 const tutorialView = require('../views/tutorialView');
 const portfolioHandler = require('../handlers/portfolioHandler');
+const tictactoeHandler = require('../handlers/tictactoeHandler');
+const mysteryGiftHandler = require('../handlers/mysteryGiftHandler');
 
 // Pour le tracking des connexions et badges Engagement
 const db = require('../utils/database-pg');
@@ -193,6 +195,13 @@ module.exports = {
           await mysteryBoxHandler.handleVisionDivineDecline(interaction);
         }
 
+        // 🎁 Cadeau Mystère à un ami - Boutons
+        else if (customId.startsWith('mystery_gift_open:') ||
+                 customId.startsWith('mystery_gift_confirm_image:') ||
+                 customId === 'mystery_gift_cancel') {
+          await mysteryGiftHandler.handleInteraction(interaction);
+        }
+
         // Boutons Give Unique (admin) - DOIT ÊTRE AVANT give_ normal
         else if (customId.startsWith('give_unique_')) {
           await adminPanelHandler.handleAdminInteraction(interaction);
@@ -215,6 +224,16 @@ module.exports = {
         }
         else if (customId.startsWith('mission_reject_')) {
           await missionHandler.rejectMission(interaction);
+        }
+        // Boutons d'annulation de mission
+        else if (customId.startsWith('mission_cancel_confirm_')) {
+          await missionHandler.handleMissionCancelConfirm(interaction);
+        }
+        else if (customId.startsWith('mission_cancel_back_')) {
+          await missionHandler.handleMissionCancelBack(interaction);
+        }
+        else if (customId.startsWith('mission_cancel_')) {
+          await missionHandler.handleMissionCancel(interaction);
         }
         else if (customId.startsWith('mission_quiz_questions_')) {
           // Extraire la page si présente dans le customId (format: mission_quiz_questions_123:page)
@@ -386,8 +405,8 @@ module.exports = {
         else if (customId.startsWith('mission_reward_back_')) {
           await adminPanelHandler.handleMissionSelection(interaction);
         }
-        // Boutons admin des missions (add, delete, modify, gif config)
-        else if (customId === 'mission_add' || customId.startsWith('mission_delete_confirm_') || customId === 'mission_modify' || customId === 'mission_revealed_gif_config') {
+        // Boutons admin des missions (add, delete, modify, gif config, toggle active)
+        else if (customId === 'mission_add' || customId.startsWith('mission_delete_ask_') || customId.startsWith('mission_delete_confirm_') || customId.startsWith('mission_delete_cancel_') || customId.startsWith('mission_toggle_active_') || customId === 'mission_modify' || customId === 'mission_revealed_gif_config' || customId === 'mission_channel_config' || customId === 'delete_mission_channel') {
           await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
@@ -402,7 +421,7 @@ module.exports = {
         }
 
         // Boutons du panneau admin
-        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('mb_config_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('collectibles_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId.startsWith('frames_') || customId.startsWith('select_trap_cancel_') || customId === 'thread_cancel_collectible' || customId.startsWith('thread_cancel_edit_image_')) {
+        else if (customId.startsWith('admin_') || customId.startsWith('theme_') || customId.startsWith('mystery_box_') || customId.startsWith('mb_config_') || customId.startsWith('duration_') || customId.startsWith('collectible_') || customId.startsWith('collectibles_') || customId.startsWith('channel_') || customId.startsWith('give_unique_') || customId.startsWith('toggle_') || customId.startsWith('change_') || customId.startsWith('delete_') || customId.startsWith('edit_') || customId.startsWith('template_') || customId.startsWith('rarity_') || customId.startsWith('campaign_') || customId.startsWith('announcements_') || customId.startsWith('trap_') || customId.startsWith('probability_') || customId.startsWith('super_bonus_') || customId.startsWith('frames_') || customId.startsWith('frame_wizard_') || customId.startsWith('frame_assign_') || customId.startsWith('frame_edit_') || customId.startsWith('frame_unassign_') || customId.startsWith('role_frame_wizard_') || customId.startsWith('role_frame_edit_') || customId.startsWith('select_trap_cancel_') || customId === 'thread_cancel_collectible' || customId.startsWith('thread_cancel_edit_image_')) {
           await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
@@ -495,6 +514,11 @@ module.exports = {
           await portfolioHandler.handlePortfolioButton(interaction);
         }
 
+        // 🎮 Boutons Morpion (Tic-Tac-Toe)
+        else if (customId.startsWith('ttt_')) {
+          await tictactoeHandler.handleInteraction(interaction);
+        }
+
         // 🎮 Boutons gérés par collectors locaux (ignorer)
         else if (
           customId.startsWith('wordle_diff_') ||      // Difficulté wordle (collector dans handleWordleWordAdd)
@@ -506,6 +530,11 @@ module.exports = {
           customId.startsWith('hangman_letter_')      // Lettres hangman gameplay (collector)
         ) {
           // Géré par un collector local, ne rien faire
+        }
+
+        // 🎁 Boutons Gift Images Admin (visuels cadeaux mystères)
+        else if (customId.startsWith('gift_image_') || customId === 'admin_gift_images') {
+          await adminPanelHandler.handleAdminInteraction(interaction);
         }
 
         else {
@@ -685,7 +714,10 @@ module.exports = {
             interaction.customId.startsWith('super_bonus_') ||
             interaction.customId.startsWith('mission_keyword_select_') ||
             interaction.customId.startsWith('frames_condition_select_') ||
-            interaction.customId.startsWith('collectible_rarity_select_')) {
+            interaction.customId.startsWith('frame_wizard_') ||
+            interaction.customId.startsWith('frame_assign_') ||
+            interaction.customId.startsWith('collectible_rarity_select_') ||
+            interaction.customId === 'gift_image_manage_select') {
           await adminPanelHandler.handleSelectMenu(interaction);
         }
         // Select menu Setup - Sélection de thème préconfigurés
@@ -708,11 +740,16 @@ module.exports = {
         else if (interaction.customId.startsWith('joker_collectible_select')) {
           await profileHandler.handleJokerInteraction(interaction);
         }
+        // 🎁 Select menu Cadeau Mystère - Prévisualisation Image
+        else if (interaction.customId.startsWith('mystery_gift_preview:')) {
+          await mysteryGiftHandler.handleInteraction(interaction);
+        }
         // 📦 Select menus Mystery Box Config par rareté
         else if (interaction.customId.startsWith('mb_config_')) {
           const mysteryBoxConfigHandler = require('../handlers/mysteryBoxConfigHandler');
           await mysteryBoxConfigHandler.handleInteraction(interaction);
         }
+        // Note: role_frame_wizard_select_role est un RoleSelectMenu, routé dans la section RoleSelectMenu plus bas
         else {
           console.warn(`⚠️ Select menu non géré: ${interaction.customId}`);
         }
@@ -740,6 +777,18 @@ module.exports = {
         }
         else if (interaction.customId === 'select_announcement_channel') {
           await adminPanelHandler.handleAnnouncementChannelSelection(interaction);
+        }
+        // Sélection canal dédié aux missions
+        else if (interaction.customId === 'select_mission_channel') {
+          await adminPanelHandler.handleMissionChannelSelection(interaction);
+        }
+        // Sélection canal matchmaking Morpion (ancien customId)
+        else if (interaction.customId === 'select_tictactoe_channel') {
+          await adminPanelHandler.handleTictactoeChannelSelection(interaction);
+        }
+        // Sélection canal matchmaking Morpion (nouveau customId avec missionId)
+        else if (interaction.customId.startsWith('ttt_select_channel_')) {
+          await tictactoeHandler.handleSelectChannel(interaction);
         }
         else if (interaction.customId.startsWith('give_unique_channels_select:')) {
           await giveUniqueHandler.handleGiveUniqueChannelsSelect(interaction);
@@ -782,11 +831,41 @@ module.exports = {
           const fairnessConfigHandler = require('../handlers/fairnessConfigHandler');
           await fairnessConfigHandler.handleInteraction(interaction);
         }
+        // Role Frame Wizard - sélection de rôle pour frames
+        else if (interaction.customId === 'role_frame_wizard_select_role') {
+          await adminPanelHandler.handleAdminInteraction(interaction);
+        }
         else {
           console.warn(`⚠️ Role select menu non géré: ${interaction.customId}`);
         }
       } catch (error) {
         console.error(`🔴 Erreur lors du traitement du role select menu ${interaction.customId}:`, error);
+
+        const errorMessage = {
+          content: '❌ Une erreur est survenue. Réessaye ou contacte un administrateur.',
+          flags: 64
+        };
+
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp(errorMessage);
+        } else {
+          await interaction.reply(errorMessage);
+        }
+      }
+    }
+
+    // Gérer les user select menus
+    else if (interaction.isUserSelectMenu()) {
+      try {
+        // 🎁 Cadeau Mystère - Sélection du destinataire
+        if (interaction.customId.startsWith('mystery_gift_recipient:')) {
+          await mysteryGiftHandler.handleInteraction(interaction);
+        }
+        else {
+          console.warn(`⚠️ User select menu non géré: ${interaction.customId}`);
+        }
+      } catch (error) {
+        console.error(`🔴 Erreur lors du traitement du user select menu ${interaction.customId}:`, error);
 
         const errorMessage = {
           content: '❌ Une erreur est survenue. Réessaye ou contacte un administrateur.',

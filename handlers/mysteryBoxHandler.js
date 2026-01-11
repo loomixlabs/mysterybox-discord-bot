@@ -173,11 +173,14 @@ class MysteryBoxHandler {
     console.log(`🎁 [SUPER BONUS] Sélection d'un super bonus pour guild ${guildId}...`);
 
     // Récupérer tous les super bonuses disponibles ET ACTIVÉS
+    // Exclure les bonus avec activation_mode = 'manual' (comme Recovery)
+    // Ces bonus ne peuvent être obtenus que via Give Unique ou attribution admin
     const bonuses = await db.queryAll(`
       SELECT id, bonus_id, name, rarity, icon, description,
              duration_type, duration_value, effect_type
       FROM super_bonuses
       WHERE guild_id = $1 AND is_enabled = TRUE
+        AND (activation_mode IS NULL OR activation_mode != 'manual')
       ORDER BY rarity DESC, name
     `, [guildId]);
 
@@ -1446,6 +1449,10 @@ class MysteryBoxHandler {
       case 'empty-box':
         await this.applyTrapEmptyBox(interaction, trap, player);
         break;
+
+      case 'shame-nickname':
+        await this.applyTrapShameNickname(interaction, trap, player);
+        break;
     }
 
     // Logger le piège
@@ -1992,6 +1999,162 @@ class MysteryBoxHandler {
       interaction.user.username,
       trap.name
     );
+  }
+
+  /**
+   * Appliquer un piège de pseudo honteux (Shame Nickname)
+   * Change le pseudo du joueur pendant une durée déterminée
+   */
+  async applyTrapShameNickname(interaction, trap, player) {
+    const guildId = interaction.guildId;
+    const member = interaction.member;
+
+    try {
+      // Priorité: 1) Pseudos du piège (par thème) 2) Pseudos du serveur 3) Défauts
+      const defaultNicknames = [
+        '🐔 Poulet Piégé',
+        '🤡 Clown du Serveur',
+        '💩 Victime du Jour',
+        '🐌 Escargot Lent',
+        '🦆 Canard Malchanceux',
+        '🐷 Petit Cochon',
+        '🐸 Grenouille Piégée',
+        '🦝 Raton Râleur'
+      ];
+
+      // D'abord essayer les nicknames du piège (par thème)
+      let nicknames = [];
+      if (trap.shame_nicknames) {
+        nicknames = Array.isArray(trap.shame_nicknames)
+          ? trap.shame_nicknames
+          : (typeof trap.shame_nicknames === 'string' ? JSON.parse(trap.shame_nicknames) : []);
+      }
+
+      // Si pas de nicknames dans le piège, fallback sur guild_config
+      if (!nicknames || nicknames.length === 0) {
+        const guildConfig = await db.queryOne(`
+          SELECT shame_nicknames FROM guild_config WHERE guild_id = $1
+        `, [guildId]);
+        nicknames = guildConfig?.shame_nicknames || [];
+      }
+
+      // Si toujours vide, utiliser les défauts
+      if (!nicknames || nicknames.length === 0) {
+        nicknames = defaultNicknames;
+      }
+
+      const randomNickname = nicknames[Math.floor(Math.random() * nicknames.length)];
+
+      // Sauvegarder l'ancien pseudo
+      const originalNickname = member.nickname || member.user.username;
+
+      // Calculer la date d'expiration (cooldown_duration est en minutes)
+      const durationMinutes = trap.cooldown_duration || 30;
+      const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
+
+      // Vérifier si le joueur a déjà un piège actif
+      const existingTrap = await db.queryOne(`
+        SELECT id FROM player_shame_nickname
+        WHERE guild_id = $1 AND player_id = $2 AND is_active = TRUE
+      `, [guildId, player.id]);
+
+      if (existingTrap) {
+        // Étendre la durée du piège existant
+        await db.query(`
+          UPDATE player_shame_nickname
+          SET expires_at = $1, shame_nickname = $2, trap_id = $3
+          WHERE id = $4
+        `, [expiresAt, randomNickname, trap.id, existingTrap.id]);
+
+        console.log(`🎭 [SHAME] Piège étendu pour ${player.username} jusqu'à ${expiresAt.toISOString()}`);
+      } else {
+        // Créer un nouveau piège
+        await db.query(`
+          INSERT INTO player_shame_nickname
+          (guild_id, player_id, original_nickname, shame_nickname, trap_id, expires_at)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [guildId, player.id, originalNickname, randomNickname, trap.id, expiresAt]);
+
+        console.log(`🎭 [SHAME] Nouveau piège créé pour ${player.username}: "${randomNickname}" jusqu'à ${expiresAt.toISOString()}`);
+      }
+
+      // Changer le pseudo du joueur
+      try {
+        await member.setNickname(randomNickname, `Piège Shame Nickname: ${trap.name}`);
+        console.log(`🎭 [SHAME] Pseudo changé: ${originalNickname} → ${randomNickname}`);
+      } catch (nicknameError) {
+        console.error(`🔴 [SHAME] Impossible de changer le pseudo:`, nicknameError.message);
+        // Si on ne peut pas changer le pseudo (permissions), informer le joueur
+        await interaction.followUp({
+          content: `🎭 Le sortilège a échoué ! Le bot n'a pas la permission de changer ton pseudo.`,
+          flags: 64
+        });
+        return;
+      }
+
+      // Formater la durée pour l'affichage
+      let durationText;
+      if (durationMinutes >= 1440) {
+        durationText = `${Math.floor(durationMinutes / 1440)} jour(s)`;
+      } else if (durationMinutes >= 60) {
+        durationText = `${Math.floor(durationMinutes / 60)} heure(s)`;
+      } else {
+        durationText = `${durationMinutes} minute(s)`;
+      }
+
+      // Message au joueur
+      await interaction.followUp({
+        content: `🎭 **PSEUDO MODIFIÉ !**\n\n` +
+          `Tu es maintenant connu(e) sous le nom de **${randomNickname}** !\n\n` +
+          `⏰ Durée: **${durationText}**\n` +
+          `🚫 Impossible de changer ton pseudo pendant ce temps !`,
+        flags: 64
+      });
+
+      // Annonce publique
+      await announcements.announceTrapShameNickname(
+        interaction.client,
+        guildId,
+        interaction.user.username,
+        trap.name,
+        randomNickname,
+        durationText
+      );
+
+      // Logger dans audit_logs (schéma VPS: admin_id au lieu de actor_id/target_id)
+      await db.query(`
+        INSERT INTO audit_logs (guild_id, action, admin_id, details)
+        VALUES ($1, 'trap_shame_nickname', $2, $3)
+      `, [
+        guildId,
+        interaction.user.id,
+        JSON.stringify({
+          player_id: player.id,
+          trap_id: trap.id,
+          trap_name: trap.name,
+          original_nickname: originalNickname,
+          shame_nickname: randomNickname,
+          duration_minutes: durationMinutes,
+          expires_at: expiresAt.toISOString()
+        })
+      ]);
+
+      // Hook pour les badges
+      await badgeHandler.onShameNicknameTriggered(
+        guildId,
+        player.id,
+        randomNickname,
+        durationMinutes,
+        interaction.client
+      );
+
+    } catch (error) {
+      console.error('🔴 [SHAME] Erreur application piège:', error);
+      await interaction.followUp({
+        content: `❌ Erreur lors de l'application du piège. Contacte un admin.`,
+        flags: 64
+      });
+    }
   }
 
   /**

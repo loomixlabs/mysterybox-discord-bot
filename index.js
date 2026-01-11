@@ -5,6 +5,7 @@ const path = require('path');
 const db = require('./utils/database-pg'); // PostgreSQL multi-serveur
 const campaignHandler = require('./handlers/campaignHandler');
 const themeExpirationHandler = require('./handlers/themeExpirationHandler');
+const shameNicknameHandler = require('./handlers/shameNicknameHandler');
 const { version } = require('./package.json');
 
 // Créer le client Discord
@@ -97,6 +98,14 @@ client.login(process.env.DISCORD_TOKEN)
       await themeExpirationHandler.init(client);
     } catch (error) {
       console.error('🔴 Erreur lors de l\'initialisation de l\'expiration des thèmes:', error);
+    }
+
+    // Initialiser le système de surveillance des pseudos honteux
+    try {
+      await shameNicknameHandler.init(client);
+      console.log('🎭 Système Shame Nickname initialisé');
+    } catch (error) {
+      console.error('🔴 Erreur lors de l\'initialisation du système Shame Nickname:', error);
     }
 
     // Activer le mini-jeu Harry Potter (Baguette de Sureau)

@@ -16,6 +16,9 @@ const { canAccessAdminPanel } = require('../utils/permissions');
 const GuildConfig = require('../utils/guildConfig');
 const { LOOMIX_BRANDING } = require('../utils/footerHelper');
 
+// Cache pour l'upload d'images cadeau via thread
+const giftImageUploadCache = new Map();
+
 /**
  * Génère le contenu du panneau admin (embed + components)
  * Fonction partagée utilisée par la commande ET le handler
@@ -328,11 +331,18 @@ class AdminPanelHandler {
       await this.showAnnouncementsThemesMenu(interaction);
     } else if (customId === 'announcements_traps') {
       await this.showAnnouncementsTrapsMenu(interaction);
+    } else if (customId === 'announcements_social') {
+      await this.showAnnouncementsSocialMenu(interaction);
     }
 
     // Gestion des récompenses quotidiennes (délégation vers dailyRewardsAdminHandler)
     else if (customId === 'admin_daily_rewards' || customId.startsWith('daily_admin_')) {
       return dailyRewardsAdminHandler.handleDailyRewardsAdmin(interaction);
+    }
+
+    // Gestion des visuels de cadeaux (Cadeau Mystère à un ami)
+    else if (customId === 'admin_gift_images' || customId.startsWith('gift_image_')) {
+      return this.handleGiftImagesAdmin(interaction);
     }
 
     // Gestion du système d'équité (délégation vers fairnessConfigHandler)
@@ -363,7 +373,13 @@ class AdminPanelHandler {
     else if (
       customId === 'admin_frames' ||
       customId.startsWith('frames_') ||
-      customId.startsWith('modal_frame_')
+      customId.startsWith('frame_wizard_') ||
+      customId.startsWith('frame_assign_') ||
+      customId.startsWith('frame_edit_') ||
+      customId.startsWith('frame_unassign_') ||
+      customId.startsWith('modal_frame_') ||
+      customId.startsWith('role_frame_wizard_') ||
+      customId.startsWith('role_frame_edit_')
     ) {
       return framesConfigHandler.handleInteraction(interaction);
     }
@@ -708,6 +724,8 @@ class AdminPanelHandler {
       await this.handleToggleAnnouncementSetting(interaction);
     } else if (customId === 'edit_announcement_templates') {
       await this.showTemplatesListMenu(interaction);
+    } else if (customId === 'select_template_category') {
+      await this.showTemplateCategoryMenu(interaction);
     } else if (customId === 'select_template_to_edit') {
       await this.showEditTemplateMenu(interaction);
     } else if (customId.startsWith('edit_template_')) {
@@ -730,14 +748,18 @@ class AdminPanelHandler {
         trap_public_shame: 'Piège de la Honte',
         trap_empty_box: 'Boîte Vide',
         trap_lose_all_collectibles: 'Piège Dévastateur',
+        trap_shame_nickname: 'Piège Pseudo Honteux',
         mission_word_guessed: 'Mot Deviné',
         mission_started: 'Mission Lancée',
         mission_completed: 'Mission Réussie',
         mission_failed: 'Mission Échouée',
         mission_approved: 'Mission Approuvée',
         mission_rejected: 'Mission Refusée',
+        tictactoe_result: 'Résultat Morpion',
         theme_expired: 'Thème Expiré',
-        theme_expiring_soon: 'Expiration Prochaine'
+        theme_expiring_soon: 'Expiration Prochaine',
+        mystery_gift_sent: 'Cadeau Mystère Envoyé',
+        mystery_gift_opened: 'Cadeau Mystère Ouvert'
       };
       const context = `Template ${templateLabels[templateType]} - Image principale`;
       await this.handleImageUpload(interaction, context);
@@ -753,14 +775,18 @@ class AdminPanelHandler {
         trap_public_shame: 'Piège de la Honte',
         trap_empty_box: 'Boîte Vide',
         trap_lose_all_collectibles: 'Piège Dévastateur',
+        trap_shame_nickname: 'Piège Pseudo Honteux',
         mission_word_guessed: 'Mot Deviné',
         mission_started: 'Mission Lancée',
         mission_completed: 'Mission Réussie',
         mission_failed: 'Mission Échouée',
         mission_approved: 'Mission Approuvée',
         mission_rejected: 'Mission Refusée',
+        tictactoe_result: 'Résultat Morpion',
         theme_expired: 'Thème Expiré',
-        theme_expiring_soon: 'Expiration Prochaine'
+        theme_expiring_soon: 'Expiration Prochaine',
+        mystery_gift_sent: 'Cadeau Mystère Envoyé',
+        mystery_gift_opened: 'Cadeau Mystère Ouvert'
       };
       const context = `Template ${templateLabels[templateType]} - Thumbnail`;
       await this.handleImageUpload(interaction, context);
@@ -771,10 +797,32 @@ class AdminPanelHandler {
     // Gestion des missions
     else if (customId === 'mission_add') {
       await this.showMissionTypeSelector(interaction);
+    } else if (customId === 'mission_channel_config') {
+      await this.showMissionChannelSelector(interaction);
+    } else if (customId === 'tictactoe_channel_config') {
+      await this.showTictactoeChannelSelector(interaction);
+    } else if (customId === 'tictactoe_config_timers') {
+      await this.showTictactoeTimersModal(interaction);
+    } else if (customId === 'tictactoe_config_resolution') {
+      await this.showTictactoeResolutionSelector(interaction);
+    } else if (customId === 'tictactoe_config_retries') {
+      await this.showTictactoeRetriesModal(interaction);
+    } else if (customId.startsWith('tictactoe_resolution_')) {
+      await this.handleTictactoeResolutionSelect(interaction);
+    } else if (customId === 'delete_tictactoe_channel') {
+      await this.handleDeleteTictactoeChannel(interaction);
+    } else if (customId === 'delete_mission_channel') {
+      await this.handleDeleteMissionChannel(interaction);
     } else if (customId === 'mission_revealed_gif_config') {
       await this.handleImageUpload(interaction, 'Mission Revealed GIF');
+    } else if (customId.startsWith('mission_delete_ask_')) {
+      await this.handleDeleteMissionAsk(interaction);
     } else if (customId.startsWith('mission_delete_confirm_')) {
-      await this.handleDeleteMission(interaction);
+      await this.handleDeleteMissionConfirm(interaction);
+    } else if (customId.startsWith('mission_delete_cancel_')) {
+      await this.handleDeleteMissionCancel(interaction);
+    } else if (customId.startsWith('mission_toggle_active_')) {
+      await this.handleMissionToggleActive(interaction);
     } else if (customId === 'mission_modify') {
       await this.showMissionEditModal(interaction);
     } else if (customId.startsWith('mission_timeout_config_')) {
@@ -869,7 +917,7 @@ class AdminPanelHandler {
     }
 
     // 🖼️ Frames Config - Déléguer à framesConfigHandler (qui fera son propre defer)
-    if (customId.startsWith('frames_condition_select_')) {
+    if (customId.startsWith('frames_condition_select_') || customId.startsWith('frame_wizard_') || customId.startsWith('frame_assign_')) {
       return framesConfigHandler.handleInteraction(interaction);
     }
 
@@ -915,6 +963,8 @@ class AdminPanelHandler {
       await this.handleRaritySelection(interaction);
     } else if (customId === 'select_manage_collectible') {
       await this.handleManageCollectibleSelection(interaction);
+    } else if (customId === 'select_template_category') {
+      await this.showTemplateCategoryMenu(interaction);
     } else if (customId === 'select_template_to_edit') {
       await this.showEditTemplateMenu(interaction);
     }
@@ -932,6 +982,10 @@ class AdminPanelHandler {
     else if (customId === 'select_announcement_channel') {
       await this.handleAnnouncementChannelSelection(interaction);
     }
+    // Sélection du canal missions
+    else if (customId === 'select_mission_channel') {
+      await this.handleMissionChannelSelection(interaction);
+    }
     // Sélection de couleur pour les templates
     else if (customId.startsWith('template_color_select_')) {
       await this.handleTemplateColorSelection(interaction);
@@ -945,6 +999,10 @@ class AdminPanelHandler {
     // Sélection d'un mot-clé à modifier/supprimer
     else if (customId.startsWith('mission_keyword_select_')) {
       await this.handleMissionKeywordSelection(interaction);
+    }
+    // Sélection d'un visuel cadeau à gérer
+    else if (customId === 'gift_image_manage_select') {
+      await this.handleGiftImageManageSelect(interaction);
     }
   }
 
@@ -1100,14 +1158,7 @@ class AdminPanelHandler {
           .setDisabled(!activeTheme)
       );
 
-      // Bouton Frames (nécessite un thème actif)
-      row1Buttons.push(
-        new ButtonBuilder()
-          .setCustomId('admin_frames')
-          .setLabel('🖼️ Frames')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(!activeTheme)
-      );
+      // Note: Le bouton Frames a été déplacé vers le menu Paramétrage
 
       const row1 = new ActionRowBuilder().addComponents(...row1Buttons);
       components.push(row1);
@@ -3671,17 +3722,21 @@ class AdminPanelHandler {
   }
 
   /**
-   * Menu missions
+   * Construit les données du menu missions (embed + components)
+   * Utilisé par showMissionsMenu et les handlers qui doivent rafraîchir avec editReply
    */
-  async showMissionsMenu(interaction) {
-    const theme = await db.getActiveTheme(interaction.guildId);
-    const missions = await db.getMissionsByTheme(interaction.guildId, theme.id);
+  async buildMissionsMenuData(guildId) {
+    const theme = await db.getActiveTheme(guildId);
+    const missions = await db.getMissionsByTheme(guildId, theme.id);
+
+    // Récupérer le canal missions configuré
+    const missionChannelId = await db.getMissionChannel(guildId);
 
     // Récupérer le GIF d'annonce de mission configuré
     const missionRevealedGif = await db.queryOne(`
       SELECT content FROM theme_messages
       WHERE guild_id = $1 AND theme_id = $2 AND key = 'mission_revealed_gif'
-    `, [interaction.guildId, theme.id]);
+    `, [guildId, theme.id]);
 
     // Types de missions avec leurs emojis
     const missionTypes = {
@@ -3692,14 +3747,22 @@ class AdminPanelHandler {
       'wordle': { emoji: '🟩', label: 'Wordle' },
       'unscramble': { emoji: '🔀', label: 'Anagramme' },
       'hangman': { emoji: '☠️', label: 'Pendu' },
+      'tictactoe': { emoji: '🎮', label: 'Morpion' },
       'reaction-message': { emoji: '👍', label: 'Réaction' },
       'voice-join': { emoji: '🔊', label: 'Vocal' }
     };
 
-    // Compter les missions par type
+    // Compter les missions par type et par statut actif
     const typeCounts = {};
+    let activeMissionsCount = 0;
+    let inactiveMissionsCount = 0;
     missions.forEach(m => {
       typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+      if (m.is_active !== false) {
+        activeMissionsCount++;
+      } else {
+        inactiveMissionsCount++;
+      }
     });
 
     // Construire le résumé par type
@@ -3713,12 +3776,31 @@ class AdminPanelHandler {
       typesSummary = typeLines.join(' • ');
     }
 
+    // Construire le statut actif/inactif
+    const statusDisplay = inactiveMissionsCount > 0
+      ? `✅ **${activeMissionsCount}** active${activeMissionsCount > 1 ? 's' : ''} • ⏸️ **${inactiveMissionsCount}** désactivée${inactiveMissionsCount > 1 ? 's' : ''}`
+      : '';
+
+    // Construire l'affichage du canal missions
+    const channelDisplay = missionChannelId
+      ? `✅ <#${missionChannelId}>`
+      : `⚠️ *Non configuré*`;
+
+    // Récupérer le canal matchmaking Morpion
+    const tictactoeConfig = await db.getTictactoeConfig(guildId);
+    const tictactoeChannelDisplay = tictactoeConfig?.matchmaking_channel_id
+      ? `✅ <#${tictactoeConfig.matchmaking_channel_id}>`
+      : `⚠️ *Non configuré*`;
+
     const embed = new EmbedBuilder()
       .setTitle('🎯 GESTION DES MISSIONS')
       .setDescription(
         `**🎨 Thème:** ${theme.name}\n` +
-        `**📊 Total:** ${missions.length} mission${missions.length > 1 ? 's' : ''}\n\n` +
-        (typesSummary ? `${typesSummary}\n\n` : '') +
+        `**📊 Total:** ${missions.length} mission${missions.length > 1 ? 's' : ''}\n` +
+        (statusDisplay ? `${statusDisplay}\n\n` : '\n') +
+        `**📍 Canal Missions:** ${channelDisplay}\n` +
+        `**🎮 Canal Morpion:** ${tictactoeChannelDisplay}\n` +
+        (typesSummary ? `\n${typesSummary}\n\n` : '\n') +
         `*Sélectionne une mission pour la modifier ou en créer une nouvelle.*`
       )
       .setColor('#9B59B6')
@@ -3738,9 +3820,10 @@ class AdminPanelHandler {
         const timeoutDisplay = mission.timeout ? `⏱️${mission.timeout}s` : '';
         const attemptsDisplay = mission.max_attempts ? `🎯${mission.max_attempts}` : '';
         const extras = [timeoutDisplay, attemptsDisplay].filter(x => x).join(' ');
+        const statusIndicator = mission.is_active === false ? '⏸️' : '✅';
 
         embed.addFields({
-          name: `${typeInfo.emoji} ${mission.name}`,
+          name: `${statusIndicator} ${typeInfo.emoji} ${mission.name}`,
           value: `\`${mission.mission_id}\` ${extras ? `• ${extras}` : ''}`,
           inline: true
         });
@@ -3762,12 +3845,20 @@ class AdminPanelHandler {
 
     const components = [];
 
-    // Boutons d'action
+    // Boutons d'action - Ligne 1
     const actionRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('mission_add')
         .setLabel('➕ Ajouter une mission')
         .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('mission_channel_config')
+        .setLabel('📍 Canal Missions')
+        .setStyle(missionChannelId ? ButtonStyle.Secondary : ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('tictactoe_channel_config')
+        .setLabel('🎮 Canal Morpion')
+        .setStyle(tictactoeConfig?.matchmaking_channel_id ? ButtonStyle.Secondary : ButtonStyle.Danger),
       new ButtonBuilder()
         .setCustomId('mission_revealed_gif_config')
         .setLabel('🖼️ GIF Annonce')
@@ -3788,6 +3879,7 @@ class AdminPanelHandler {
           'wordle': '🟩',
           'unscramble': '🔀',
           'hangman': '☠️',
+          'tictactoe': '🎮',
           'reaction-message': '👍',
           'voice-join': '🔊'
         };
@@ -3798,12 +3890,16 @@ class AdminPanelHandler {
         .setCustomId('select_mission')
         .setPlaceholder('📝 Sélectionne une mission à modifier')
         .addOptions(
-          missions.slice(0, 25).map(mission => ({
-            label: mission.name.substring(0, 100),
-            value: mission.id.toString(),
-            description: `${missionTypes[mission.type]?.label || mission.type} • ${mission.mission_id}`.substring(0, 100),
-            emoji: getTypeEmoji(mission.type)
-          }))
+          missions.slice(0, 25).map(mission => {
+            const statusLabel = mission.is_active === false ? ' (désactivée)' : '';
+            const statusEmoji = mission.is_active === false ? '⏸️' : getTypeEmoji(mission.type);
+            return {
+              label: `${mission.name}${statusLabel}`.substring(0, 100),
+              value: mission.id.toString(),
+              description: `${missionTypes[mission.type]?.label || mission.type} • ${mission.mission_id}`.substring(0, 100),
+              emoji: statusEmoji
+            };
+          })
         );
 
       components.push(new ActionRowBuilder().addComponents(selectMenu));
@@ -3819,11 +3915,19 @@ class AdminPanelHandler {
 
     components.push(backRow);
 
-    return interaction.update({
+    return {
       embeds: [embed],
       components,
       content: null
-    });
+    };
+  }
+
+  /**
+   * Menu missions
+   */
+  async showMissionsMenu(interaction) {
+    const menuData = await this.buildMissionsMenuData(interaction.guildId);
+    return interaction.update(menuData);
   }
 
   /**
@@ -3999,7 +4103,7 @@ class AdminPanelHandler {
         .setDisabled(!theme), // Désactivé si pas de thème
       new ButtonBuilder()
         .setCustomId('mb_config_panel')
-        .setLabel('📦 MB par Rareté')
+        .setLabel('📦 MB Custom')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!theme), // Désactivé si pas de thème
       new ButtonBuilder()
@@ -4068,6 +4172,10 @@ class AdminPanelHandler {
     );
 
     const row4 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_frames')
+        .setLabel('🖼️ Frames de Profil')
+        .setStyle(ButtonStyle.Success), // Vert pour mettre en avant cette fonctionnalité importante
       new ButtonBuilder()
         .setCustomId('admin_back')
         .setLabel('🔙 Retour au Menu Principal')
@@ -4637,7 +4745,8 @@ class AdminPanelHandler {
         settings.legendary_super_bonus,
         settings.collectible_level_up,
         settings.collectible_max_level,
-        settings.collectible_restored
+        settings.collectible_restored,
+        settings.all_collectibles_recovered
       ].filter(Boolean).length;
 
       const missionsCount = [
@@ -4661,15 +4770,22 @@ class AdminPanelHandler {
         settings.trap_empty_box,
         settings.trap_lose_all_collectibles
       ].filter(Boolean).length;
-      const totalActive = collectiblesCount + missionsCount + themesCount + trapsCount;
+
+      const socialCount = [
+        settings.mystery_gift_sent,
+        settings.mystery_gift_opened
+      ].filter(Boolean).length;
+
+      const totalActive = collectiblesCount + missionsCount + themesCount + trapsCount + socialCount;
 
       description += `### 📊 Vue d'Ensemble\n\n`;
-      description += `**Total:** ${totalActive}/21 annonces actives\n\n`;
+      description += `**Total:** ${totalActive}/24 annonces actives\n\n`;
       description += `\`\`\`\n`;
-      description += `📦 Collectibles    ${collectiblesCount}/8\n`;
+      description += `📦 Collectibles    ${collectiblesCount}/9\n`;
       description += `⚔️  Missions        ${missionsCount}/6\n`;
       description += `🎨 Thèmes          ${themesCount}/2\n`;
       description += `🎭 Pièges          ${trapsCount}/5\n`;
+      description += `🎁 Social          ${socialCount}/2\n`;
       description += `\`\`\`\n`;
       description += `\n*Clique sur une catégorie pour configurer*`;
     } else if (announcementChannel) {
@@ -4727,6 +4843,11 @@ class AdminPanelHandler {
           .setCustomId('announcements_traps')
           .setLabel('Pièges')
           .setEmoji('🎭')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('announcements_social')
+          .setLabel('Social')
+          .setEmoji('🎁')
           .setStyle(ButtonStyle.Primary)
       );
 
@@ -4759,7 +4880,11 @@ class AdminPanelHandler {
     if (interaction.deferred) {
       return interaction.editReply({ embeds: [embed], components });
     } else {
-      return interaction.update({ embeds: [embed], components });
+      // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({ embeds: [embed], components });
+    }
+    return interaction.update({ embeds: [embed], components });
     }
   }
 
@@ -4777,11 +4902,12 @@ class AdminPanelHandler {
       settings.legendary_super_bonus,
       settings.collectible_level_up,
       settings.collectible_max_level,
-      settings.collectible_restored
+      settings.collectible_restored,
+      settings.all_collectibles_recovered
     ].filter(Boolean).length;
 
     let description = '## 📦 Collectibles & Collections\n\n';
-    description += `**${activeCount}/8** annonces actives\n\n`;
+    description += `**${activeCount}/9** annonces actives\n\n`;
     description += '### Types d\'annonces\n\n';
     description += `${settings.legendary_collectible ? '✅' : '⬜'} **Collectible Légendaire**\n`;
     description += `> Annonce quand un joueur obtient un collectible légendaire\n\n`;
@@ -4799,12 +4925,14 @@ class AdminPanelHandler {
     description += `${settings.collectible_max_level ? '✅' : '⬜'} **Niveau Maximum**\n`;
     description += `> Annonce quand un collectible atteint le niveau max\n\n`;
     description += `${settings.collectible_restored ? '✅' : '⬜'} **Collectible Restauré**\n`;
-    description += `> Annonce quand un collectible perdu est récupéré\n`;
+    description += `> Annonce quand un collectible perdu est récupéré\n\n`;
+    description += `${settings.all_collectibles_recovered ? '✅' : '⬜'} **🔄 Récupération Massive**\n`;
+    description += `> Annonce quand un joueur utilise le super bonus Recovery\n`;
 
     const embed = new EmbedBuilder()
       .setDescription(description)
       .setColor('#3498DB')
-      .setFooter({ text: `${activeCount} sur 8 actives`, iconURL: interaction.guild.iconURL() })
+      .setFooter({ text: `${activeCount} sur 9 actives`, iconURL: interaction.guild.iconURL() })
       .setTimestamp();
 
     const components = [
@@ -4856,6 +4984,11 @@ class AdminPanelHandler {
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
+          .setCustomId('toggle_all_collectibles_recovered')
+          .setLabel('🔄 Recovery')
+          .setEmoji(settings.all_collectibles_recovered ? '✅' : '⬜')
+          .setStyle(settings.all_collectibles_recovered ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
           .setCustomId('admin_announcements')
           .setLabel('Retour au Menu')
           .setEmoji('🔙')
@@ -4863,6 +4996,14 @@ class AdminPanelHandler {
       )
     ];
 
+    // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({ embeds: [embed], components });
+    }
+    // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({ embeds: [embed], components });
+    }
     return interaction.update({ embeds: [embed], components });
   }
 
@@ -4878,11 +5019,12 @@ class AdminPanelHandler {
       settings.mission_failed,
       settings.mission_approved,
       settings.mission_rejected,
-      settings.mission_word_guessed
+      settings.mission_word_guessed,
+      settings.tictactoe_result
     ].filter(Boolean).length;
 
     let description = '## ⚔️ Annonces Missions\n\n';
-    description += `**${activeCount}/6** annonces actives\n\n`;
+    description += `**${activeCount}/7** annonces actives\n\n`;
     description += '### Cycle de vie des missions\n\n';
     description += `${settings.mission_started ? '✅' : '⬜'} **Mission Lancée**\n`;
     description += `> Annonce quand un joueur démarre une mission\n\n`;
@@ -4895,12 +5037,14 @@ class AdminPanelHandler {
     description += `${settings.mission_rejected ? '✅' : '⬜'} **Mission Refusée**\n`;
     description += `> Annonce quand un admin refuse une mission\n\n`;
     description += `${settings.mission_word_guessed ? '✅' : '⬜'} **Mot-clé Deviné**\n`;
-    description += `> Annonce quand le mot secret est trouvé\n`;
+    description += `> Annonce quand le mot secret est trouvé\n\n`;
+    description += `${settings.tictactoe_result ? '✅' : '⬜'} **Morpion Terminé**\n`;
+    description += `> Annonce le résultat d'une partie de Morpion\n`;
 
     const embed = new EmbedBuilder()
       .setDescription(description)
       .setColor('#E67E22')
-      .setFooter({ text: `${activeCount} sur 6 actives`, iconURL: interaction.guild.iconURL() })
+      .setFooter({ text: `${activeCount} sur 7 actives`, iconURL: interaction.guild.iconURL() })
       .setTimestamp();
 
     const components = [
@@ -4942,6 +5086,11 @@ class AdminPanelHandler {
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
+          .setCustomId('toggle_tictactoe_result')
+          .setLabel('Morpion Terminé')
+          .setEmoji(settings.tictactoe_result ? '✅' : '⬜')
+          .setStyle(settings.tictactoe_result ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
           .setCustomId('admin_announcements')
           .setLabel('Retour au Menu')
           .setEmoji('🔙')
@@ -4949,6 +5098,10 @@ class AdminPanelHandler {
       )
     ];
 
+    // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({ embeds: [embed], components });
+    }
     return interaction.update({ embeds: [embed], components });
   }
 
@@ -4999,6 +5152,10 @@ class AdminPanelHandler {
       )
     ];
 
+    // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({ embeds: [embed], components });
+    }
     return interaction.update({ embeds: [embed], components });
   }
 
@@ -5014,11 +5171,12 @@ class AdminPanelHandler {
       settings.trap_lose_collectible,
       settings.trap_public_shame,
       settings.trap_empty_box,
-      settings.trap_lose_all_collectibles
+      settings.trap_lose_all_collectibles,
+      settings.trap_shame_nickname
     ].filter(Boolean).length;
 
     let description = '## 🎭 Annonces Pièges\n\n';
-    description += `**${activeCount}/5** annonces actives\n\n`;
+    description += `**${activeCount}/6** annonces actives\n\n`;
     description += '### Types de pièges\n\n';
     description += `${settings.trap_cooldown ? '✅' : '⬜'} **Piège Cooldown**\n`;
     description += `> Bloque l'ouverture de boîtes temporairement\n\n`;
@@ -5029,7 +5187,9 @@ class AdminPanelHandler {
     description += `${settings.trap_empty_box ? '✅' : '⬜'} **Boîte Vide**\n`;
     description += `> Rien du tout dans la boîte !\n\n`;
     description += `${settings.trap_lose_all_collectibles ? '✅' : '⬜'} **Piège Dévastateur**\n`;
-    description += `> Fait perdre TOUS les collectibles !\n`;
+    description += `> Fait perdre TOUS les collectibles !\n\n`;
+    description += `${settings.trap_shame_nickname ? '✅' : '⬜'} **Piège Pseudo Honteux**\n`;
+    description += `> Change le pseudo du joueur temporairement !\n`;
 
     const embed = new EmbedBuilder()
       .setDescription(description)
@@ -5069,6 +5229,13 @@ class AdminPanelHandler {
           .setEmoji(settings.trap_lose_all_collectibles ? '✅' : '⬜')
           .setStyle(settings.trap_lose_all_collectibles ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder()
+          .setCustomId('toggle_trap_shame_nickname')
+          .setLabel('Pseudo Honteux')
+          .setEmoji(settings.trap_shame_nickname ? '✅' : '⬜')
+          .setStyle(settings.trap_shame_nickname ? ButtonStyle.Success : ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
           .setCustomId('admin_announcements')
           .setLabel('Retour au Menu')
           .setEmoji('🔙')
@@ -5076,7 +5243,717 @@ class AdminPanelHandler {
       )
     ];
 
+    // Utiliser editReply si deferred, sinon update
+    if (interaction.deferred) {
+      return interaction.editReply({ embeds: [embed], components });
+    }
     return interaction.update({ embeds: [embed], components });
+  }
+
+  /**
+   * Sous-menu: Annonces Social (Cadeau Mystère à un ami)
+   */
+  async showAnnouncementsSocialMenu(interaction) {
+    const settings = await db.getAnnouncementSettings(interaction.guildId);
+
+    const activeCount = [
+      settings.mystery_gift_sent,
+      settings.mystery_gift_opened,
+      settings.super_bonus_joker_used
+    ].filter(Boolean).length;
+
+    let description = '## 🎁 Annonces Social & Bonus\n\n';
+    description += `**${activeCount}/3** annonces actives\n\n`;
+    description += '### Cadeau Mystère à un ami\n\n';
+    description += `${settings.mystery_gift_sent ? '✅' : '⬜'} **Cadeau Envoyé**\n`;
+    description += `> Annonce quand un joueur envoie un cadeau mystère\n\n`;
+    description += `${settings.mystery_gift_opened ? '✅' : '⬜'} **Cadeau Ouvert**\n`;
+    description += `> Annonce quand un joueur ouvre son cadeau mystère\n\n`;
+    description += '### Super Bonus\n\n';
+    description += `${settings.super_bonus_joker_used ? '✅' : '⬜'} **🃏 Joker Utilisé**\n`;
+    description += `> Annonce quand un joueur utilise son MysteryBox Joker\n`;
+
+    const embed = new EmbedBuilder()
+      .setDescription(description)
+      .setColor('#E91E63')
+      .setFooter({ text: `${activeCount} sur 3 actives`, iconURL: interaction.guild.iconURL() })
+      .setTimestamp();
+
+    const components = [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('toggle_mystery_gift_sent')
+          .setLabel('Envoyé')
+          .setEmoji(settings.mystery_gift_sent ? '✅' : '⬜')
+          .setStyle(settings.mystery_gift_sent ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('toggle_mystery_gift_opened')
+          .setLabel('Ouvert')
+          .setEmoji(settings.mystery_gift_opened ? '✅' : '⬜')
+          .setStyle(settings.mystery_gift_opened ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('toggle_super_bonus_joker_used')
+          .setLabel('Joker Utilisé')
+          .setEmoji(settings.super_bonus_joker_used ? '✅' : '🃏')
+          .setStyle(settings.super_bonus_joker_used ? ButtonStyle.Success : ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('admin_announcements')
+          .setLabel('Retour au Menu')
+          .setEmoji('🔙')
+          .setStyle(ButtonStyle.Secondary)
+      )
+    ];
+
+    return interaction.editReply({ embeds: [embed], components });
+  }
+
+  // ==================== GESTION DES VISUELS CADEAUX ====================
+
+  /**
+   * Handler principal pour la gestion des visuels de cadeaux (Cadeau Mystère à un ami)
+   */
+  async handleGiftImagesAdmin(interaction) {
+    const guildId = interaction.guildId;
+    const customId = interaction.customId;
+
+    // ⚠️ NE PAS déférer si on va créer un thread ou montrer un modal !
+    if (customId === 'gift_image_add') {
+      return this.showGiftImageAddThread(interaction);
+    }
+    if (customId.startsWith('gift_image_edit:')) {
+      const imageId = parseInt(customId.split(':')[1]);
+      return this.showGiftImageEditModal(interaction, imageId);
+    }
+    if (customId.startsWith('gift_image_edit_image:')) {
+      const imageId = parseInt(customId.split(':')[1]);
+      return this.showGiftImageEditThread(interaction, imageId);
+    }
+
+    // Pour les autres actions, déférer maintenant
+    await interaction.deferUpdate();
+
+    try {
+      // Récupérer les images existantes
+      const giftImages = await db.queryAll(
+        'SELECT * FROM gift_images WHERE guild_id = $1 ORDER BY is_default DESC, name ASC',
+        [guildId]
+      );
+
+      // Router selon l'action
+      if (customId === 'admin_gift_images') {
+        // Afficher le menu principal
+        return this.showGiftImagesPanel(interaction, giftImages);
+      } else if (customId.startsWith('gift_image_delete:')) {
+        const imageId = parseInt(customId.split(':')[1]);
+        return this.deleteGiftImage(interaction, imageId);
+      } else if (customId.startsWith('gift_image_default:')) {
+        const imageId = parseInt(customId.split(':')[1]);
+        return this.setDefaultGiftImage(interaction, imageId);
+      }
+
+    } catch (error) {
+      console.error('🔴 Erreur handleGiftImagesAdmin:', error);
+      return interaction.editReply({
+        content: `❌ Erreur: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
+  }
+
+  /**
+   * Afficher le panneau de gestion des visuels de cadeaux
+   */
+  async showGiftImagesPanel(interaction, giftImages) {
+    const guildId = interaction.guildId;
+
+    let description = '## 🎁 Visuels de Cadeaux Mystères\n\n';
+    description += `Ces images sont utilisées pour le super bonus **"Cadeau Mystère à un ami"**.\n`;
+    description += `Le joueur qui offre le cadeau pourra choisir parmi ces visuels.\n\n`;
+
+    if (giftImages.length === 0) {
+      description += '*Aucune image configurée. Ajoute-en une !*\n\n';
+    } else {
+      description += `**${giftImages.length} image(s) configurée(s)**\n\n`;
+      for (const img of giftImages.slice(0, 10)) {
+        const defaultBadge = img.is_default ? ' ⭐' : '';
+        description += `🎁 **${img.name}**${defaultBadge}\n`;
+        description += `> \`${img.url.substring(0, 50)}${img.url.length > 50 ? '...' : ''}\`\n\n`;
+      }
+      if (giftImages.length > 10) {
+        description += `*... et ${giftImages.length - 10} autres*\n`;
+      }
+    }
+
+    const embed = new EmbedBuilder()
+      .setDescription(description)
+      .setColor('#FF69B4')
+      .setFooter({ text: '🎁 Cadeau Mystère à un ami • Configuration' })
+      .setTimestamp();
+
+    // Boutons pour ajouter/gérer
+    const components = [];
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('gift_image_add')
+        .setLabel('➕ Ajouter une image')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('admin_settings')
+        .setLabel('🔙 Retour aux Paramètres')
+        .setStyle(ButtonStyle.Secondary)
+    );
+    components.push(row1);
+
+    // Si des images existent, ajouter un select menu pour les gérer
+    if (giftImages.length > 0) {
+      const selectOptions = giftImages.slice(0, 25).map(img => ({
+        label: img.name + (img.is_default ? ' ⭐' : ''),
+        value: `${img.id}`,
+        description: 'Supprimer ou définir par défaut',
+        emoji: '🎁'
+      }));
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('gift_image_manage_select')
+        .setPlaceholder('🎁 Gérer une image...')
+        .addOptions(selectOptions);
+
+      components.unshift(new ActionRowBuilder().addComponents(selectMenu));
+    }
+
+    return interaction.editReply({
+      embeds: [embed],
+      components
+    });
+  }
+
+  /**
+   * Créer un thread pour uploader une image de cadeau
+   * Permet: drag & drop fichier, URL collée, GIF
+   */
+  async showGiftImageAddThread(interaction) {
+    const guildId = interaction.guildId;
+    const channel = interaction.channel;
+
+    try {
+      // Vérifier si on peut créer des threads
+      if (!channel || !channel.threads || channel.isThread()) {
+        return interaction.reply({
+          content: '❌ Impossible de créer un thread dans ce canal. Utilise un salon textuel normal.',
+          flags: 64
+        });
+      }
+
+      // Créer le thread privé
+      const thread = await channel.threads.create({
+        name: `🎁 Upload Image Cadeau`,
+        autoArchiveDuration: 60,
+        type: ChannelType.PrivateThread,
+        reason: 'Upload image cadeau mystère'
+      });
+
+      await thread.members.add(interaction.user.id);
+
+      // Sauvegarder dans le cache
+      giftImageUploadCache.set(interaction.user.id, {
+        guildId,
+        threadId: thread.id,
+        step: 'name' // Étapes: name -> image -> done
+      });
+
+      // Envoyer les instructions
+      await thread.send({
+        content:
+          `🎁 **UPLOAD D'UN VISUEL DE CADEAU MYSTÈRE**\n\n` +
+          `Ce visuel sera utilisé quand un joueur offre un cadeau mystère à un ami.\n\n` +
+          `**Étape 1/2: NOM DU VISUEL**\n` +
+          `Tape le nom de ce visuel (ex: "Cadeau Doré", "Cadeau Festif"...)\n\n` +
+          `⏱️ Tu as 2 minutes par étape\n` +
+          `💡 Tape \`cancel\` pour annuler`
+      });
+
+      await interaction.reply({
+        content: `🎁 Thread créé ! Rejoins ${thread} pour configurer le visuel.`,
+        flags: 64
+      });
+
+      // Collector pour les messages
+      const filter = m => m.author.id === interaction.user.id;
+      const collector = thread.createMessageCollector({
+        filter,
+        time: 300000 // 5 minutes total
+      });
+
+      collector.on('collect', async (message) => {
+        const cache = giftImageUploadCache.get(interaction.user.id);
+        if (!cache) return;
+
+        const content = message.content.trim();
+
+        // Annulation
+        if (content.toLowerCase() === 'cancel') {
+          collector.stop('cancelled');
+          await thread.send('❌ Opération annulée. Le thread va être archivé...');
+          giftImageUploadCache.delete(interaction.user.id);
+          setTimeout(() => thread.setArchived(true).catch(() => {}), 3000);
+          return;
+        }
+
+        // Étape 1: Récupérer le nom
+        if (cache.step === 'name') {
+          if (content.length < 2 || content.length > 50) {
+            await thread.send('⚠️ Le nom doit faire entre 2 et 50 caractères. Réessaie.');
+            return;
+          }
+
+          cache.name = content;
+          cache.step = 'image';
+          giftImageUploadCache.set(interaction.user.id, cache);
+
+          await thread.send(
+            `✅ Nom enregistré: **${content}**\n\n` +
+            `**Étape 2/2: IMAGE DU CADEAU**\n` +
+            `Tu peux:\n` +
+            `• 📎 Drag & drop une image/GIF\n` +
+            `• 🔗 Coller une URL d'image\n\n` +
+            `Formats supportés: PNG, JPG, GIF, WEBP`
+          );
+          return;
+        }
+
+        // Étape 2: Récupérer l'image
+        if (cache.step === 'image') {
+          let imageUrl = null;
+
+          // Cas 1: Attachment (fichier uploadé)
+          if (message.attachments.size > 0) {
+            const attachment = message.attachments.first();
+            const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+
+            if (attachment.contentType && validTypes.includes(attachment.contentType)) {
+              imageUrl = attachment.url;
+            } else {
+              await thread.send('⚠️ Format non supporté. Utilise PNG, JPG, GIF ou WEBP.');
+              return;
+            }
+          }
+          // Cas 2: URL collée
+          else {
+            const urlPattern = /https?:\/\/[^\s]+/i;
+            const match = content.match(urlPattern);
+            if (match) {
+              imageUrl = match[0].replace(/[<>)}\]]+$/, '');
+            } else {
+              await thread.send('⚠️ Envoie une image ou colle une URL valide.');
+              return;
+            }
+          }
+
+          // Sauvegarder en base de données
+          try {
+            await db.query(`
+              INSERT INTO gift_images (guild_id, name, url, is_default, created_by)
+              VALUES ($1, $2, $3, FALSE, $4)
+            `, [guildId, cache.name, imageUrl, interaction.user.id]);
+
+            collector.stop('completed');
+
+            // Bouton pour retourner au canal d'origine
+            const returnButton = new ButtonBuilder()
+              .setLabel('🔙 Retour au panneau')
+              .setStyle(ButtonStyle.Link)
+              .setURL(`https://discord.com/channels/${guildId}/${channel.id}`);
+
+            await thread.send({
+              content:
+                `✅ **VISUEL CRÉÉ AVEC SUCCÈS !**\n\n` +
+                `🎁 **Nom:** ${cache.name}\n` +
+                `🔗 **URL:** ${imageUrl.substring(0, 50)}...\n\n` +
+                `Le visuel est maintenant disponible pour les cadeaux mystères !\n` +
+                `Ce thread va être archivé dans 10 secondes...`,
+              embeds: [{
+                image: { url: imageUrl },
+                color: 0x2ecc71
+              }],
+              components: [new ActionRowBuilder().addComponents(returnButton)]
+            });
+
+            giftImageUploadCache.delete(interaction.user.id);
+
+            setTimeout(async () => {
+              try {
+                await thread.setArchived(true);
+              } catch (e) {
+                console.warn('⚠️ Impossible d\'archiver le thread gift image');
+              }
+            }, 10000);
+
+          } catch (dbError) {
+            console.error('🔴 Erreur sauvegarde gift image:', dbError);
+            await thread.send('❌ Erreur lors de la sauvegarde. Vérifie que le nom n\'existe pas déjà.');
+          }
+        }
+      });
+
+      collector.on('end', (collected, reason) => {
+        if (reason === 'time') {
+          giftImageUploadCache.delete(interaction.user.id);
+          thread.send('⏰ Temps écoulé ! Le thread va être archivé.').catch(() => {});
+          setTimeout(() => thread.setArchived(true).catch(() => {}), 5000);
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur création thread gift image:', error);
+      return interaction.reply({
+        content: '❌ Erreur lors de la création du thread. Vérifie les permissions.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Afficher le modal pour éditer le NOM d'une image de cadeau (pas l'URL)
+   */
+  async showGiftImageEditModal(interaction, imageId) {
+    const { ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+    const guildId = interaction.guildId;
+
+    // Récupérer l'image existante
+    const image = await db.queryOne(
+      'SELECT * FROM gift_images WHERE id = $1 AND guild_id = $2',
+      [imageId, guildId]
+    );
+
+    if (!image) {
+      return interaction.reply({
+        content: '❌ Image non trouvée !',
+        flags: 64
+      });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`gift_image_edit_modal:${imageId}`)
+      .setTitle('✏️ Modifier le nom du visuel');
+
+    const nameInput = new TextInputBuilder()
+      .setCustomId('gift_image_name')
+      .setLabel('Nom du visuel')
+      .setPlaceholder('Ex: Cadeau Doré, Cadeau Rouge...')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(50)
+      .setValue(image.name);  // Pré-remplir avec la valeur actuelle
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(nameInput)
+    );
+
+    return interaction.showModal(modal);
+  }
+
+  /**
+   * Créer un thread pour modifier l'image d'un cadeau existant
+   */
+  async showGiftImageEditThread(interaction, imageId) {
+    const guildId = interaction.guildId;
+    const channel = interaction.channel;
+
+    // Récupérer l'image existante
+    const image = await db.queryOne(
+      'SELECT * FROM gift_images WHERE id = $1 AND guild_id = $2',
+      [imageId, guildId]
+    );
+
+    if (!image) {
+      return interaction.reply({
+        content: '❌ Image non trouvée !',
+        flags: 64
+      });
+    }
+
+    try {
+      // Vérifier si on peut créer des threads
+      if (!channel || !channel.threads || channel.isThread()) {
+        return interaction.reply({
+          content: '❌ Impossible de créer un thread dans ce canal. Utilise un salon textuel normal.',
+          flags: 64
+        });
+      }
+
+      // Créer le thread privé
+      const thread = await channel.threads.create({
+        name: `🖼️ Modifier Image - ${image.name.substring(0, 20)}`,
+        autoArchiveDuration: 60,
+        type: ChannelType.PrivateThread,
+        reason: 'Modification image cadeau mystère'
+      });
+
+      await thread.members.add(interaction.user.id);
+
+      // Sauvegarder dans le cache
+      giftImageUploadCache.set(interaction.user.id, {
+        guildId,
+        threadId: thread.id,
+        imageId,
+        mode: 'edit'
+      });
+
+      // Envoyer les instructions avec l'image actuelle
+      await thread.send({
+        content:
+          `🖼️ **MODIFIER L'IMAGE - ${image.name}**\n\n` +
+          `**Image actuelle:**\n` +
+          `${image.url}\n\n` +
+          `**Envoie la nouvelle image:**\n` +
+          `• 📎 Drag & drop une image/GIF\n` +
+          `• 🔗 Colle une URL d'image\n\n` +
+          `Formats supportés: PNG, JPG, GIF, WEBP\n` +
+          `⏱️ Tu as 2 minutes\n` +
+          `💡 Tape \`cancel\` pour annuler`,
+        embeds: [{
+          image: { url: image.url },
+          color: 0x3498db,
+          footer: { text: 'Image actuelle' }
+        }]
+      });
+
+      await interaction.reply({
+        content: `🖼️ Thread créé ! Rejoins ${thread} pour modifier l'image.`,
+        flags: 64
+      });
+
+      // Collector pour les messages
+      const filter = m => m.author.id === interaction.user.id;
+      const collector = thread.createMessageCollector({
+        filter,
+        time: 120000 // 2 minutes
+      });
+
+      collector.on('collect', async (message) => {
+        const cache = giftImageUploadCache.get(interaction.user.id);
+        if (!cache) return;
+
+        const content = message.content.trim();
+
+        // Annulation
+        if (content.toLowerCase() === 'cancel') {
+          collector.stop('cancelled');
+          await thread.send('❌ Modification annulée. Le thread va être archivé...');
+          giftImageUploadCache.delete(interaction.user.id);
+          setTimeout(() => thread.setArchived(true).catch(() => {}), 3000);
+          return;
+        }
+
+        let imageUrl = null;
+
+        // Cas 1: Attachment (fichier uploadé)
+        if (message.attachments.size > 0) {
+          const attachment = message.attachments.first();
+          const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+
+          if (attachment.contentType && validTypes.includes(attachment.contentType)) {
+            imageUrl = attachment.url;
+          } else {
+            await thread.send('⚠️ Format non supporté. Utilise PNG, JPG, GIF ou WEBP.');
+            return;
+          }
+        }
+        // Cas 2: URL collée
+        else {
+          const urlPattern = /https?:\/\/[^\s]+/i;
+          const match = content.match(urlPattern);
+          if (match) {
+            imageUrl = match[0].replace(/[<>)}\]]+$/, '');
+          } else {
+            await thread.send('⚠️ Envoie une image ou colle une URL valide.');
+            return;
+          }
+        }
+
+        // Mettre à jour en base de données
+        try {
+          await db.query(`
+            UPDATE gift_images SET url = $1 WHERE id = $2 AND guild_id = $3
+          `, [imageUrl, imageId, guildId]);
+
+          collector.stop('completed');
+
+          // Bouton pour retourner au canal d'origine
+          const returnButton = new ButtonBuilder()
+            .setLabel('🔙 Retour au panneau')
+            .setStyle(ButtonStyle.Link)
+            .setURL(`https://discord.com/channels/${guildId}/${channel.id}`);
+
+          await thread.send({
+            content:
+              `✅ **IMAGE MODIFIÉE AVEC SUCCÈS !**\n\n` +
+              `🎁 **${image.name}**\n` +
+              `🔗 Nouvelle URL enregistrée\n\n` +
+              `Ce thread va être archivé dans 10 secondes...`,
+            embeds: [{
+              image: { url: imageUrl },
+              color: 0x2ecc71,
+              footer: { text: 'Nouvelle image' }
+            }],
+            components: [new ActionRowBuilder().addComponents(returnButton)]
+          });
+
+          giftImageUploadCache.delete(interaction.user.id);
+
+          setTimeout(async () => {
+            try {
+              await thread.setArchived(true);
+            } catch (e) {
+              console.warn('⚠️ Impossible d\'archiver le thread gift image edit');
+            }
+          }, 10000);
+
+        } catch (dbError) {
+          console.error('🔴 Erreur mise à jour gift image:', dbError);
+          await thread.send('❌ Erreur lors de la sauvegarde.');
+        }
+      });
+
+      collector.on('end', (collected, reason) => {
+        if (reason === 'time') {
+          giftImageUploadCache.delete(interaction.user.id);
+          thread.send('⏰ Temps écoulé ! Le thread va être archivé.').catch(() => {});
+          setTimeout(() => thread.setArchived(true).catch(() => {}), 5000);
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur création thread gift image edit:', error);
+      return interaction.reply({
+        content: '❌ Erreur lors de la création du thread. Vérifie les permissions.',
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Supprimer une image de cadeau
+   */
+  async deleteGiftImage(interaction, imageId) {
+    const guildId = interaction.guildId;
+
+    await db.query(
+      'DELETE FROM gift_images WHERE id = $1 AND guild_id = $2',
+      [imageId, guildId]
+    );
+
+    // Rafraîchir le panneau
+    const giftImages = await db.queryAll(
+      'SELECT * FROM gift_images WHERE guild_id = $1 ORDER BY is_default DESC, name ASC',
+      [guildId]
+    );
+
+    await interaction.followUp({
+      content: '✅ Image supprimée avec succès !',
+      flags: 64
+    });
+
+    return this.showGiftImagesPanel(interaction, giftImages);
+  }
+
+  /**
+   * Définir une image comme image par défaut
+   */
+  async setDefaultGiftImage(interaction, imageId) {
+    const guildId = interaction.guildId;
+
+    // Retirer le flag par défaut de toutes les images
+    await db.query(
+      'UPDATE gift_images SET is_default = FALSE WHERE guild_id = $1',
+      [guildId]
+    );
+
+    // Définir cette image comme par défaut
+    await db.query(
+      'UPDATE gift_images SET is_default = TRUE WHERE id = $1 AND guild_id = $2',
+      [imageId, guildId]
+    );
+
+    // Rafraîchir le panneau
+    const giftImages = await db.queryAll(
+      'SELECT * FROM gift_images WHERE guild_id = $1 ORDER BY is_default DESC, name ASC',
+      [guildId]
+    );
+
+    await interaction.followUp({
+      content: '⭐ Image définie par défaut avec succès !',
+      flags: 64
+    });
+
+    return this.showGiftImagesPanel(interaction, giftImages);
+  }
+
+  /**
+   * Handler pour la sélection d'une image de cadeau à gérer
+   * Note: deferUpdate() est déjà fait dans handleSelectMenu()
+   */
+  async handleGiftImageManageSelect(interaction) {
+    const guildId = interaction.guildId;
+    const imageId = parseInt(interaction.values[0]);
+
+    // Récupérer les infos de l'image
+    const image = await db.queryOne(
+      'SELECT * FROM gift_images WHERE id = $1 AND guild_id = $2',
+      [imageId, guildId]
+    );
+
+    if (!image) {
+      return interaction.editReply({
+        content: '❌ Image non trouvée.',
+        components: []
+      });
+    }
+
+    // Afficher un panneau avec les actions possibles
+    const embed = new EmbedBuilder()
+      .setTitle(`🎁 Gérer: ${image.name}`)
+      .setDescription(`${image.is_default ? '⭐ Image par défaut\n\n' : ''}**URL:** \`${image.url.substring(0, 50)}...\``)
+      .setImage(image.url)
+      .setColor(0x9b59b6);
+
+    // Première ligne: Modifier nom + Modifier image
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`gift_image_edit:${imageId}`)
+        .setLabel('✏️ Modifier le nom')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`gift_image_edit_image:${imageId}`)
+        .setLabel('🖼️ Modifier l\'image')
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    // Deuxième ligne: Défaut + Supprimer + Retour
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`gift_image_default:${imageId}`)
+        .setLabel('⭐ Définir par défaut')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(image.is_default),
+      new ButtonBuilder()
+        .setCustomId(`gift_image_delete:${imageId}`)
+        .setLabel('🗑️ Supprimer')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('admin_gift_images')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.editReply({
+      embeds: [embed],
+      components: [row1, row2]
+    });
   }
 
   /**
@@ -5169,6 +6046,510 @@ class AdminPanelHandler {
   }
 
   /**
+   * Afficher le sélecteur pour configurer le canal des missions
+   * Utilise ChannelSelectMenuBuilder natif Discord avec recherche
+   */
+  async showMissionChannelSelector(interaction) {
+    // Récupérer le canal actuel si configuré
+    const currentChannelId = await db.getMissionChannel(interaction.guildId);
+
+    const selectMenu = new ChannelSelectMenuBuilder()
+      .setCustomId('select_mission_channel')
+      .setPlaceholder('🔍 Rechercher et sélectionner un canal...')
+      .setChannelTypes([ChannelType.GuildText]);
+
+    // Si un canal est déjà configuré, l'afficher
+    const currentDisplay = currentChannelId
+      ? `\n\n📍 **Canal actuel:** <#${currentChannelId}>`
+      : '\n\n⚠️ **Aucun canal configuré** - Les missions seront bloquées !';
+
+    const embed = new EmbedBuilder()
+      .setTitle('📍 CANAL DES MISSIONS')
+      .setDescription(
+        '**Sélectionne le canal dédié aux missions:**\n\n' +
+        '🔍 **Tape pour rechercher** parmi tous les canaux du serveur.\n\n' +
+        '> Les threads de missions secrètes seront créés dans ce canal.\n' +
+        '> Seuls les joueurs concernés pourront voir leur thread.' +
+        currentDisplay
+      )
+      .setColor(currentChannelId ? '#27ae60' : '#e74c3c');
+
+    const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+    // Boutons : Retour + Supprimer (si configuré)
+    const buttons = [
+      new ButtonBuilder()
+        .setCustomId('admin_missions')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    ];
+
+    if (currentChannelId) {
+      buttons.push(
+        new ButtonBuilder()
+          .setCustomId('delete_mission_channel')
+          .setLabel('🗑️ Supprimer')
+          .setStyle(ButtonStyle.Danger)
+      );
+    }
+
+    const row2 = new ActionRowBuilder().addComponents(buttons);
+
+    return interaction.update({
+      embeds: [embed],
+      components: [row1, row2]
+    });
+  }
+
+  /**
+   * Handler pour la sélection du canal missions
+   */
+  async handleMissionChannelSelection(interaction) {
+    await interaction.deferUpdate();
+
+    let channel;
+    let channelId;
+
+    if (interaction.channels && interaction.channels.size > 0) {
+      // ChannelSelectMenuBuilder - le canal est directement fourni
+      channel = interaction.channels.first();
+      channelId = channel.id;
+    } else if (interaction.values && interaction.values.length > 0) {
+      // StringSelectMenuBuilder - on a l'ID, on doit récupérer le canal
+      channelId = interaction.values[0];
+      channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+    }
+
+    try {
+      if (!channel || !channel.isTextBased()) {
+        await interaction.followUp({
+          content: '❌ ID invalide ou ce n\'est pas un canal textuel.',
+          flags: 64
+        });
+        // Rafraîchir le menu avec editReply (car déjà déféré)
+        const menuData = await this.buildMissionsMenuData(interaction.guildId);
+        return interaction.editReply(menuData);
+      }
+
+      // Définir le canal missions
+      await db.setMissionChannel(interaction.guildId, channelId);
+
+      // Envoyer une confirmation éphémère
+      await interaction.followUp({
+        content: `✅ **Canal des missions configuré !**\n\n📍 **Canal:** ${channel}\n🆔 **ID:** \`${channelId}\`\n\n> Les threads de missions secrètes seront créés dans ce canal.`,
+        flags: 64
+      });
+
+      // Rafraîchir le menu avec editReply (car déjà déféré)
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+
+    } catch (error) {
+      console.error('❌ Erreur lors de la configuration du canal missions:', error);
+      await interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+      // Rafraîchir le menu avec editReply (car déjà déféré)
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+    }
+  }
+
+  /**
+   * Handler pour la suppression du canal missions
+   */
+  async handleDeleteMissionChannel(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const missionChannelId = await db.getMissionChannel(interaction.guildId);
+
+      if (!missionChannelId) {
+        await interaction.followUp({
+          content: '❌ Aucun canal missions configuré.',
+          flags: 64
+        });
+        // Rafraîchir le menu avec editReply (car déjà déféré)
+        const menuData = await this.buildMissionsMenuData(interaction.guildId);
+        return interaction.editReply(menuData);
+      }
+
+      // Supprimer le canal
+      await db.clearMissionChannel(interaction.guildId);
+
+      // Envoyer une confirmation éphémère
+      await interaction.followUp({
+        content: `✅ **Canal des missions supprimé !**\n\n⚠️ Les missions seront bloquées tant qu'un canal n'est pas configuré.`,
+        flags: 64
+      });
+
+      // Rafraîchir le menu avec editReply (car déjà déféré)
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+
+    } catch (error) {
+      console.error('❌ Erreur lors de la suppression du canal missions:', error);
+      await interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+      // Rafraîchir le menu avec editReply (car déjà déféré)
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+    }
+  }
+
+  /**
+   * Afficher le sélecteur de canal pour le Morpion (matchmaking)
+   * Utilise ChannelSelectMenuBuilder natif Discord avec recherche
+   */
+  async showTictactoeChannelSelector(interaction) {
+    // Récupérer la configuration complète
+    const config = await db.getTictactoeConfig(interaction.guildId);
+    const currentChannelId = config?.matchmaking_channel_id;
+    const turnTimeout = config?.turn_timeout || 60;
+    const missionTimeout = config?.mission_timeout || 1800;
+    const drawResolution = config?.draw_resolution || 'random';
+    const maxSearchRetries = config?.max_search_retries || 3;
+
+    // Labels pour la résolution d'égalité
+    const drawResolutionLabels = {
+      'random': '🎲 Aléatoire (un gagnant tiré au sort)',
+      'none': '❌ Aucun gagnant (mission échoue)',
+      'both': '🤝 Les deux gagnent (récompense partagée)'
+    };
+
+    // Formater les durées
+    const formatDuration = (seconds) => {
+      if (seconds >= 3600) {
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        return mins > 0 ? `${hours}h${mins}min` : `${hours}h`;
+      } else if (seconds >= 60) {
+        return `${Math.floor(seconds / 60)}min`;
+      }
+      return `${seconds}s`;
+    };
+
+    // Sélecteur de canal
+    const selectMenu = new ChannelSelectMenuBuilder()
+      .setCustomId('select_tictactoe_channel')
+      .setPlaceholder('🔍 Rechercher et sélectionner un canal...')
+      .setChannelTypes([ChannelType.GuildText]);
+
+    const embed = new EmbedBuilder()
+      .setTitle('⚙️ CONFIGURATION MORPION')
+      .setDescription(
+        '**Paramètres du système Morpion (Tic-Tac-Toe)**\n\n' +
+        `📍 **Canal matchmaking:** ${currentChannelId ? `<#${currentChannelId}>` : '⚠️ *Non configuré*'}\n` +
+        `> Les recherches d'adversaires seront postées ici\n\n` +
+        `⏱️ **Timer par tour:** ${formatDuration(turnTimeout)}\n` +
+        `> Temps maximum pour jouer un coup\n\n` +
+        `⏰ **Timeout mission:** ${formatDuration(missionTimeout)}\n` +
+        `> Temps pour trouver un adversaire\n\n` +
+        `🎲 **Résolution égalité:** ${drawResolutionLabels[drawResolution]}\n` +
+        `> Comportement après 3 manches sans vainqueur\n\n` +
+        `🔄 **Max relances:** ${maxSearchRetries}\n` +
+        `> Nombre maximum de recherches par mission`
+      )
+      .setColor(currentChannelId ? '#5865F2' : '#e74c3c')
+      .setFooter({ text: '🎮 Sélectionne un canal ou modifie les paramètres' });
+
+    const row1 = new ActionRowBuilder().addComponents(selectMenu);
+
+    // Boutons de configuration - Ligne 2
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('tictactoe_config_timers')
+        .setLabel('⏱️ Modifier Timers')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('tictactoe_config_resolution')
+        .setLabel('🎲 Résolution Égalité')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('tictactoe_config_retries')
+        .setLabel('🔄 Max Relances')
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    // Boutons : Retour + Supprimer (si configuré) - Ligne 3
+    const buttons = [
+      new ButtonBuilder()
+        .setCustomId('admin_missions')
+        .setLabel('🔙 Retour aux Missions')
+        .setStyle(ButtonStyle.Secondary)
+    ];
+
+    if (currentChannelId) {
+      buttons.push(
+        new ButtonBuilder()
+          .setCustomId('delete_tictactoe_channel')
+          .setLabel('🗑️ Supprimer Canal')
+          .setStyle(ButtonStyle.Danger)
+      );
+    }
+
+    const row3 = new ActionRowBuilder().addComponents(buttons);
+
+    return interaction.update({
+      embeds: [embed],
+      components: [row1, row2, row3]
+    });
+  }
+
+  /**
+   * Handler pour la sélection du canal Morpion
+   */
+  async handleTictactoeChannelSelection(interaction) {
+    await interaction.deferUpdate();
+
+    let channel;
+    let channelId;
+
+    if (interaction.channels && interaction.channels.size > 0) {
+      // ChannelSelectMenuBuilder - le canal est directement fourni
+      channel = interaction.channels.first();
+      channelId = channel.id;
+    } else if (interaction.values && interaction.values.length > 0) {
+      // StringSelectMenuBuilder - on a l'ID, on doit récupérer le canal
+      channelId = interaction.values[0];
+      channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+    }
+
+    try {
+      if (!channel || !channel.isTextBased()) {
+        await interaction.followUp({
+          content: '❌ ID invalide ou ce n\'est pas un canal textuel.',
+          flags: 64
+        });
+        const menuData = await this.buildMissionsMenuData(interaction.guildId);
+        return interaction.editReply(menuData);
+      }
+
+      // Sauvegarder en DB
+      await db.upsertTictactoeConfig(interaction.guildId, { matchmaking_channel_id: channelId });
+
+      // Confirmation
+      await interaction.followUp({
+        content: `✅ **Canal Morpion configuré !**\n\nLes recherches d'adversaires seront postées dans <#${channelId}>.`,
+        flags: 64
+      });
+
+      // Rafraîchir le menu
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+
+    } catch (error) {
+      console.error('❌ Erreur lors de la configuration du canal Morpion:', error);
+      await interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+    }
+  }
+
+  /**
+   * Handler pour la suppression du canal Morpion
+   */
+  async handleDeleteTictactoeChannel(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const config = await db.getTictactoeConfig(interaction.guildId);
+
+      if (!config?.matchmaking_channel_id) {
+        await interaction.followUp({
+          content: '❌ Aucun canal Morpion configuré.',
+          flags: 64
+        });
+        const menuData = await this.buildMissionsMenuData(interaction.guildId);
+        return interaction.editReply(menuData);
+      }
+
+      // Supprimer le canal
+      await db.upsertTictactoeConfig(interaction.guildId, { matchmaking_channel_id: null });
+
+      // Confirmation
+      await interaction.followUp({
+        content: `✅ **Canal Morpion supprimé !**\n\n⚠️ Les missions Morpion seront bloquées tant qu'un canal n'est pas configuré.`,
+        flags: 64
+      });
+
+      // Rafraîchir le menu
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+
+    } catch (error) {
+      console.error('❌ Erreur lors de la suppression du canal Morpion:', error);
+      await interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+      const menuData = await this.buildMissionsMenuData(interaction.guildId);
+      return interaction.editReply(menuData);
+    }
+  }
+
+  /**
+   * Modal pour configurer les timers Morpion
+   */
+  async showTictactoeTimersModal(interaction) {
+    const config = await db.getTictactoeConfig(interaction.guildId);
+    const turnTimeout = config?.turn_timeout || 60;
+    const missionTimeout = config?.mission_timeout || 1800;
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_tictactoe_timers')
+      .setTitle('⏱️ Timers Morpion');
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('turn_timeout')
+        .setLabel('⏱️ Temps par tour (en secondes, 10-600)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('60 = 1 minute pour jouer un coup')
+        .setValue(String(turnTimeout))
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(4)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('mission_timeout')
+        .setLabel('⏰ Temps pour trouver adversaire (60-86400s)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('1800 = 30min, 3600 = 1h')
+        .setValue(String(missionTimeout))
+        .setRequired(true)
+        .setMinLength(2)
+        .setMaxLength(5)
+    );
+
+    modal.addComponents(row1, row2);
+    return interaction.showModal(modal);
+  }
+
+  /**
+   * Sélecteur pour la résolution d'égalité Morpion
+   */
+  async showTictactoeResolutionSelector(interaction) {
+    const config = await db.getTictactoeConfig(interaction.guildId);
+    const currentResolution = config?.draw_resolution || 'random';
+
+    const embed = new EmbedBuilder()
+      .setTitle('🎲 RÉSOLUTION D\'ÉGALITÉ')
+      .setDescription(
+        '**Que se passe-t-il après 3 manches sans vainqueur ?**\n\n' +
+        '🎲 **Aléatoire** - Un gagnant est tiré au sort\n' +
+        '❌ **Aucun gagnant** - La mission échoue pour les deux\n' +
+        '🤝 **Les deux gagnent** - Récompense partagée\n\n' +
+        `**Mode actuel:** ${currentResolution === 'random' ? '🎲 Aléatoire' : currentResolution === 'none' ? '❌ Aucun gagnant' : '🤝 Les deux gagnent'}`
+      )
+      .setColor('#5865F2');
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('tictactoe_resolution_random')
+        .setLabel('🎲 Aléatoire')
+        .setStyle(currentResolution === 'random' ? ButtonStyle.Success : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('tictactoe_resolution_none')
+        .setLabel('❌ Aucun gagnant')
+        .setStyle(currentResolution === 'none' ? ButtonStyle.Success : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('tictactoe_resolution_both')
+        .setLabel('🤝 Les deux gagnent')
+        .setStyle(currentResolution === 'both' ? ButtonStyle.Success : ButtonStyle.Secondary)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('tictactoe_channel_config')
+        .setLabel('🔙 Retour')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return interaction.update({
+      embeds: [embed],
+      components: [row1, row2]
+    });
+  }
+
+  /**
+   * Handler pour le changement de résolution d'égalité
+   */
+  async handleTictactoeResolutionSelect(interaction) {
+    await interaction.deferUpdate();
+
+    try {
+      const resolution = interaction.customId.replace('tictactoe_resolution_', '');
+
+      if (!['random', 'none', 'both'].includes(resolution)) {
+        await interaction.followUp({
+          content: '❌ Résolution invalide.',
+          flags: 64
+        });
+        return this.showTictactoeChannelSelector(interaction);
+      }
+
+      await db.upsertTictactoeConfig(interaction.guildId, { draw_resolution: resolution });
+
+      const labels = {
+        'random': '🎲 Aléatoire (un gagnant tiré au sort)',
+        'none': '❌ Aucun gagnant (mission échoue)',
+        'both': '🤝 Les deux gagnent (récompense partagée)'
+      };
+
+      await interaction.followUp({
+        content: `✅ **Résolution d'égalité modifiée !**\n\n${labels[resolution]}`,
+        flags: 64
+      });
+
+      return this.showTictactoeChannelSelector(interaction);
+
+    } catch (error) {
+      console.error('❌ Erreur lors du changement de résolution:', error);
+      await interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+      return this.showTictactoeChannelSelector(interaction);
+    }
+  }
+
+  /**
+   * Modal pour configurer le nombre max de relances
+   */
+  async showTictactoeRetriesModal(interaction) {
+    const config = await db.getTictactoeConfig(interaction.guildId);
+    const maxRetries = config?.max_search_retries || 3;
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_tictactoe_retries')
+      .setTitle('🔄 Max Relances Morpion');
+
+    const row1 = new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('max_retries')
+        .setLabel('🔄 Combien de fois relancer la recherche (1-10)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('3 = joueur peut relancer 3 fois si personne ne rejoint')
+        .setValue(String(maxRetries))
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(2)
+    );
+
+    modal.addComponents(row1);
+    return interaction.showModal(modal);
+  }
+
+  /**
    * Handler pour la suppression du canal d'annonces
    */
   async handleDeleteAnnouncementChannel(interaction) {
@@ -5234,6 +6615,8 @@ class AdminPanelHandler {
    * Handler pour le toggle d'un paramètre d'annonce
    */
   async handleToggleAnnouncementSetting(interaction) {
+    await interaction.deferUpdate();
+
     const customId = interaction.customId;
     const settingName = customId.replace('toggle_', '');
 
@@ -5257,13 +6640,15 @@ class AdminPanelHandler {
 
       // Rafraîchir le sous-menu approprié en fonction du type d'annonce
       // Cela met à jour directement le menu avec le nouvel état du toggle
-      if (settingName.startsWith('mission_')) {
+      if (settingName.startsWith('mission_') || settingName === 'tictactoe_result') {
         return this.showAnnouncementsMissionsMenu(interaction);
       } else if (settingName.startsWith('theme_')) {
         return this.showAnnouncementsThemesMenu(interaction);
       } else if (settingName.startsWith('trap_')) {
         return this.showAnnouncementsTrapsMenu(interaction);
-      } else if (settingName.includes('collection') || settingName === 'legendary_collectible' || settingName === 'legendary_super_bonus' || settingName.startsWith('collectible_')) {
+      } else if (settingName.startsWith('mystery_gift_') || settingName === 'super_bonus_joker_used') {
+        return this.showAnnouncementsSocialMenu(interaction);
+      } else if (settingName.includes('collection') || settingName === 'legendary_collectible' || settingName === 'legendary_super_bonus' || settingName.startsWith('collectible_') || settingName === 'all_collectibles_recovered') {
         return this.showAnnouncementsCollectiblesMenu(interaction);
       } else {
         // Fallback au menu principal si type inconnu
@@ -5283,40 +6668,69 @@ class AdminPanelHandler {
   }
 
   /**
-   * Affiche le menu de sélection des templates d'annonces
+   * Affiche le menu de sélection des catégories de templates
+   * Système à double sélecteur pour contourner la limite de 25 options Discord
    */
   async showTemplatesListMenu(interaction) {
     try {
       await interaction.deferUpdate();
 
-      // Récupérer les templates GLOBAUX uniquement (theme_id IS NULL)
-      // pour éviter les doublons et dépasser la limite de 25 options Discord
+      // Définir les catégories de templates
+      const categories = [
+        {
+          id: 'collectibles',
+          label: '📦 Collectibles',
+          description: 'Annonces liées aux collectibles',
+          emoji: '📦',
+          templates: [
+            'legendary_collectible', 'collection_completed', 'collection_traded',
+            'collection_lost', 'collectible_level_up', 'collectible_max_level',
+            'collectible_restored', 'all_collectibles_recovered', 'legendary_super_bonus'
+          ]
+        },
+        {
+          id: 'traps',
+          label: '⚠️ Pièges',
+          description: 'Annonces liées aux pièges',
+          emoji: '⚠️',
+          templates: [
+            'trap_cooldown', 'trap_lose_collectible', 'trap_public_shame',
+            'trap_empty_box', 'trap_lose_all_collectibles', 'trap_shame_nickname'
+          ]
+        },
+        {
+          id: 'missions',
+          label: '⚔️ Missions',
+          description: 'Annonces liées aux missions',
+          emoji: '⚔️',
+          templates: [
+            'mission_word_guessed', 'mission_started', 'mission_completed',
+            'mission_failed', 'mission_approved', 'mission_rejected', 'tictactoe_result'
+          ]
+        },
+        {
+          id: 'themes',
+          label: '🎨 Thèmes',
+          description: 'Annonces liées aux thèmes',
+          emoji: '🎨',
+          templates: ['theme_expired', 'theme_expiring_soon']
+        },
+        {
+          id: 'social',
+          label: '🎁 Social & Autres',
+          description: 'Cadeaux, joker et autres annonces',
+          emoji: '🎁',
+          templates: ['mystery_gift_sent', 'mystery_gift_opened', 'super_bonus_joker_used']
+        }
+      ];
+
+      // Compter les templates existants par catégorie
       const templates = await db.queryAll(`
-        SELECT * FROM announcement_templates
+        SELECT type FROM announcement_templates
         WHERE guild_id = $1 AND theme_id IS NULL
-        ORDER BY type
       `, [interaction.guildId]);
 
-      const templateLabels = {
-        legendary_collectible: '⭐ Collectible Légendaire',
-        collection_completed: '🎉 Collection Complétée',
-        collection_traded: '🔄 Échange de Collection',
-        collection_lost: '💀 Collection Perdue',
-        trap_cooldown: '⏱️ Piège Cooldown',
-        trap_lose_collectible: '💀 Piège Voleur',
-        trap_public_shame: '😱 Piège de la Honte',
-        trap_empty_box: '📦 Boîte Vide',
-        trap_lose_all_collectibles: '💥 Piège Dévastateur',
-        mission_word_guessed: '🎯 Mot Deviné',
-        mission_started: '⚔️ Mission Lancée',
-        mission_completed: '✅ Mission Réussie',
-        mission_failed: '❌ Mission Échouée',
-        mission_approved: '👍 Mission Approuvée',
-        mission_rejected: '⛔ Mission Refusée',
-        theme_expired: '🔴 Thème Expiré',
-        theme_expiring_soon: '⏰ Expiration Prochaine',
-        legendary_super_bonus: '🎰 Super Bonus Obtenu'
-      };
+      const existingTypes = templates.map(t => t.type);
 
       const embed = new EmbedBuilder()
         .setTitle('📝 Édition des Templates d\'Annonces')
@@ -5328,31 +6742,29 @@ class AdminPanelHandler {
           `• Image principale\n` +
           `• Thumbnail\n` +
           `• Texte du footer\n\n` +
-          `**📋 ${templates.length} templates disponibles**\n` +
-          `Sélectionne un template dans le menu ci-dessous pour l\'éditer:`
+          `**📋 ${templates.length} templates configurés**\n\n` +
+          `**Sélectionne une catégorie** pour voir les templates:`
         )
         .setColor('#3498db');
 
-      // Créer les options du sélecteur dynamiquement à partir des templates
-      const selectOptions = templates.map(template => {
-        const label = templateLabels[template.type] || template.type;
-        const description = template.title.substring(0, 100); // Max 100 caractères pour Discord
-
+      // Créer les options de catégorie
+      const categoryOptions = categories.map(cat => {
+        const count = cat.templates.filter(t => existingTypes.includes(t)).length;
         return {
-          label: label,
-          value: template.type,
-          description: description,
-          emoji: this.getEmojiForTemplateType(template.type)
+          label: cat.label,
+          value: cat.id,
+          description: `${count}/${cat.templates.length} templates - ${cat.description}`,
+          emoji: cat.emoji
         };
       });
 
-      // Créer le sélecteur de templates
+      // Créer le sélecteur de catégories
       const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId('select_template_to_edit')
-        .setPlaceholder('🎨 Sélectionne un template à éditer')
+        .setCustomId('select_template_category')
+        .setPlaceholder('📂 Sélectionne une catégorie')
         .setMinValues(1)
         .setMaxValues(1)
-        .addOptions(selectOptions);
+        .addOptions(categoryOptions);
 
       const selectRow = new ActionRowBuilder().addComponents(selectMenu);
 
@@ -5385,27 +6797,209 @@ class AdminPanelHandler {
   }
 
   /**
+   * Affiche les templates d'une catégorie spécifique
+   * Note: deferUpdate() est déjà fait dans handleSelectMenu()
+   */
+  async showTemplateCategoryMenu(interaction) {
+    try {
+      const categoryId = interaction.values[0];
+
+      // Définir les catégories avec leurs templates
+      const categoriesData = {
+        collectibles: {
+          label: '📦 Collectibles',
+          emoji: '📦',
+          templates: [
+            'legendary_collectible', 'collection_completed', 'collection_traded',
+            'collection_lost', 'collectible_level_up', 'collectible_max_level',
+            'collectible_restored', 'all_collectibles_recovered', 'legendary_super_bonus'
+          ]
+        },
+        traps: {
+          label: '⚠️ Pièges',
+          emoji: '⚠️',
+          templates: [
+            'trap_cooldown', 'trap_lose_collectible', 'trap_public_shame',
+            'trap_empty_box', 'trap_lose_all_collectibles', 'trap_shame_nickname'
+          ]
+        },
+        missions: {
+          label: '⚔️ Missions',
+          emoji: '⚔️',
+          templates: [
+            'mission_word_guessed', 'mission_started', 'mission_completed',
+            'mission_failed', 'mission_approved', 'mission_rejected', 'tictactoe_result'
+          ]
+        },
+        themes: {
+          label: '🎨 Thèmes',
+          emoji: '🎨',
+          templates: ['theme_expired', 'theme_expiring_soon']
+        },
+        social: {
+          label: '🎁 Social & Autres',
+          emoji: '🎁',
+          templates: ['mystery_gift_sent', 'mystery_gift_opened', 'super_bonus_joker_used']
+        }
+      };
+
+      const category = categoriesData[categoryId];
+      if (!category) {
+        return interaction.editReply({
+          content: '❌ Catégorie introuvable.',
+          components: []
+        });
+      }
+
+      // Labels pour tous les templates
+      const templateLabels = {
+        // Collectibles
+        legendary_collectible: '⭐ Collectible Légendaire',
+        collection_completed: '🎉 Collection Complétée',
+        collection_traded: '🔄 Échange Collection',
+        collection_lost: '💀 Collection Perdue',
+        collectible_level_up: '⬆️ Level Up',
+        collectible_max_level: '🏆 Niveau Max',
+        collectible_restored: '🔄 Restauré',
+        all_collectibles_recovered: '🔄 Recovery Massive',
+        legendary_super_bonus: '🎰 Super Bonus Obtenu',
+        // Pièges
+        trap_cooldown: '⏱️ Piège Cooldown',
+        trap_lose_collectible: '💀 Piège Voleur',
+        trap_public_shame: '😱 Piège Honte',
+        trap_empty_box: '📦 Boîte Vide',
+        trap_lose_all_collectibles: '💥 Piège Dévastateur',
+        trap_shame_nickname: '🎭 Piège Pseudo Honteux',
+        // Missions
+        mission_word_guessed: '🎯 Mot Deviné',
+        mission_started: '⚔️ Mission Lancée',
+        mission_completed: '✅ Mission Réussie',
+        mission_failed: '❌ Mission Échouée',
+        mission_approved: '👍 Mission Approuvée',
+        mission_rejected: '⛔ Mission Refusée',
+        tictactoe_result: '🎮 Morpion',
+        // Thèmes
+        theme_expired: '🔴 Thème Expiré',
+        theme_expiring_soon: '⏰ Expiration Proche',
+        // Social
+        mystery_gift_sent: '🎁 Cadeau Envoyé',
+        mystery_gift_opened: '🎉 Cadeau Ouvert',
+        super_bonus_joker_used: '🃏 Joker Utilisé'
+      };
+
+      // Récupérer les templates existants de cette catégorie
+      // Note: On utilise IN avec des placeholders dynamiques pour PostgreSQL
+      const placeholders = category.templates.map((_, i) => `$${i + 2}`).join(', ');
+      const templates = await db.queryAll(`
+        SELECT * FROM announcement_templates
+        WHERE guild_id = $1 AND theme_id IS NULL AND type IN (${placeholders})
+        ORDER BY type
+      `, [interaction.guildId, ...category.templates]);
+
+      const existingTypes = templates.map(t => t.type);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`${category.emoji} Templates: ${category.label}`)
+        .setDescription(
+          `**${templates.length}/${category.templates.length} templates configurés**\n\n` +
+          `Sélectionne un template à éditer:`
+        )
+        .setColor('#3498db');
+
+      // Créer les options de templates
+      const selectOptions = category.templates.map(templateType => {
+        const template = templates.find(t => t.type === templateType);
+        const label = templateLabels[templateType] || templateType;
+        const exists = existingTypes.includes(templateType);
+
+        return {
+          label: label.substring(0, 100),
+          value: templateType,
+          description: exists ? (template?.title || 'Configuré').substring(0, 100) : 'Non configuré',
+          emoji: this.getEmojiForTemplateType(templateType)
+        };
+      });
+
+      // Créer le sélecteur de templates
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('select_template_to_edit')
+        .setPlaceholder('🎨 Sélectionne un template à éditer')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(selectOptions);
+
+      const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+
+      // Boutons navigation
+      const backButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('edit_announcement_templates')
+          .setLabel('🔙 Catégories')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('admin_announcements')
+          .setLabel('🏠 Menu Annonces')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [selectRow, backButton]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'affichage de la catégorie:', error);
+      if (interaction.deferred) {
+        await interaction.editReply({
+          content: '❌ Une erreur est survenue lors de l\'affichage de la catégorie.',
+        });
+      } else {
+        await interaction.reply({
+          content: '❌ Une erreur est survenue lors de l\'affichage de la catégorie.',
+          flags: 64
+        });
+      }
+    }
+  }
+
+  /**
    * Retourne l'emoji approprié pour un type de template
    */
   getEmojiForTemplateType(type) {
     const emojiMap = {
+      // Collectibles
       legendary_collectible: '⭐',
       collection_completed: '🎉',
       collection_traded: '🔄',
       collection_lost: '💀',
+      collectible_level_up: '⬆️',
+      collectible_max_level: '🏆',
+      collectible_restored: '🔄',
+      all_collectibles_recovered: '🔄',
+      legendary_super_bonus: '🎰',
+      // Pièges
       trap_cooldown: '⏱️',
       trap_lose_collectible: '💀',
       trap_public_shame: '😱',
       trap_empty_box: '📦',
       trap_lose_all_collectibles: '💥',
+      trap_shame_nickname: '🎭',
+      // Missions
       mission_word_guessed: '🎯',
       mission_started: '⚔️',
       mission_completed: '✅',
       mission_failed: '❌',
       mission_approved: '👍',
       mission_rejected: '⛔',
+      tictactoe_result: '🎮',
+      // Thèmes
       theme_expired: '🔴',
-      theme_expiring_soon: '⏰'
+      theme_expiring_soon: '⏰',
+      // Social
+      mystery_gift_sent: '🎁',
+      mystery_gift_opened: '🎉',
+      // Autres
+      super_bonus_joker_used: '🃏'
     };
     return emojiMap[type] || '📄';
   }
@@ -5431,24 +7025,39 @@ class AdminPanelHandler {
       }
 
       const templateLabels = {
+        // Collectibles
         legendary_collectible: '⭐ Collectible Légendaire',
         collection_completed: '🎉 Collection Complétée',
-        collection_traded: '🔄 Échange de Collection',
+        collection_traded: '🔄 Échange Collection',
         collection_lost: '💀 Collection Perdue',
+        collectible_level_up: '⬆️ Level Up',
+        collectible_max_level: '🏆 Niveau Max',
+        collectible_restored: '🔄 Restauré',
+        all_collectibles_recovered: '🔄 Recovery Massive',
+        legendary_super_bonus: '🎰 Super Bonus Obtenu',
+        // Pièges
         trap_cooldown: '⏱️ Piège Cooldown',
         trap_lose_collectible: '💀 Piège Voleur',
-        trap_public_shame: '😱 Piège de la Honte',
+        trap_public_shame: '😱 Piège Honte',
         trap_empty_box: '📦 Boîte Vide',
         trap_lose_all_collectibles: '💥 Piège Dévastateur',
+        trap_shame_nickname: '🎭 Piège Pseudo Honteux',
+        // Missions
         mission_word_guessed: '🎯 Mot Deviné',
         mission_started: '⚔️ Mission Lancée',
         mission_completed: '✅ Mission Réussie',
         mission_failed: '❌ Mission Échouée',
         mission_approved: '👍 Mission Approuvée',
         mission_rejected: '⛔ Mission Refusée',
+        tictactoe_result: '🎮 Morpion',
+        // Thèmes
         theme_expired: '🔴 Thème Expiré',
-        theme_expiring_soon: '⏰ Thème Expire Bientôt',
-        legendary_super_bonus: '🎰 Super Bonus Obtenu'
+        theme_expiring_soon: '⏰ Expiration Proche',
+        // Social
+        mystery_gift_sent: '🎁 Cadeau Envoyé',
+        mystery_gift_opened: '🎉 Cadeau Ouvert',
+        // Autres
+        super_bonus_joker_used: '🃏 Joker Utilisé'
       };
 
       // Variables disponibles par type
@@ -5457,20 +7066,29 @@ class AdminPanelHandler {
         collection_completed: '{userName}, {themeName}, {roleName}',
         collection_traded: '{user1Name}, {user2Name}, {missionName}',
         collection_lost: '{userName}, {trapName}',
+        collectible_level_up: '{userName}, {collectibleName}, {newLevel}',
+        collectible_max_level: '{userName}, {collectibleName}, {maxLevel}',
+        collectible_restored: '{userName}, {collectibleName}',
+        all_collectibles_recovered: '{userName}, {restoredCount}, {themeName}',
         trap_cooldown: '{userName}, {trapName}, {duration}',
         trap_lose_collectible: '{userName}, {trapName}, {collectible}',
         trap_public_shame: '{userName}, {trapName}',
         trap_empty_box: '{userName}, {trapName}',
         trap_lose_all_collectibles: '{userName}, {trapName}, {count}',
+        trap_shame_nickname: '{userName}, {trapName}, {shameNickname}, {duration}',
         mission_word_guessed: '{userName}, {word}, {missionName}',
         mission_started: '{userName}, {missionName}, {timeLimit}',
         mission_completed: '{userName}, {missionName}, {rewardName}',
         mission_failed: '{userName}, {missionName}, {failReason}',
         mission_approved: '{userName}, {missionName}, {adminName}, {rewardName}',
         mission_rejected: '{userName}, {missionName}, {adminName}',
+        tictactoe_result: '{winner}, {loser}, {moves}, {duration}, {resolution}, {reward}',
         theme_expired: '{themeName}, {durationDays}, {expirationDate}',
         theme_expiring_soon: '{themeName}, {daysRemaining}, {expirationDate}',
-        legendary_super_bonus: '{userName}, {bonusName}, {bonusIcon}'
+        legendary_super_bonus: '{userName}, {bonusName}, {bonusIcon}',
+        mystery_gift_sent: '{giverName}, {recipientName}',
+        mystery_gift_opened: '{giverName}, {recipientName}, {collectibleName}, {rarityEmoji}, {rarityLabel}',
+        super_bonus_joker_used: '{userName}, {collectibleName}'
       };
 
       const embed = new EmbedBuilder()
@@ -5720,6 +7338,14 @@ class AdminPanelHandler {
           userName: 'JoueurTest',
           missionName: 'Mission Douteuse',
           adminName: 'AdminTest'
+        },
+        tictactoe_result: {
+          winner: 'VictorTest',
+          loser: 'PerdantTest',
+          moves: '9',
+          duration: '2m 35s',
+          resolution: 'Victoire',
+          reward: 'Dragon Légendaire'
         }
       };
 
@@ -7100,6 +8726,30 @@ class AdminPanelHandler {
           value: 'emoji-puzzle',
           description: 'Deviner ce que représentent des emojis révélés progressivement',
           emoji: '🧩'
+        },
+        {
+          label: 'Lettres Mélangées',
+          value: 'unscramble',
+          description: 'Remettre les lettres dans le bon ordre pour trouver le mot',
+          emoji: '🔀'
+        },
+        {
+          label: 'Le Pendu',
+          value: 'hangman',
+          description: 'Deviner le mot lettre par lettre avant d\'être pendu !',
+          emoji: '☠️'
+        },
+        {
+          label: 'Wordle',
+          value: 'wordle',
+          description: 'Deviner le mot de 5 lettres en 6 essais max !',
+          emoji: '🟩'
+        },
+        {
+          label: 'Morpion (PvP)',
+          value: 'tictactoe',
+          description: 'Affronter un autre joueur au morpion !',
+          emoji: '🎮'
         }
       ]);
 
@@ -7111,10 +8761,14 @@ class AdminPanelHandler {
         '🔤 **Mot Deviné** - Deviner un mot caché\n' +
         '❓ **Quiz** - Questions à choix multiples\n' +
         '✅ **Vrai/Faux** - Répondre à des affirmations\n' +
-        '🧩 **Emoji Devinette** - Deviner à partir d\'emojis'
+        '🧩 **Emoji Devinette** - Deviner à partir d\'emojis\n' +
+        '🔀 **Lettres Mélangées** - Remettre les lettres en ordre\n' +
+        '☠️ **Le Pendu** - Deviner le mot lettre par lettre\n' +
+        '🟩 **Wordle** - Deviner le mot de 5 lettres en 6 essais\n' +
+        '🎮 **Morpion (PvP)** - Affronter un autre joueur !'
       )
       .setColor('#5865F2')
-      .setFooter({ text: '💡 D\'autres types seront bientôt disponibles !' });
+      .setFooter({ text: '💡 8 types de missions disponibles !' });
 
     return interaction.update({
       content: null,
@@ -7269,6 +8923,64 @@ class AdminPanelHandler {
       );
 
       modal.addComponents(row1, row2, row3, row4, row5);
+    } else if (missionType === 'unscramble') {
+      // Pour unscramble: seulement temps total dans le modal
+      // Les mots et nombre d'essais seront ajoutés via les boutons
+      const row4 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_timeout')
+          .setLabel('Temps total (en secondes)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 60')
+          .setValue('60')
+          .setRequired(true)
+      );
+
+      modal.addComponents(row1, row2, row3, row4);
+    } else if (missionType === 'hangman') {
+      // Pour hangman (pendu): seulement temps total dans le modal
+      // Les mots seront ajoutés via le bouton "Gérer les Mots"
+      // Max erreurs fixé à 6 (pour le dessin du pendu)
+      const row4 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_timeout')
+          .setLabel('Temps total (en secondes)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 120')
+          .setValue('120')
+          .setRequired(true)
+      );
+
+      modal.addComponents(row1, row2, row3, row4);
+    } else if (missionType === 'wordle') {
+      // Pour wordle: seulement temps total dans le modal
+      // Les mots (5 lettres) seront ajoutés via le bouton "Gérer les Mots"
+      // 6 essais max (standard Wordle)
+      const row4 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_timeout')
+          .setLabel('Temps total (en secondes)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 180')
+          .setValue('180')
+          .setRequired(true)
+      );
+
+      modal.addComponents(row1, row2, row3, row4);
+    } else if (missionType === 'tictactoe') {
+      // Pour tictactoe (morpion PvP): seulement timeout global pour trouver un adversaire
+      // Pas de données additionnelles - le jeu se gère lui-même
+      const row4 = new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('mission_timeout')
+          .setLabel('Temps pour trouver un adversaire (secondes)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('ex: 1800 (30 minutes)')
+          .setValue('1800')
+          .setRequired(true)
+      );
+
+      modal.addComponents(row1, row2, row3, row4);
     }
 
     return interaction.showModal(modal);
@@ -7287,9 +8999,13 @@ class AdminPanelHandler {
       console.log('🔍 [MISSION SELECT] Select menu - deferUpdate déjà fait');
       missionId = parseInt(interaction.values[0]);
     } else if (interaction.customId && interaction.customId.startsWith('select_mission_')) {
-      // Cas bouton - il faut defer ici
-      console.log('🔍 [MISSION SELECT] Bouton - deferUpdate nécessaire');
-      await interaction.deferUpdate();
+      // Cas bouton - defer seulement si pas déjà fait (important pour les appels depuis modals)
+      if (!interaction.deferred && !interaction.replied) {
+        console.log('🔍 [MISSION SELECT] Bouton - deferUpdate nécessaire');
+        await interaction.deferUpdate();
+      } else {
+        console.log('🔍 [MISSION SELECT] Bouton - deferUpdate déjà fait, on skip');
+      }
       missionId = parseInt(interaction.customId.replace('select_mission_', ''));
     } else {
       console.error('🔴 [MISSION SELECT] Impossible d\'extraire le missionId');
@@ -7322,6 +9038,7 @@ class AdminPanelHandler {
       'wordle': '🟩 Wordle',
       'unscramble': '🔀 Anagramme',
       'hangman': '☠️ Pendu',
+      'tictactoe': '🎮 Morpion',
       'reaction-message': '👍 Réaction',
       'voice-join': '🔊 Vocal'
     };
@@ -7457,6 +9174,316 @@ class AdminPanelHandler {
         embed.addFields({
           name: '💡 Astuce',
           value: 'Utilisez le bouton **Gérer les Puzzles** pour ajouter des devinettes emoji !',
+          inline: false
+        });
+      }
+
+    // Embed spécialisé pour unscramble (Lettres Mélangées)
+    } else if (mission.type === 'unscramble') {
+      const words = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
+      const totalWords = words.length;
+
+      const byDifficulty = {
+        easy: words.filter(q => q.difficulty === 'easy').length,
+        medium: words.filter(q => q.difficulty === 'medium').length,
+        hard: words.filter(q => q.difficulty === 'hard').length
+      };
+
+      // Calculer la longueur moyenne des mots
+      let avgLength = 0;
+      if (totalWords > 0) {
+        avgLength = Math.round(words.reduce((acc, w) => acc + (w.correct_answer?.length || 0), 0) / totalWords);
+      }
+
+      embed = new EmbedBuilder()
+        .setTitle(`🔀 ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+        )
+        .setColor('#E67E22') // Orange pour Unscramble
+        .addFields(
+          {
+            name: '📝 Mots configurés',
+            value: totalWords > 0
+              ? `**${totalWords}** mot${totalWords > 1 ? 's' : ''}`
+              : `⚠️ *Aucun mot*`,
+            inline: true
+          },
+          {
+            name: '🎯 Essais max',
+            value: `**${mission.max_attempts || 3}** essais`,
+            inline: true
+          },
+          {
+            name: '⏱️ Temps total',
+            value: `**${mission.timeout || 60}** secondes`,
+            inline: true
+          }
+        );
+
+      if (totalWords > 0) {
+        embed.addFields(
+          {
+            name: '📈 Répartition par difficulté',
+            value: `🟢 Facile: **${byDifficulty.easy}**\n🟡 Moyen: **${byDifficulty.medium}**\n🔴 Difficile: **${byDifficulty.hard}**`,
+            inline: true
+          },
+          {
+            name: '📏 Longueur moyenne',
+            value: `**${avgLength}** lettres`,
+            inline: true
+          },
+          {
+            name: '🆔 Identifiant',
+            value: `\`${mission.mission_id}\``,
+            inline: true
+          }
+        );
+      } else {
+        embed.addFields({
+          name: '💡 Astuce',
+          value: 'Utilisez le bouton **Gérer les Mots** pour ajouter des mots à deviner !',
+          inline: false
+        });
+      }
+
+    // Embed spécialisé pour hangman (Le Pendu)
+    } else if (mission.type === 'hangman') {
+      const words = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
+      const totalWords = words.length;
+
+      const byDifficulty = {
+        easy: words.filter(q => q.difficulty === 'easy').length,
+        medium: words.filter(q => q.difficulty === 'medium').length,
+        hard: words.filter(q => q.difficulty === 'hard').length
+      };
+
+      // Calculer la longueur moyenne des mots
+      let avgLength = 0;
+      if (totalWords > 0) {
+        avgLength = Math.round(words.reduce((acc, w) => acc + (w.correct_answer?.length || 0), 0) / totalWords);
+      }
+
+      embed = new EmbedBuilder()
+        .setTitle(`☠️ ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+        )
+        .setColor('#9B59B6') // Violet pour Hangman
+        .addFields(
+          {
+            name: '📝 Mots configurés',
+            value: totalWords > 0
+              ? `**${totalWords}** mot${totalWords > 1 ? 's' : ''}`
+              : `⚠️ *Aucun mot*`,
+            inline: true
+          },
+          {
+            name: '❤️ Vies',
+            value: `**6** erreurs max`,
+            inline: true
+          },
+          {
+            name: '⏱️ Temps total',
+            value: `**${mission.timeout || 120}** secondes`,
+            inline: true
+          }
+        );
+
+      // Option première lettre révélée
+      const showFirstLetter = mission.validation_data?.show_first_letter || false;
+
+      if (totalWords > 0) {
+        embed.addFields(
+          {
+            name: '📈 Répartition par difficulté',
+            value: `🟢 Facile: **${byDifficulty.easy}**\n🟡 Moyen: **${byDifficulty.medium}**\n🔴 Difficile: **${byDifficulty.hard}**`,
+            inline: true
+          },
+          {
+            name: '📏 Longueur moyenne',
+            value: `**${avgLength}** lettres`,
+            inline: true
+          },
+          {
+            name: '🔤 1ère lettre',
+            value: showFirstLetter ? '✅ Révélée' : '❌ Cachée',
+            inline: true
+          }
+        );
+      } else {
+        embed.addFields({
+          name: '💡 Astuce',
+          value: 'Utilisez le bouton **Gérer les Mots** pour ajouter des mots à deviner !',
+          inline: false
+        });
+      }
+
+    // Embed spécialisé pour wordle
+    } else if (mission.type === 'wordle') {
+      const words = await db.getQuizQuestionsByMission(interaction.guildId, mission.id);
+      const totalWords = words.length;
+
+      // Compter les mots par difficulté
+      const byDifficulty = {
+        easy: words.filter(q => q.difficulty === 'easy').length,
+        medium: words.filter(q => q.difficulty === 'medium').length,
+        hard: words.filter(q => q.difficulty === 'hard').length
+      };
+
+      // Vérifier les mots avec la bonne longueur selon leur difficulté
+      // Facile=5 lettres, Moyen=6 lettres, Difficile=7 lettres
+      const validWords = words.filter(w => {
+        const len = w.correct_answer?.replace(/[^A-Z]/gi, '').length || 0;
+        const diff = w.difficulty || 'easy';
+        const expectedLen = diff === 'easy' ? 5 : diff === 'hard' ? 7 : 6;
+        return len === expectedLen;
+      }).length;
+      const invalidWords = totalWords - validWords;
+
+      // Récupérer les essais par difficulté
+      let validationData = mission.validation_data || {};
+      if (typeof validationData === 'string') {
+        try { validationData = JSON.parse(validationData); } catch (e) { validationData = {}; }
+      }
+      // Défauts logiques: plus c'est difficile, moins d'essais
+      const easyAttempts = validationData.easy_attempts || 8;    // Facile = 8 essais
+      const mediumAttempts = validationData.medium_attempts || 6; // Moyen = 6 essais
+      const hardAttempts = validationData.hard_attempts || 4;    // Difficile = 4 essais
+
+      embed = new EmbedBuilder()
+        .setTitle(`🟩 ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `**📋 Système de difficulté :**\n` +
+          `🟢 **Facile** = 5 lettres (${easyAttempts} essais)\n` +
+          `🟡 **Moyen** = 6 lettres (${mediumAttempts} essais)\n` +
+          `🔴 **Difficile** = 7 lettres (${hardAttempts} essais)`
+        )
+        .setColor('#2ECC71') // Vert pour Wordle
+        .addFields(
+          {
+            name: '📝 Mots configurés',
+            value: totalWords > 0
+              ? `**${totalWords}** mot${totalWords > 1 ? 's' : ''}${invalidWords > 0 ? ` ⚠️ (${invalidWords} invalide${invalidWords > 1 ? 's' : ''})` : ''}`
+              : `⚠️ *Aucun mot*`,
+            inline: true
+          },
+          {
+            name: '⏱️ Temps total',
+            value: `**${mission.timeout || 180}** secondes`,
+            inline: true
+          }
+        );
+
+      // Option première lettre révélée
+      const showFirstLetter = validationData.show_first_letter || false;
+
+      if (totalWords > 0) {
+        embed.addFields(
+          {
+            name: '📈 Répartition',
+            value: `🟢 Facile (5L): **${byDifficulty.easy}**\n🟡 Moyen (6L): **${byDifficulty.medium}**\n🔴 Difficile (7L): **${byDifficulty.hard}**`,
+            inline: true
+          },
+          {
+            name: '🔤 1ère lettre',
+            value: showFirstLetter ? '✅ Révélée' : '❌ Cachée',
+            inline: true
+          }
+        );
+      } else {
+        embed.addFields({
+          name: '💡 Astuce',
+          value: 'Utilisez le bouton **Gérer les Mots** pour ajouter des mots !',
+          inline: false
+        });
+      }
+
+    // Embed spécialisé pour tictactoe (Morpion)
+    } else if (mission.type === 'tictactoe') {
+      // Récupérer la configuration globale du morpion
+      const tttConfig = await db.getTictactoeConfig(interaction.guildId);
+      const matchmakingChannel = tttConfig?.matchmaking_channel_id;
+      const turnTimeout = tttConfig?.turn_timeout || 60;
+      const missionTimeout = tttConfig?.mission_timeout || 1800;
+      const drawResolution = tttConfig?.draw_resolution || 'random';
+      const maxRetries = tttConfig?.max_search_retries || 3;
+      const maxRounds = tttConfig?.max_rounds || 3;
+
+      // Labels pour la résolution
+      const resolutionLabels = {
+        'random': '🎲 Tirage au sort',
+        'none': '❌ Aucun gagnant',
+        'both': '🤝 Les deux gagnent'
+      };
+
+      // Formater durées
+      const formatTime = (seconds) => {
+        if (seconds >= 3600) {
+          const h = Math.floor(seconds / 3600);
+          const m = Math.floor((seconds % 3600) / 60);
+          return m > 0 ? `${h}h${m}min` : `${h}h`;
+        } else if (seconds >= 60) {
+          return `${Math.floor(seconds / 60)}min`;
+        }
+        return `${seconds}s`;
+      };
+
+      embed = new EmbedBuilder()
+        .setTitle(`🎮 ${mission.name}`)
+        .setDescription(
+          `${mission.description}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `**Mission PvP :** Deux joueurs s'affrontent au Morpion !\n` +
+          `Le gagnant remporte la récompense.`
+        )
+        .setColor('#5865F2')
+        .addFields(
+          {
+            name: '📍 Canal Matchmaking',
+            value: matchmakingChannel ? `<#${matchmakingChannel}>` : '⚠️ *Non configuré*',
+            inline: true
+          },
+          {
+            name: '⏱️ Timer par tour',
+            value: formatTime(turnTimeout),
+            inline: true
+          },
+          {
+            name: '⏰ Timeout recherche',
+            value: formatTime(missionTimeout),
+            inline: true
+          },
+          {
+            name: '🎲 Résolution égalité',
+            value: resolutionLabels[drawResolution] || drawResolution,
+            inline: true
+          },
+          {
+            name: '🔄 Max relances recherche',
+            value: `${maxRetries}`,
+            inline: true
+          },
+          {
+            name: '🎯 Nb manches (égalité)',
+            value: `${maxRounds}`,
+            inline: true
+          },
+          {
+            name: '🆔 Identifiant',
+            value: `\`${mission.mission_id}\``,
+            inline: true
+          }
+        );
+
+      if (!matchmakingChannel) {
+        embed.addFields({
+          name: '⚠️ Configuration requise',
+          value: 'Le canal de matchmaking doit être configuré pour que les missions Morpion fonctionnent !',
           inline: false
         });
       }
@@ -7607,6 +9634,96 @@ class AdminPanelHandler {
             .setStyle(ButtonStyle.Secondary)
         )
       );
+    } else if (mission.type === 'unscramble') {
+      // Mission Lettres Mélangées - boutons spécifiques
+      components.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_unscramble_words_${missionId}`)
+            .setLabel('🔀 Gérer les Mots')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`mission_timeout_config_${missionId}`)
+            .setLabel('⏱️ Temps total')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`mission_max_attempts_config_${missionId}`)
+            .setLabel('🎯 Nombre d\'essais')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+    } else if (mission.type === 'hangman') {
+      // Mission Le Pendu - boutons spécifiques
+      const showFirstLetter = mission.validation_data?.show_first_letter || false;
+      components.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_hangman_words_${missionId}`)
+            .setLabel('☠️ Gérer les Mots')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`mission_timeout_config_${missionId}`)
+            .setLabel('⏱️ Temps total')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`mission_hangman_first_letter_${missionId}`)
+            .setLabel(showFirstLetter ? '✅ 1ère lettre révélée' : '❌ 1ère lettre cachée')
+            .setStyle(showFirstLetter ? ButtonStyle.Success : ButtonStyle.Secondary)
+        )
+      );
+    } else if (mission.type === 'wordle') {
+      // Mission Wordle - boutons spécifiques
+      let vData = mission.validation_data || {};
+      if (typeof vData === 'string') {
+        try { vData = JSON.parse(vData); } catch (e) { vData = {}; }
+      }
+      const showFirstLetter = vData.show_first_letter || false;
+      components.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mission_wordle_words_${missionId}`)
+            .setLabel('🟩 Gérer les Mots')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`mission_timeout_config_${missionId}`)
+            .setLabel('⏱️ Temps total')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`mission_wordle_attempts_${missionId}`)
+            .setLabel('🎯 Essais par difficulté')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`mission_wordle_first_letter_${missionId}`)
+            .setLabel(showFirstLetter ? '✅ 1ère lettre' : '❌ 1ère lettre')
+            .setStyle(showFirstLetter ? ButtonStyle.Success : ButtonStyle.Secondary)
+        )
+      );
+    } else if (mission.type === 'tictactoe') {
+      // Mission Morpion (Tic-Tac-Toe) - boutons de configuration globale
+      components.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ttt_edit_channel_${missionId}`)
+            .setLabel('📍 Canal Matchmaking')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`ttt_edit_timers_${missionId}`)
+            .setLabel('⏱️ Timers')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`ttt_edit_resolution_${missionId}`)
+            .setLabel('🎲 Résolution Égalité')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`ttt_edit_retries_${missionId}`)
+            .setLabel('🔄 Max Relances')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`ttt_edit_rounds_${missionId}`)
+            .setLabel('🎯 Nb Manches')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
     } else {
       components.push(
         new ActionRowBuilder().addComponents(
@@ -7643,11 +9760,19 @@ class AdminPanelHandler {
     // Boutons Supprimer (seulement si pas hardcodée) et Retour
     const finalButtons = [];
 
+    // Bouton activer/désactiver
+    finalButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`mission_toggle_active_${missionId}`)
+        .setLabel(mission.is_active !== false ? '⏸️ Désactiver' : '▶️ Activer')
+        .setStyle(mission.is_active !== false ? ButtonStyle.Secondary : ButtonStyle.Success)
+    );
+
     // N'ajouter le bouton supprimer QUE si la mission n'est pas hardcodée
     if (!isHardcodedMission) {
       finalButtons.push(
         new ButtonBuilder()
-          .setCustomId(`mission_delete_confirm_${missionId}`)
+          .setCustomId(`mission_delete_ask_${missionId}`)
           .setLabel('🗑️ Supprimer')
           .setStyle(ButtonStyle.Danger)
       );
@@ -7656,7 +9781,7 @@ class AdminPanelHandler {
     finalButtons.push(
       new ButtonBuilder()
         .setCustomId('admin_missions')
-        .setLabel('↩️ Retour aux missions')
+        .setLabel('↩️ Retour')
         .setStyle(ButtonStyle.Secondary)
     );
 
@@ -8464,9 +10589,67 @@ class AdminPanelHandler {
   }
 
   /**
-   * Handler pour supprimer une mission
+   * Handler pour demander confirmation de suppression d'une mission
    */
-  async handleDeleteMission(interaction) {
+  async handleDeleteMissionAsk(interaction) {
+    await interaction.deferUpdate();
+
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    try {
+      const guildId = interaction.guildId;
+      const mission = await db.getMissionById(guildId, missionId);
+
+      if (!mission) {
+        return interaction.followUp({
+          content: '❌ Mission introuvable.',
+          flags: 64
+        });
+      }
+
+      // Afficher un embed de confirmation
+      const confirmEmbed = new EmbedBuilder()
+        .setTitle('⚠️ Confirmer la suppression')
+        .setDescription(
+          `Tu es sur le point de supprimer la mission :\n\n` +
+          `**📋 ${mission.name}**\n` +
+          `**🏷️ ID:** \`${mission.mission_id}\`\n` +
+          `**📝 Type:** ${mission.type}\n\n` +
+          `⚠️ **Cette action est irréversible !**\n` +
+          `Toutes les données associées (mots-clés, questions quiz, etc.) seront également supprimées.`
+        )
+        .setColor('#e74c3c')
+        .setFooter({ text: 'Cette action ne peut pas être annulée' });
+
+      const confirmButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mission_delete_confirm_${missionId}`)
+          .setLabel('✅ Oui, supprimer')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`mission_delete_cancel_${missionId}`)
+          .setLabel('❌ Annuler')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({
+        embeds: [confirmEmbed],
+        components: [confirmButtons]
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleDeleteMissionAsk:', error);
+      return interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour confirmer la suppression d'une mission
+   */
+  async handleDeleteMissionConfirm(interaction) {
     await interaction.deferUpdate();
 
     const missionId = parseInt(interaction.customId.split('_').pop());
@@ -8494,6 +10677,78 @@ class AdminPanelHandler {
 
     } catch (error) {
       console.error('❌ Erreur lors de la suppression de la mission:', error);
+      return interaction.followUp({
+        content: `❌ Une erreur est survenue: ${error.message}`,
+        flags: 64
+      });
+    }
+  }
+
+  /**
+   * Handler pour annuler la suppression d'une mission
+   */
+  async handleDeleteMissionCancel(interaction) {
+    // Ne PAS defer ici - handleMissionSelection va le faire avec select_mission_
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    try {
+      // Simuler un bouton select_mission_ pour réutiliser handleMissionSelection
+      interaction.customId = `select_mission_${missionId}`;
+      return this.handleMissionSelection(interaction);
+
+    } catch (error) {
+      console.error('❌ Erreur handleDeleteMissionCancel:', error);
+      await interaction.deferUpdate();
+      return this.showMissionsMenu(interaction);
+    }
+  }
+
+  /**
+   * Handler pour activer/désactiver une mission
+   */
+  async handleMissionToggleActive(interaction) {
+    // Ne PAS defer ici - on va réutiliser handleMissionSelection qui le fera
+    const missionId = parseInt(interaction.customId.split('_').pop());
+
+    try {
+      const guildId = interaction.guildId;
+      const mission = await db.getMissionById(guildId, missionId);
+
+      if (!mission) {
+        await interaction.deferUpdate();
+        return interaction.followUp({
+          content: '❌ Mission introuvable.',
+          flags: 64
+        });
+      }
+
+      // Toggle l'état actif
+      const newState = mission.is_active === false ? true : false;
+      await db.query(
+        'UPDATE missions SET is_active = $1 WHERE id = $2 AND guild_id = $3',
+        [newState, missionId, guildId]
+      );
+
+      // Simuler un bouton select_mission_ pour réafficher les détails mis à jour
+      interaction.customId = `select_mission_${missionId}`;
+
+      // handleMissionSelection va faire le deferUpdate et reconstruire l'embed
+      // avec la valeur is_active mise à jour depuis la DB
+      await this.handleMissionSelection(interaction);
+
+      // Envoyer le message de confirmation après
+      return interaction.followUp({
+        content: newState
+          ? `✅ **${mission.name}** est maintenant **active** !`
+          : `⏸️ **${mission.name}** est maintenant **désactivée**.`,
+        flags: 64
+      });
+
+    } catch (error) {
+      console.error('❌ Erreur handleMissionToggleActive:', error);
+      if (!interaction.deferred) {
+        await interaction.deferUpdate();
+      }
       return interaction.followUp({
         content: `❌ Une erreur est survenue: ${error.message}`,
         flags: 64

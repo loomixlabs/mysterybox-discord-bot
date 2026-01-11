@@ -12,20 +12,27 @@ class AnnouncementSystem {
    */
   async sendAnnouncement(client, guildId, type, data, options = {}) {
     try {
+      console.log(`🔍 [ANNOUNCE DEBUG] Début sendAnnouncement pour type: ${type}`);
+
       // Récupérer le canal d'annonces
       const announcementChannel = await db.getAnnouncementChannel(guildId);
       if (!announcementChannel) {
+        console.log(`🔍 [ANNOUNCE DEBUG] Pas de canal d'annonces configuré pour guild: ${guildId}`);
         return; // Pas de canal configuré
       }
+      console.log(`🔍 [ANNOUNCE DEBUG] Canal trouvé: ${announcementChannel.channel_id}`);
 
       // Récupérer les paramètres
       const settings = await db.getAnnouncementSettings(guildId);
       if (!settings) {
+        console.log(`🔍 [ANNOUNCE DEBUG] Pas de settings pour guild: ${guildId}`);
         return;
       }
+      console.log(`🔍 [ANNOUNCE DEBUG] Toggle ${type}: ${settings[type]}`);
 
       // Vérifier si ce type d'annonce est activé
       if (!settings[type]) {
+        console.log(`🔍 [ANNOUNCE DEBUG] Type ${type} désactivé, annulation`);
         return; // Cette annonce est désactivée
       }
 
@@ -35,12 +42,15 @@ class AnnouncementSystem {
         console.warn(`⚠️ Canal d'annonces introuvable: ${announcementChannel.channel_id}`);
         return;
       }
+      console.log(`🔍 [ANNOUNCE DEBUG] Canal Discord récupéré: ${channel.name}`);
 
       // Créer l'embed selon le type
       const embed = await this.createAnnouncementEmbed(guildId, type, data);
       if (!embed) {
+        console.log(`🔍 [ANNOUNCE DEBUG] Échec création embed pour type: ${type}`);
         return;
       }
+      console.log(`🔍 [ANNOUNCE DEBUG] Embed créé avec succès`)
 
       // Préparer les fichiers attachés (image générée avec frame/étoiles)
       const files = [];
@@ -50,6 +60,9 @@ class AnnouncementSystem {
         files.push(attachment);
         // Utiliser l'image attachée dans l'embed
         embed.setImage(`attachment://${imageName}`);
+      } else if (options.overrideImageUrl) {
+        // Utiliser une URL d'image personnalisée (ex: image cadeau mystère)
+        embed.setImage(options.overrideImageUrl);
       }
 
       // Envoyer l'annonce
@@ -264,6 +277,31 @@ class AnnouncementSystem {
   }
 
   /**
+   * NOUVEAUX TYPES D'ANNONCES - Morpion (Tic-Tac-Toe)
+   */
+
+  /**
+   * Annoncer le résultat d'une partie de Morpion
+   * @param {object} data - Données de la partie
+   * @param {string} data.winner - Nom du gagnant
+   * @param {string} data.loser - Nom du perdant
+   * @param {number} data.moves - Nombre total de coups joués
+   * @param {string} data.duration - Durée de la partie formatée
+   * @param {string} data.resolution - Mode de résolution (victoire directe, timeout, abandon, random)
+   * @param {string} data.reward - Récompense obtenue (collectible)
+   */
+  async announceTictactoeResult(client, guildId, winner, loser, moves, duration, resolution, reward) {
+    return this.sendAnnouncement(client, guildId, 'tictactoe_result', {
+      winner,
+      loser,
+      moves,
+      duration,
+      resolution,
+      reward
+    });
+  }
+
+  /**
    * NOUVEAUX TYPES D'ANNONCES - Pièges Spécifiques
    */
 
@@ -283,6 +321,31 @@ class AnnouncementSystem {
       userName,
       trapName,
       shameMessage
+    });
+  }
+
+  /**
+   * Annoncer qu'un joueur a subi le piège "Shame Nickname"
+   */
+  async announceTrapShameNickname(client, guildId, userName, trapName, shameNickname, durationMinutes) {
+    // Formater la durée en texte lisible
+    let durationText;
+    if (durationMinutes >= 1440) {
+      const hours = Math.floor(durationMinutes / 60);
+      durationText = `${hours} heure${hours > 1 ? 's' : ''}`;
+    } else if (durationMinutes >= 60) {
+      const hours = Math.floor(durationMinutes / 60);
+      durationText = `${hours} heure${hours > 1 ? 's' : ''}`;
+    } else {
+      durationText = `${durationMinutes} minute${durationMinutes > 1 ? 's' : ''}`;
+    }
+
+    return this.sendAnnouncement(client, guildId, 'trap_shame_nickname', {
+      userName,
+      trapName,
+      shameNickname,
+      duration: durationText,
+      durationMinutes
     });
   }
 
@@ -480,6 +543,55 @@ class AnnouncementSystem {
     } catch (error) {
       console.error('❌ Erreur lors de l\'envoi de l\'annonce Joker utilisé:', error);
     }
+  }
+
+  // ==================== CADEAU MYSTÈRE À UN AMI ====================
+
+  /**
+   * Annoncer l'envoi d'un cadeau mystère
+   * @param {Client} client - Discord client
+   * @param {string} guildId - Guild ID
+   * @param {string} giverName - Nom du joueur qui offre
+   * @param {string} recipientName - Nom du destinataire
+   * @param {string} giftImageUrl - URL de l'image/GIF du cadeau choisie par le giver (optionnel)
+   */
+  async announceMysteryGiftSent(client, guildId, giverName, recipientName, giftImageUrl = null) {
+    return this.sendAnnouncement(client, guildId, 'mystery_gift_sent', {
+      giverName,
+      recipientName
+    }, {
+      overrideImageUrl: giftImageUrl  // L'image du cadeau choisie par le giver
+    });
+  }
+
+  /**
+   * Annoncer l'ouverture d'un cadeau mystère
+   */
+  async announceMysteryGiftOpened(client, guildId, giverName, recipientName, collectibleName, collectibleRarity, imageBuffer = null) {
+    // Mapping rareté vers emoji et label
+    const rarityEmojis = {
+      legendary: '🟡',
+      epic: '🟣',
+      rare: '🔵',
+      common: '⚪'
+    };
+    const rarityLabels = {
+      legendary: 'LÉGENDAIRE',
+      epic: 'ÉPIQUE',
+      rare: 'RARE',
+      common: 'COMMUN'
+    };
+
+    return this.sendAnnouncement(client, guildId, 'mystery_gift_opened', {
+      giverName,
+      recipientName,
+      collectibleName,
+      rarityEmoji: rarityEmojis[collectibleRarity] || '⚪',
+      rarityLabel: rarityLabels[collectibleRarity] || 'COMMUN'
+    }, {
+      imageBuffer,
+      imageName: 'mystery_gift.png'
+    });
   }
 }
 

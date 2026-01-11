@@ -5,9 +5,219 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [2.5.0] - 2026-01-11
+
+### ✨ Added
+
+- **[Traps - Shame Nickname]**: Nouveau piège "Pseudo Honteux" qui change temporairement le pseudo du joueur
+  - **Fonctionnalité principale**:
+    - Change le pseudo Discord du joueur en un pseudo honteux aléatoire
+    - Durée configurable (30min, 2h, 24h selon la sévérité)
+    - Surveillance automatique: si le joueur essaie de changer, le pseudo est immédiatement restauré
+    - Compteur de tentatives de fuite avec DM moqueur
+    - Restauration automatique à l'expiration
+  - **Configuration dans Admin Panel (trapAdminHandler)**:
+    - Nouveau type de piège `shame-nickname` visible dans le sélecteur
+    - Durée configurable (utilise `cooldown_duration`)
+    - **Pseudos par thème**: Chaque piège peut avoir sa propre liste de pseudos
+    - Bouton "🏷️ Gérer les Pseudos" dans la vue détaillée du piège
+    - Interface de gestion: Ajouter, Supprimer tout, Réinitialiser aux défauts
+    - Max 20 pseudos par piège
+    - Fallback: piège → guild_config → défauts système
+  - **1 piège par défaut**:
+    - 🎭 Pseudo Honteux (60 min par défaut, durée configurable par les admins)
+  - **Pseudos par défaut**:
+    - 🐔 Poulet Piégé, 🤡 Clown du Serveur, 💩 Victime du Jour, 🐌 Escargot Lent, 🦆 Canard Malchanceux, etc.
+  - **Système de badges (13 nouveaux badges)**:
+    - **Victimes**: Première Honte, Victime Régulière (5x), Victime en Série (15x), Victime Éternelle (50x)
+    - **Résistance**: Première Tentative, Fuyard Persistant (10x), Fuyard Désespéré (50x), Légende de la Fuite (200x)
+    - **Survie**: Survivant 1h, Survivant 1 jour, Survivant 1 semaine, Martyr du Mois
+    - **Spécial**: Roi des Clowns (pseudo "Clown" 10x)
+  - **Intégration complète**:
+    - Toggle annonce dans admin panel (Pièges → Pseudo Honteux)
+    - Template d'annonce personnalisable
+    - Logging complet dans audit_logs
+  - **Fichiers créés**:
+    - `scripts/migrations/add-shame-nickname-trap.js`: Migration DB (inclut colonne `shame_nicknames` JSONB dans `traps`)
+    - `scripts/seed-shame-nickname-traps.js`: Seed pièges par défaut
+    - `scripts/seed-shame-nickname-badges.js`: Seed badges
+    - `handlers/shameNicknameHandler.js`: Handler surveillance + cleanup
+    - `events/guildMemberUpdate.js`: Événement Discord
+  - **Fichiers modifiés**:
+    - `handlers/trapAdminHandler.js`: Type shame-nickname + gestion pseudos par piège
+    - `handlers/mysteryBoxHandler.js`: Ajout case 'shame-nickname' + priorité pseudos (piège → serveur → défaut)
+    - `handlers/badgeHandler.js`: 3 hooks (onShameNicknameTriggered, onShameNicknameEscapeAttempt, onShameNicknameExpired)
+    - `handlers/adminPanelHandler.js`: Toggle annonce + templates
+    - `utils/announcements.js`: Méthode `announceTrapShameNickname()`
+    - `utils/announcementDefaults.js`: Template + toggle par défaut
+    - `index.js`: Initialisation shameNicknameHandler
+
+### ✨ Added (2026-01-10)
+
+- **[Admin Panel - Templates]**: Système de navigation par catégories pour les templates d'annonces
+  - **Problème résolu**: Limite Discord de 25 options dans un select menu (27 templates existants)
+  - **Solution**: Double sélecteur - d'abord la catégorie, puis les templates de cette catégorie
+  - **5 catégories créées**:
+    1. 📦 Collectibles (9 templates): legendary_collectible, collection_completed, etc.
+    2. ⚠️ Pièges (5 templates): trap_cooldown, trap_lose_collectible, etc.
+    3. ⚔️ Missions (7 templates): mission_word_guessed, mission_started, etc.
+    4. 🎨 Thèmes (2 templates): theme_expired, theme_expiring_soon
+    5. 🎁 Social & Autres (3 templates): mystery_gift_sent, mystery_gift_opened, super_bonus_joker_used
+  - **Compteur par catégorie**: Affiche X/Y templates configurés
+  - **Navigation intuitive**: Boutons "🔙 Catégories" et "🏠 Menu Annonces"
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`:
+      - `showTemplatesListMenu()` transformé en sélecteur de catégories (lignes 6617-6743)
+      - Nouvelle fonction `showTemplateCategoryMenu()` (lignes 6746-6908)
+      - Routing ajouté pour `select_template_category` (lignes 727, 964)
+
+- **[Super Bonus - Recovery]**: Nouveau super bonus permettant de récupérer les collectibles perdus du thème actif
+  - **Fonctionnalité inverse du piège lose-all-collectibles**
+  - **Limité au thème actif uniquement** (ne récupère pas les collectibles des thèmes précédents)
+  - **Flow complet**:
+    1. Joueur active le bonus depuis `/profile` → Inventaire Bonus → Activer
+    2. Récupération automatique des collectibles perdus du thème actif
+    3. Restauration du niveau, XP et mint number originaux
+    4. Recalcul automatique des compteurs `player_progress`
+    5. Annonce publique avec nom du thème (si activée)
+  - **Nouvelles fonctions DB**:
+    - `getLostCollectibles(guildId, playerId)`: Liste les collectibles perdus du thème actif
+    - `recoverAllLostCollectibles(guildId, playerId, source)`: Restaure tout + retourne `themeName`
+  - **Handler complet**:
+    - `hasRecoveryBonus()`: Vérifie si le joueur a le bonus
+    - `activateRecoveryBonus()`: Exécute la récupération avec logs
+    - `createRecoveryResultEmbed()`: Embed de résultat stylé avec nom du thème
+  - **Système d'annonces intégré dans admin panel**:
+    - Toggle: `all_collectibles_recovered` (visible dans Annonces → Collectibles, 9e toggle)
+    - Compteurs mis à jour: 9/9 collectibles, 24 total
+    - Template avec variables: `{userName}`, `{restoredCount}`, `{themeName}`
+  - **Distribution protégée**:
+    - `activation_mode: 'manual'` → Ne peut PAS être obtenu via mystery box aléatoire
+    - Distribution uniquement via Give Unique ou attribution admin
+  - **Configuration bonus**:
+    - Icône: 🔄
+    - Rareté: Legendary (très puissant)
+    - Type: manual (activation via /profile)
+    - Charges: 1 par défaut
+    - effect_type: 'recovery'
+  - **Scripts créés**:
+    - `scripts/seed-recovery-bonus.js`: Ajoute le bonus aux serveurs
+    - `scripts/add-recovery-announcement-column.js`: Migration colonne toggle
+    - `scripts/deploy-recovery-templates.js`: Déploie templates sur tous les thèmes
+  - **Fichiers modifiés**:
+    - `utils/database-pg.js`: Fonctions limitées au thème actif (lignes 2157-2291)
+    - `handlers/superBonusHandler.js`: Handler complet avec themeName (lignes 2091-2272)
+    - `handlers/profileHandler.js`: Intégration effect_type='recovery' (lignes 399-463)
+    - `handlers/adminPanelHandler.js`: Toggle UI ajouté (lignes 4886-4989, 6597)
+    - `handlers/mysteryBoxHandler.js`: Exclusion activation_mode='manual' (lignes 175-185)
+    - `utils/announcementDefaults.js`: Template + toggle par défaut
+
+- **[Super Bonus - Cadeau Mystère à un ami]**: Nouveau super bonus permettant d'offrir un collectible à un autre joueur
+  - **Flow complet**:
+    1. Joueur active le bonus depuis `/profile` → Inventaire Bonus → Activer
+    2. Sélection du visuel du cadeau (images configurables par admin)
+    3. Sélection du destinataire via UserSelectMenu
+    4. Création d'un thread privé dans le canal missions
+    5. DM envoyé au destinataire avec lien vers le thread
+    6. Destinataire ouvre le cadeau → collectible aléatoire (priorité: manquants)
+    7. Annonces publiques (envoi + ouverture)
+  - **Système complet de tracking**:
+    - Incrémentation progression collection (`incrementProgress`)
+    - Tracking badges (`onCollectibleFoundWithDetails`, `onCollectibleEvolution`)
+    - Déblocage frames automatique (`checkAndUnlockFrames`)
+    - Annonces légendaire/level up/max level/restored
+    - Embed généré via `collectibleEmbedBuilder` (frame, mint, étoiles)
+  - **Système d'annonces conforme**:
+    - Toggles: `mystery_gift_sent`, `mystery_gift_opened` (dans `DEFAULT_ANNOUNCEMENT_TOGGLES`)
+    - Templates personnalisables dans `announcement_templates`
+    - Utilisation de `sendAnnouncement()` pattern
+    - Variables: `{giverName}`, `{recipientName}`, `{collectibleName}`, `{rarityEmoji}`, `{rarityLabel}`
+  - **Image cadeau par défaut**:
+    - Création automatique lors de `registerGuild()` (installation nouveau serveur)
+    - Migration pour serveurs existants dans `run-mystery-gift-migration.js`
+    - Helper `getDefaultGiftImage(guildId)` pour fallback cohérent
+  - **Nouvelles tables DB**:
+    - `mystery_gift_threads`: Tracking des cadeaux en attente/ouverts
+    - `gift_images`: Visuels configurables par serveur (avec `is_default`)
+  - **Interface Admin**: `/admin` → Paramétrage → Mystery Box → 🎁 Visuels Cadeaux
+    - Ajouter des images/GIFs de cadeaux
+    - Définir une image par défaut
+    - Supprimer des visuels
+  - **Fichiers créés**:
+    - `handlers/mysteryGiftHandler.js` (750+ lignes)
+    - `database/migrations/add-mystery-gift-system.sql`
+    - `scripts/run-mystery-gift-migration.js`
+  - **Fichiers modifiés**:
+    - `handlers/profileHandler.js`: Intégration effect_type='transfer'
+    - `handlers/adminPanelHandler.js`: Interface admin visuels cadeaux + routing
+    - `handlers/modalHandler.js`: Modal ajout visuel
+    - `events/interactionCreate.js`: Routing complet (buttons, selects, UserSelect)
+    - `utils/announcements.js`: Fonctions utilisant `sendAnnouncement()` pattern
+    - `utils/announcementDefaults.js`: Templates + toggles mystery_gift
+    - `utils/guildConfig.js`: Création image par défaut dans `registerGuild()`
+
+- **[Admin Panel - Toggles Social]**: Ajout de la catégorie "Social" dans le menu Annonces
+  - Nouveau bouton 🎁 **Social** dans `/admin` → Paramétrage → 📢 Annonces
+  - 2 toggles pour Cadeau Mystère: **Envoyé** et **Ouvert**
+  - Compteur mis à jour: 23 annonces disponibles (au lieu de 21)
+  - Fichier modifié: `handlers/adminPanelHandler.js`
+    - Nouvelle fonction `showAnnouncementsSocialMenu()`
+    - Routage `announcements_social` ajouté
+    - Routage toggle `mystery_gift_*` ajouté dans `handleToggleAnnouncementSetting()`
+    - Labels templates ajoutés pour upload d'images
+
+- **[Admin Panel - Réorganisation MB Custom]**: Amélioration du menu Mystery Box
+  - **Paramétrage**: Suppression du bouton "Visuels Cadeaux" (doublon avec MB Custom)
+  - **Bouton renommé**: "MB par Rareté" → "📦 MB Custom"
+  - **Dans MB Custom**: Bouton "Visuels Cadeaux" → "🎁 Mysterybox Cadeau"
+  - **Embed enrichi**: Ajout section "Mysterybox Cadeau (Super Bonus)" avec:
+    - Nombre de visuels configurés
+    - Visuel par défaut affiché
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`: Suppression bouton doublon + renommage
+    - `handlers/mysteryBoxConfigHandler.js`: Renommage bouton + section embed
+
+- **[Mystery Gift - Prévisualisation Image]**: Aperçu dynamique de l'emballage du cadeau
+  - **Flow amélioré**: L'utilisateur voit maintenant l'image en grand lors de la sélection
+  - **Sélection dynamique**: Le select menu met à jour l'embed avec l'aperçu de chaque image
+  - **Bouton confirmation**: "✅ Confirmer cet emballage" pour valider le choix
+  - **Informations affichées**: Nom de l'image, étoile si par défaut, image en grand format
+  - **Fichiers modifiés**:
+    - `handlers/mysteryGiftHandler.js`:
+      - `handleImagePreview()`: Nouvelle fonction pour prévisualisation dynamique
+      - `handleImageConfirm()`: Nouvelle fonction pour confirmer la sélection
+      - Router mis à jour avec nouveaux customIds
+    - `events/interactionCreate.js`: Routing pour `mystery_gift_preview:` et `mystery_gift_confirm_image:`
 
 ### 🐛 Fixed (2026-01-10)
+
+- **[Mystery Gift - InteractionAlreadyReplied]**: Correction de l'erreur lors de l'activation du super bonus
+  - **Problème**: "Une erreur est survenue" lors de l'activation depuis `/profile` → Inventaire Bonus
+  - **Cause**: `deferUpdate()` appelé deux fois (profileHandler + mysteryGiftHandler)
+  - **Solution**: Suppression du `deferUpdate()` redondant dans `mysteryGiftHandler.startMysteryGiftFlow()`
+  - **Fichier modifié**: `handlers/mysteryGiftHandler.js`
+
+- **[Mystery Gift - Contrainte collections]**: Correction de l'erreur lors de l'ouverture du cadeau
+  - **Problème**: "Échec de l'interaction" quand le destinataire ouvre la mystery box
+  - **Cause**: Contrainte `collections_source_check` n'incluait pas `mystery_gift`
+  - **Solution**: `ALTER TABLE collections DROP CONSTRAINT ... ADD CONSTRAINT` avec `mystery_gift` ajouté
+  - **Requête**: Migration exécutée sur local et VPS
+
+- **[Mystery Gift - Archivage thread]**: Ajout d'un message avant archivage du thread
+  - **Problème**: Thread ne s'archivait pas visuellement après ouverture
+  - **Solution**: Envoi d'un message "🔒 Ce thread sera archivé..." après 30s, puis archivage 5s après
+  - **Fichier modifié**: `handlers/mysteryGiftHandler.js`
+
+- **[Mystery Gift - Création joueur]**: Correction pour les nouveaux joueurs sans compte
+  - **Problème**: Erreur `db.createPlayer is not a function` pour destinataires sans historique
+  - **Cause**: Fonction `createPlayer` n'existe pas dans le wrapper DB
+  - **Solution**: Remplacement par `db.upsertPlayer()` (lignes 363 et 598)
+  - **Fichier modifié**: `handlers/mysteryGiftHandler.js`
+
+- **[Legendary Announcement - Image cadeau]**: Correction de l'image affichée dans l'annonce légendaire
+  - **Problème**: Annonce légendaire via mystery gift affichait l'image du cadeau au lieu du collectible
+  - **Cause**: Template VPS `legendary_collectible` avait `image_url`/`thumbnail_url` configurés
+  - **Solution**: `UPDATE announcement_templates SET image_url = NULL, thumbnail_url = NULL` sur VPS
 
 - **[Leaderboard - Doublons pagination]**: Correction des joueurs apparaissant plusieurs fois dans les catégories Legendary et Epic
   - **Problème**: Les joueurs pouvaient apparaître sur plusieurs pages du leaderboard
