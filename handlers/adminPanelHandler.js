@@ -12,6 +12,7 @@ const dailyRewardsAdminHandler = require('./dailyRewardsAdminHandler');
 const mysteryBoxConfigHandler = require('./mysteryBoxConfigHandler');
 const craftingConfigHandler = require('./craftingConfigHandler');
 const framesConfigHandler = require('./framesConfigHandler');
+const statsHandler = require('./statsHandler');
 const { canAccessAdminPanel } = require('../utils/permissions');
 const GuildConfig = require('../utils/guildConfig');
 const { LOOMIX_BRANDING } = require('../utils/footerHelper');
@@ -267,8 +268,10 @@ class AdminPanelHandler {
     }
     else if (customId === 'admin_settings') {
       await this.showSettingsMenu(interaction);
-    } else if (customId === 'admin_stats') {
-      await this.showStats(interaction);
+    }
+    // 📊 Statistiques - Délégation vers statsHandler
+    else if (customId === 'admin_stats' || customId.startsWith('stats_')) {
+      return statsHandler.handleInteraction(interaction);
     }
 
     // SOUS-MENU PARAMÉTRAGE
@@ -411,7 +414,8 @@ class AdminPanelHandler {
     else if (customId === 'theme_create') {
       await this.showCreateThemeModal(interaction);
     } else if (customId === 'theme_extend') {
-      await this.showExtendThemeModal(interaction);
+      // Rétrocompatibilité: redirige vers le nouveau wizard de durée
+      await this.showDurationQuickMenu(interaction);
     } else if (customId.startsWith('theme_delete_confirm_')) {
       await this.handleDeleteTheme(interaction);
     }
@@ -423,14 +427,14 @@ class AdminPanelHandler {
       await this.showTitleModal(interaction);
     } else if (customId === 'theme_duration') {
       await this.showDurationQuickMenu(interaction);
-    } else if (customId.startsWith('duration_quick_')) {
-      await this.handleQuickDuration(interaction);
+    } else if (customId.startsWith('duration_set_')) {
+      await this.handleDurationSet(interaction);
     } else if (customId.startsWith('duration_confirm_')) {
-      await this.applyQuickDuration(interaction);
+      await this.handleDurationConfirm(interaction);
+    } else if (customId === 'duration_custom_input') {
+      await this.handleDurationCustomInput(interaction);
     } else if (customId === 'duration_cancel') {
-      await this.cancelDurationChange(interaction);
-    } else if (customId === 'duration_custom') {
-      await this.showDurationModal(interaction);
+      await this.showDurationQuickMenu(interaction);
     } else if (customId === 'theme_winner_message') {
       await this.showCelebrationTutorial(interaction);
     } else if (customId === 'theme_winner_message_open_modal') {
@@ -873,7 +877,8 @@ class AdminPanelHandler {
 
     // Pièges - Déléguer à trapAdminHandler (qui fera son propre defer)
     if (customId === 'select_trap' || customId === 'select_trap_type' ||
-        customId.startsWith('select_trap_severity_') || customId.startsWith('select_change_trap_severity_')) {
+        customId.startsWith('select_trap_severity_') || customId.startsWith('select_change_trap_severity_') ||
+        customId.startsWith('trap_delete_nickname_')) {
       return trapAdminHandler.handleInteraction(interaction);
     }
 
@@ -919,6 +924,11 @@ class AdminPanelHandler {
     // 🖼️ Frames Config - Déléguer à framesConfigHandler (qui fera son propre defer)
     if (customId.startsWith('frames_condition_select_') || customId.startsWith('frame_wizard_') || customId.startsWith('frame_assign_')) {
       return framesConfigHandler.handleInteraction(interaction);
+    }
+
+    // 📊 Statistiques - Déléguer à statsHandler (qui fera son propre defer)
+    if (customId.startsWith('stats_')) {
+      return statsHandler.handleInteraction(interaction);
     }
 
     // ✅ CRITIQUE: Déférer IMMÉDIATEMENT (sauf pour les délégations ci-dessus)
@@ -1138,13 +1148,13 @@ class AdminPanelHandler {
           .setStyle(ButtonStyle.Success)
       ];
 
-      // Ajouter bouton prolongation si un thème actif existe
+      // Ajouter bouton modification durée si un thème actif existe
       const activeTheme = allThemes.find(t => t.is_active);
       if (activeTheme && activeTheme.duration_days !== null) {
         row1Buttons.push(
           new ButtonBuilder()
-            .setCustomId('theme_extend')
-            .setLabel('⏰ Prolonger le Thème Actif')
+            .setCustomId('theme_duration')
+            .setLabel('⏱️ Modifier Durée')
             .setStyle(ButtonStyle.Primary)
         );
       }
@@ -1627,13 +1637,22 @@ class AdminPanelHandler {
   }
 
   /**
-   * Menu rapide pour modifier la durée avec des boutons prédéfinis
+   * Wizard Durée - Approche simplifiée: "Le thème expire dans X jours"
+   * Pattern: graphiques-discord skill - Wizard étape par étape avec boutons
+   * Plus de distinction Prolonger/Réduire - juste définir la date d'expiration
    */
   async showDurationQuickMenu(interaction) {
     const theme = await db.getActiveTheme(interaction.guildId);
     const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
 
-    // Créer l'embed avec les informations actuelles
+    // Helper: Créer barre de progression ASCII
+    const createProgressBar = (percentage, length = 10) => {
+      const filled = Math.round(percentage / 100 * length);
+      const empty = length - filled;
+      return '█'.repeat(filled) + '░'.repeat(empty) + ` ${percentage}%`;
+    };
+
+    // Créer l'embed avec design moderne (skill graphiques-discord)
     const embed = new EmbedBuilder()
       .setTitle('⏱️ Modifier la Durée du Thème')
       .setColor('#3498db');
@@ -1645,63 +1664,375 @@ class AdminPanelHandler {
       statusText = `⏸️ **Statut:** Non activé (${theme.duration_days} jours configurés)`;
     } else {
       statusText =
-        `⏰ **Temps restant actuel:** ${expirationInfo.daysRemaining} jours (${expirationInfo.percentageRemaining}%)\n` +
+        `📊 **Progression:** ${createProgressBar(100 - expirationInfo.percentageRemaining)}\n` +
+        `⏰ **Temps restant:** ${expirationInfo.daysRemaining} jours\n` +
         `📅 **Expire le:** <t:${Math.floor(expirationInfo.expirationDate.getTime() / 1000)}:D>`;
     }
 
     embed.setDescription(
       statusText + '\n\n' +
-      '💡 **Prolonger le thème de combien ?**\n' +
-      'Choisis une durée prédéfinie ou personnalise :'
+      '━━━━━━━━━━━━━━━━━━━━\n\n' +
+      '🎯 **Le thème expire dans combien de jours ?**\n' +
+      '*(Choisir une durée - minimum 1 jour)*'
     );
+    embed.setFooter({ text: '💡 Sélectionnez le nombre de jours restants' });
 
-    // Boutons de durée prédéfinie
+    // Boutons de durée prédéfinis (positifs uniquement)
     const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('duration_quick_7')
-        .setLabel('+7 jours')
-        .setEmoji('📅')
+        .setCustomId('duration_set_7')
+        .setLabel('7 jours')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('duration_quick_14')
-        .setLabel('+14 jours')
-        .setEmoji('📅')
+        .setCustomId('duration_set_14')
+        .setLabel('14 jours')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('duration_quick_30')
-        .setLabel('+30 jours')
-        .setEmoji('📅')
+        .setCustomId('duration_set_30')
+        .setLabel('30 jours')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('duration_set_45')
+        .setLabel('45 jours')
         .setStyle(ButtonStyle.Primary)
     );
 
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('duration_quick_60')
-        .setLabel('+2 mois (60j)')
-        .setEmoji('📆')
+        .setCustomId('duration_set_60')
+        .setLabel('60 jours')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('duration_quick_90')
-        .setLabel('+3 mois (90j)')
-        .setEmoji('📆')
+        .setCustomId('duration_set_90')
+        .setLabel('90 jours')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('duration_custom')
-        .setLabel('✏️ Personnalisé...')
-        .setStyle(ButtonStyle.Secondary)
+        .setCustomId('duration_set_180')
+        .setLabel('180 jours')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('duration_set_365')
+        .setLabel('365 jours')
+        .setStyle(ButtonStyle.Primary)
     );
 
+    // Boutons spéciaux: Personnalisé, Illimité et Retour
     const row3 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('duration_custom_input')
+        .setLabel('✏️ Saisir une durée')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('duration_set_0')
+        .setLabel('♾️ Illimité')
+        .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('theme_config_back')
         .setLabel('◀️ Retour')
         .setStyle(ButtonStyle.Secondary)
     );
 
+    // Utiliser editReply si déjà déféré (cas collector), sinon update
+    if (interaction.deferred || interaction.replied) {
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row1, row2, row3]
+      });
+    }
     return interaction.update({
       embeds: [embed],
       components: [row1, row2, row3]
     });
+  }
+
+  /**
+   * Gérer la saisie personnalisée de durée via message collector
+   * Pattern: graphiques-discord skill - Wizard dans le chat (NO MODAL)
+   */
+  async handleDurationCustomInput(interaction) {
+    await interaction.deferUpdate();
+
+    const theme = await db.getActiveTheme(interaction.guildId);
+    const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
+    const currentDays = expirationInfo.daysRemaining || theme.duration_days || 0;
+
+    // Créer l'embed pour demander la saisie
+    const embed = new EmbedBuilder()
+      .setTitle('✏️ Saisir la Durée')
+      .setColor('#f39c12')
+      .setDescription(
+        `📊 **Durée actuelle:** ${currentDays > 0 ? `${currentDays} jours` : 'Illimitée'}\n\n` +
+        '━━━━━━━━━━━━━━━━━━━━\n\n' +
+        '🎯 **Tapez le nombre de jours dans le chat**\n' +
+        '*(Exemple: 25 pour 25 jours)*\n\n' +
+        '⏳ Vous avez **30 secondes** pour répondre.\n' +
+        '❌ Tapez `annuler` pour annuler.'
+      )
+      .setFooter({ text: '💡 Minimum 1 jour - Maximum 9999 jours' });
+
+    // Désactiver les boutons pendant la saisie
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('duration_waiting')
+        .setLabel('⏳ En attente de votre réponse...')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true)
+    );
+
+    await interaction.editReply({
+      embeds: [embed],
+      components: [disabledRow]
+    });
+
+    // Créer un message collector
+    // IMPORTANT: Stocker référence à 'this' pour les callbacks
+    const self = this;
+    const filter = m => m.author.id === interaction.user.id;
+    const collector = interaction.channel.createMessageCollector({
+      filter,
+      max: 1,
+      time: 30000 // 30 secondes
+    });
+
+    collector.on('collect', async (message) => {
+      const input = message.content.trim().toLowerCase();
+
+      // Supprimer le message de l'utilisateur pour garder le chat propre
+      try {
+        await message.delete();
+      } catch (e) {
+        // Ignorer si pas les permissions
+      }
+
+      // Vérifier si annulation
+      if (input === 'annuler' || input === 'cancel') {
+        return self.showDurationQuickMenu(interaction);
+      }
+
+      // Parser le nombre
+      const days = parseInt(input);
+
+      // Validation
+      if (isNaN(days)) {
+        const errorEmbed = new EmbedBuilder()
+          .setTitle('❌ Valeur Invalide')
+          .setColor('#e74c3c')
+          .setDescription(
+            `**"${input}" n'est pas un nombre valide.**\n\n` +
+            'Veuillez réessayer avec un nombre entier.'
+          );
+
+        const retryRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('duration_custom_input')
+            .setLabel('🔄 Réessayer')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('theme_duration')
+            .setLabel('◀️ Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.editReply({
+          embeds: [errorEmbed],
+          components: [retryRow]
+        });
+      }
+
+      if (days < 1 || days > 9999) {
+        const errorEmbed = new EmbedBuilder()
+          .setTitle('❌ Valeur Hors Limites')
+          .setColor('#e74c3c')
+          .setDescription(
+            `**${days} jours** n'est pas dans les limites acceptées.\n\n` +
+            '📏 **Limites:** 1 - 9999 jours'
+          );
+
+        const retryRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('duration_custom_input')
+            .setLabel('🔄 Réessayer')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('theme_duration')
+            .setLabel('◀️ Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.editReply({
+          embeds: [errorEmbed],
+          components: [retryRow]
+        });
+      }
+
+      // Simuler le clic sur duration_set_X
+      interaction.customId = `duration_set_${days}`;
+      return self.handleDurationSet(interaction);
+    });
+
+    collector.on('end', async (collected, reason) => {
+      if (reason === 'time' && collected.size === 0) {
+        // Timeout - retour au menu
+        const timeoutEmbed = new EmbedBuilder()
+          .setTitle('⏰ Temps Écoulé')
+          .setColor('#e74c3c')
+          .setDescription('Aucune réponse reçue dans les 30 secondes.');
+
+        const retryRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('duration_custom_input')
+            .setLabel('🔄 Réessayer')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('theme_duration')
+            .setLabel('◀️ Retour')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        await interaction.editReply({
+          embeds: [timeoutEmbed],
+          components: [retryRow]
+        });
+      }
+    });
+  }
+
+  /**
+   * Gérer la définition de durée (boutons duration_set_X)
+   * Approche simplifiée: "Le thème expire dans X jours" (pas de négatif possible)
+   */
+  async handleDurationSet(interaction) {
+    // Ne déférer que si pas déjà fait (cas du message collector)
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate();
+    }
+
+    const days = parseInt(interaction.customId.replace('duration_set_', ''));
+    const theme = await db.getActiveTheme(interaction.guildId);
+    const expirationInfo = themeExpirationHandler.calculateExpiration(theme);
+
+    // Calculer nouvelle durée totale depuis l'activation
+    let newTotalDuration;
+    if (days === 0) {
+      // Mode illimité
+      newTotalDuration = 0;
+    } else if (expirationInfo.notActivated) {
+      newTotalDuration = days;
+    } else {
+      const now = new Date();
+      const activatedAt = new Date(theme.activated_at);
+      const daysElapsed = Math.floor((now - activatedAt) / (24 * 60 * 60 * 1000));
+      newTotalDuration = daysElapsed + days;
+    }
+
+    const currentDays = expirationInfo.daysRemaining || theme.duration_days || 0;
+    const diff = days - currentDays;
+    const diffText = diff > 0 ? `+${diff}` : (diff === 0 ? '±0' : `${diff}`);
+    const isExtending = diff > 0;
+    const isReducing = diff < 0;
+
+    // Confirmation avec indication claire de l'effet
+    const embed = new EmbedBuilder()
+      .setTitle(days === 0 ? '♾️ Passer en Mode Illimité' : '⏱️ Confirmer la Modification')
+      .setColor(days === 0 ? '#9b59b6' : (isExtending ? '#2ecc71' : (isReducing ? '#e74c3c' : '#3498db')));
+
+    if (days === 0) {
+      embed.setDescription(
+        '**Le thème n\'expirera plus jamais**\n\n' +
+        `📊 **Durée actuelle:** ${currentDays > 0 ? `${currentDays} jours` : 'Illimitée'}\n` +
+        `♾️ **Nouvelle durée:** Illimitée\n\n` +
+        '━━━━━━━━━━━━━━━━━━━━\n\n' +
+        '⚠️ **Le thème restera actif indéfiniment.**'
+      );
+    } else {
+      embed.setDescription(
+        '**Confirmation requise**\n\n' +
+        `📊 **Durée actuelle:** ${currentDays > 0 ? `${currentDays} jours` : 'Illimitée'}\n` +
+        `🎯 **Nouvelle durée:** ${days} jours\n` +
+        `📈 **Différence:** ${diffText} jours ${isExtending ? '⬆️' : (isReducing ? '⬇️' : '')}\n\n` +
+        '━━━━━━━━━━━━━━━━━━━━\n\n' +
+        (isReducing
+          ? '⚠️ **Attention: Vous réduisez la durée du thème.**'
+          : (isExtending ? '✅ **Vous prolongez le thème.**' : '📊 **Durée inchangée.**'))
+      );
+    }
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`duration_confirm_${newTotalDuration}`)
+        .setLabel('✅ Confirmer')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('theme_duration')
+        .setLabel('❌ Annuler')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    return interaction.editReply({
+      embeds: [embed],
+      components: [row]
+    });
+  }
+
+  /**
+   * Confirmer et appliquer la modification de durée
+   */
+  async handleDurationConfirm(interaction) {
+    await interaction.deferUpdate();
+
+    const newTotalDuration = parseInt(interaction.customId.replace('duration_confirm_', ''));
+    const theme = await db.getActiveTheme(interaction.guildId);
+
+    try {
+      // Mettre à jour la durée
+      await db.queryOne(
+        'UPDATE themes SET duration_days = $1 WHERE id = $2',
+        [newTotalDuration, theme.id]
+      );
+
+      // Recalculer expiration
+      const updatedTheme = await db.getActiveTheme(interaction.guildId);
+      const newExpirationInfo = themeExpirationHandler.calculateExpiration(updatedTheme);
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Durée Modifiée')
+        .setColor('#2ecc71')
+        .setDescription(
+          '**Modification appliquée avec succès !**\n\n' +
+          (newTotalDuration === 0
+            ? '♾️ **Durée:** Illimitée'
+            : `📊 **Nouvelle durée restante:** ${newExpirationInfo.daysRemaining} jours\n` +
+              (newExpirationInfo.expirationDate
+                ? `📅 **Expire le:** <t:${Math.floor(newExpirationInfo.expirationDate.getTime() / 1000)}:D>`
+                : '')) +
+          '\n\n━━━━━━━━━━━━━━━━━━━━'
+        )
+        .setFooter({ text: '✨ La durée du thème a été mise à jour' });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('theme_duration')
+          .setLabel('⏱️ Modifier encore')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('admin_themes')
+          .setLabel('📋 Menu Thèmes')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: [row]
+      });
+
+    } catch (error) {
+      console.error('🔴 Erreur modification durée:', error);
+      return interaction.editReply({
+        content: `❌ Erreur lors de la modification: ${error.message}`,
+        embeds: [],
+        components: []
+      });
+    }
   }
 
   /**
@@ -4016,47 +4347,12 @@ class AdminPanelHandler {
   }
 
   /**
-   * Statistiques (TODO)
+   * Statistiques - Délégué à statsHandler
+   * @deprecated Utilisez statsHandler.showDashboard() à la place
    */
   async showStats(interaction) {
-    const theme = await db.getActiveTheme(interaction.guildId);
-    const collectibles = await db.getCollectiblesByTheme(interaction.guildId, theme.id);
-    const missions = await db.getMissionsByTheme(interaction.guildId, theme.id);
-    const traps = await db.getTrapsByTheme(interaction.guildId, theme.id);
-
-    const embed = new EmbedBuilder()
-      .setTitle('📊 Statistiques')
-      .setDescription(`**Thème:** ${theme.name}`)
-      .setColor('#9b59b6')
-      .addFields(
-        {
-          name: '🎁 Collectibles',
-          value: `Total: ${collectibles.length}`,
-          inline: true
-        },
-        {
-          name: '📋 Missions',
-          value: `Total: ${missions.length}`,
-          inline: true
-        },
-        {
-          name: '⚠️ Pièges',
-          value: `Total: ${traps.length}`,
-          inline: true
-        }
-      );
-
-    return interaction.update({
-      embeds: [embed],
-      components: [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('admin_back')
-            .setLabel('◀️ Retour')
-            .setStyle(ButtonStyle.Secondary)
-        )
-      ]
-    });
+    // Déléguer vers le nouveau statsHandler
+    return statsHandler.handleInteraction(interaction);
   }
 
   // ============================================

@@ -5,6 +5,129 @@ Tous les changements notables de ce projet seront documentés dans ce fichier.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.6.1] - 2026-01-18
+
+### ✨ Added
+
+- **[Admin Panel - Durée du Thème]**: Nouveau wizard de modification de durée
+  - **Remplacement de `theme_extend` par `theme_duration`**: Wizard simplifié pour modifier la durée
+  - **Approche simplifiée**: "Le thème expire dans X jours" - plus de distinction prolonger/réduire
+  - **Boutons prédéfinis**: 7, 14, 30, 45, 60, 90, 180, 365 jours
+  - **Saisie personnalisée**: Taper le nombre dans le chat (message collector, pas de modal)
+  - **Mode illimité**: Option "♾️ Illimité" pour supprimer l'expiration
+  - **Design moderne** (skill graphiques-discord):
+    - Progress bars ASCII (`█░`)
+    - Séparateurs visuels (`━━━━━━━━━━━━━━━━━━━━`)
+    - Indication claire de l'effet (+X / -X jours)
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`:
+      - Bouton `theme_duration` (lignes 1150-1158)
+      - Wizard `showDurationQuickMenu()` (lignes 1639-1745)
+      - Handler `handleDurationSet()` (lignes 1897-1970)
+      - Handler `handleDurationConfirm()` (lignes 1972+)
+      - Handler `handleDurationCustomInput()` avec message collector (lignes 1748-1895)
+      - Routing pour `duration_set_`, `duration_confirm_`, `duration_custom_input` (lignes 429-436)
+
+### 🐛 Fixed
+
+- **[Admin Panel - Durée]**: Correction du bug du message collector bloqué
+  - **Problème**: "En attente de votre réponse" restait affiché sans réponse
+  - **Cause**: Contexte `this` perdu dans les callbacks du collector
+  - **Solution**: Utilisation de `const self = this` et gestion conditionnelle du defer
+  - **Fichiers modifiés**: `handlers/adminPanelHandler.js` (lignes 1780-1890)
+
+---
+
+## [2.6.0] - 2026-01-13
+
+### ✨ Added
+
+- **[Admin Panel - Statistiques]**: Nouveau module ultra-complet de statistiques graphiques
+  - **Handler dédié**: `handlers/statsHandler.js` (~2300 lignes)
+  - **10 catégories de statistiques**:
+    1. 📊 **Dashboard** - Vue d'ensemble avec KPIs globaux, tendances et alertes
+    2. 👥 **Joueurs** - Top collectors, streaks, joueurs les plus riches
+    3. 🎁 **Collectibles** - Distribution par rareté, niveaux, collections complètes
+    4. 📦 **Mystery Box** - Ouvertures, crédits en circulation, sources
+    5. 🎯 **Missions** - Taux de réussite, champions, types populaires
+    6. ⚠️ **Pièges** - Hall of shame, bloqueurs d'évasion, types déclenchés
+    7. ✨ **Super Bonus** - Bonus obtenus, jokers utilisés, actifs par joueur
+    8. 🏆 **Badges** - Catégories, badges les plus rares, collectionneurs
+    9. 💰 **Économie** - Coins en circulation, transactions, flux
+    10. 🎮 **TicTacToe** - Parties jouées, win rates, champions
+  - **Sélection de joueur**: UserSelectMenuBuilder pour voir les stats individuelles détaillées
+    - Collections, badges, missions, pièges, économie, tictactoe par joueur
+  - **Visualisation graphique**:
+    - Progress bars ASCII et emoji
+    - Tendances (🔺 hausse, 🔻 baisse, ➖ stable)
+    - Médailles pour les classements (🥇🥈🥉)
+    - URLs QuickChart.io pour graphiques (préparé)
+  - **Navigation intuitive**: StringSelectMenu pour changer de section, bouton retour
+  - **Fichiers créés**:
+    - `handlers/statsHandler.js`: Handler complet avec toutes les requêtes SQL
+  - **Fichiers modifiés**:
+    - `handlers/adminPanelHandler.js`:
+      - Import de statsHandler (ligne 15)
+      - Routing `admin_stats` et `stats_*` vers statsHandler (lignes 273-274)
+      - Routing dans handleSelectMenu pour stats_ (lignes 928-931)
+      - Dépréciation de showStats() (lignes 4027-4034)
+    - `events/interactionCreate.js`:
+      - Routing boutons `stats_*` (ligne 424)
+      - Routing StringSelectMenu `stats_*` (ligne 720)
+      - Routing UserSelectMenu `stats_*` (lignes 865-868)
+
+## [2.5.3] - 2026-01-12
+
+### 🔄 Changed
+
+- **[Profile]**: Changement du bouton "Rejoindre Loomix Discord" → "💖 Mon avis sur le jeu"
+  - **Fichiers modifiés**:
+    - `views/profileView.js` (ligne 256): Nouveau label et emoji
+
+## [2.5.2] - 2026-01-11
+
+### ✨ Added
+
+- **[Traps - Shame Nickname Cumul]**: Les durées des pièges shame-nickname se cumulent maintenant
+  - Si un joueur tombe dans un second piège alors qu'il est déjà maudit, la durée s'ajoute
+  - Message spécial "DOUBLE PEINE !" avec détail de la durée ajoutée et du total restant
+  - Affichage du temps total restant et timestamp d'expiration Discord
+  - Annonce publique adaptée avec `+durée (total: X)`
+  - Logging enrichi avec `is_cumul` et `total_remaining_minutes`
+  - **Fichiers modifiés**:
+    - `handlers/mysteryBoxHandler.js` (lignes 2055-2175):
+      - Vérification d'un piège actif existant
+      - Calcul du cumul: nouvelle expiration = ancienne + durée additionnelle
+      - Message différencié (nouveau vs cumul)
+
+### 🐛 Fixed
+
+- **[Traps - Shame Nickname]**: Correction de plusieurs bugs de gestion des pièges
+  - Fix des DM envoyés à chaque rotation (faux positifs de tentatives de fuite)
+  - Fix de la comparaison Unicode des emojis (normalisation NFC + suppression `\uFE0F`)
+  - Fix de la boucle infinie cleanup/restoration (marquer `is_active = FALSE` AVANT restoration)
+  - Fix de la contrainte unique empêchant les enregistrements multiples inactifs
+  - **Fichiers modifiés**:
+    - `handlers/shameNicknameHandler.js`: Normalisation Unicode, ordre d'opérations corrigé
+    - Database: Remplacement `UNIQUE (guild_id, player_id, is_active)` par partial unique index
+
+## [2.5.1] - 2026-01-11
+
+### ✨ Added
+
+- **[Traps - Shame Nickname Rotation]**: Les pseudos honteux changent automatiquement pendant le piège
+  - **Rotation automatique**: Le pseudo change toutes les 5 minutes par défaut
+  - **Intervalle configurable**: Colonne `rotation_interval` dans `traps` (en secondes)
+  - **DM de notification**: Le joueur reçoit un DM à chaque changement de pseudo
+  - **Variété maximale**: Évite de remettre le même pseudo deux fois de suite
+  - **Fichiers créés**:
+    - `scripts/migrations/add-shame-nickname-rotation.js`: Migration pour les colonnes rotation
+  - **Fichiers modifiés**:
+    - `handlers/shameNicknameHandler.js`:
+      - Nouveau cron job pour la rotation (toutes les minutes, vérifie les intervalles)
+      - Nouvelle méthode `rotateActiveNicknames()` (lignes 254-371)
+      - Colonne `last_nickname_change` pour tracker les rotations
+
 ## [2.5.0] - 2026-01-11
 
 ### ✨ Added
