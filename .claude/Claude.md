@@ -23,6 +23,53 @@ Bot Discord permettant de créer des giveaways gamifiés où les joueurs collect
 
 ---
 
+## 🛠️ SKILLS - Utilisation OBLIGATOIRE
+
+> **RÈGLE ABSOLUE**: Les skills sont des experts spécialisés. Claude DOIT les consulter et suivre leurs instructions.
+
+### Skills Automatiques (activés par contexte)
+
+| Skill | Déclenché quand... | Action |
+|-------|-------------------|--------|
+| **versioning-master** | Code modifié | CHANGELOG + bump version + commit |
+| **database-guardian** | SQL/migrations | Consulter DATABASE-SCHEMA.md, vérifier guild_id |
+| **graphiques-discord** | Embeds/boutons/UI | Utiliser wizards (PAS de modals), progress bars |
+| **discord-interactions** | Handlers Discord | deferUpdate immédiat, gestion timeout |
+| **error-prevention** | Écriture de code | Patterns dangereux à éviter |
+| **deployer-vps** | Déploiement | docker compose build obligatoire |
+| **debugger-expert** | Erreur signalée | Diagnostic structuré |
+
+### Règles d'Utilisation
+
+```
+✅ OBLIGATOIRE: Suivre les instructions des skills actifs
+✅ OBLIGATOIRE: versioning-master → CHANGELOG + bump + commit en une opération
+✅ OBLIGATOIRE: graphiques-discord → Wizards étape par étape (JAMAIS de modals)
+✅ OBLIGATOIRE: database-guardian → Consulter schéma AVANT toute requête SQL
+
+❌ INTERDIT: Ignorer un skill applicable au contexte
+❌ INTERDIT: Mettre à jour CHANGELOG sans bumper la version
+❌ INTERDIT: Utiliser des modals pour interactions complexes
+```
+
+### Emplacement des Skills
+
+```
+.claude/skills/
+├── versioning-master/      # SemVer, CHANGELOG, releases
+├── database-guardian/      # PostgreSQL, migrations, guild_id
+├── graphiques-discord/     # Embeds, boutons, wizards
+├── discord-interactions/   # Handlers, defer, timeout
+├── error-prevention/       # Patterns dangereux
+├── deployer-vps/           # Docker, VPS Hostinger
+├── debugger-expert/        # Diagnostic erreurs
+├── code-architect/         # Architecture handlers
+├── test-engineer/          # Scripts de test
+└── api-contract/           # Contrat avec theme-builder
+```
+
+---
+
 ## 📁 Architecture du Projet
 
 ```
